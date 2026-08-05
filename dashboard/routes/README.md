@@ -90,7 +90,7 @@ Blueprint: `bots`.
 | GET | `/api/bots` | List all bots as JSON | Yes |
 | POST | `/api/bots` | Create a new bot (CP first, then local fallback) | Yes |
 | GET | `/api/bots/<bot_id>` | Get single bot (CP first, then local fallback) | Yes |
-| GET | `/api/bots/tooling-status` | Operator summary of bot readiness, required worker tools, blockers, and partial-data warnings | Yes |
+| GET | `/api/bots/tooling-status` | Operator summary of bot readiness, required worker tools, blockers, recommended repair actions, and partial-data warnings | Yes |
 | GET | `/api/bots/<bot_id>/export` | Download bot as `<id>.bot.json` bundle (includes connections) | Yes |
 | POST | `/api/bots/import` | Import a bot bundle; supports `overwrite` flag | Yes |
 | PUT | `/api/bots/<bot_id>` | Update bot (CP first, then local fallback) | Yes |
@@ -130,7 +130,7 @@ Blueprint: `chat`.
 
 Conversation create and route-default endpoints validate default bot readiness, default model catalog state, and default bot/model provider compatibility before proxying changes to the control plane. Disabled, unknown, or incompatible catalog model IDs return `409` instead of being saved as stale chat routing defaults. Conversation create also validates scope and blocks workspace-tool flags for unscoped chats before proxying. The chat page preflights default bot/model provider compatibility before new-chat create or route-default save and disables workspace-tool toggles unless the new conversation is project or bridged scoped. Message and stream send endpoints validate attachment shape, file count, and declared byte total before proxying to the control plane. The chat composer capability summary and image-attachment preflight use the effective route model: a conversation default model applies to the default chat route, while an explicit different bot uses that bot's own backend. The effective-context API exposes that effective model route, image-attachment support, memory gates, workspace-tool gates, and inline-coding gates as JSON for future mobile clients, automation monitors, and pre-send browser checks. The browser composer calls that endpoint before dispatch when workspace tools or inline coding are requested, reducing stale local policy decisions before the final server enforcement.
 
-The Work page consumes both `/v1/tasks/usage` and `/v1/chat/usage`. Task usage is shown separately from direct chat usage so operators can distinguish autonomous worker spend from manual chat spend. The Settings token-governor section exposes both task caps and direct-chat caps, including global chat hourly limit, default chat bot hourly limit, per-chat-bot overrides, and estimated tokens per chat message.
+The Work page consumes both `/v1/tasks/usage` and `/v1/chat/usage`. Task usage is shown separately from direct chat usage so operators can distinguish autonomous worker spend from manual chat spend. Usage briefs include provider/model attribution health so monitors can flag token spend that lacks backend attribution instead of treating a blank provider/model table as clean. The Settings token-governor section exposes both task caps and direct-chat caps, including global chat hourly limit, default chat bot hourly limit, per-chat-bot overrides, and estimated tokens per chat message.
 
 ---
 
@@ -197,7 +197,7 @@ Blueprint: `work`. Provides the operator command-center view for active project 
 | POST | `/api/work/bot-cap` | Set or clear bot hourly token cap overrides | Yes |
 | POST | `/api/work/chat-bot-cap` | Set or clear direct-chat bot hourly token cap overrides | Yes |
 
-The overview includes a compact `operations_brief` containing status totals, capacity state, top active lanes, top waiting lanes, top problem lanes, attention lanes, queue-pressure lanes, and recent problem tasks. The brief endpoint also includes usage pressure, token-governor queue-cap pressure, and worker capacity fields so dashboard pollers, automation monitors, and future mobile summaries can detect runaway usage or queue saturation without pulling raw task rows.
+The overview includes a compact `operations_brief` containing status totals, capacity state, top active lanes, top waiting lanes, top problem lanes, attention lanes, queue-pressure lanes, and recent problem tasks. The brief endpoint also includes usage pressure, provider/model attribution health, token-governor queue-cap pressure, and worker capacity fields so dashboard pollers, automation monitors, and future mobile summaries can detect runaway usage, missing telemetry attribution, or queue saturation without pulling raw task rows.
 
 ---
 

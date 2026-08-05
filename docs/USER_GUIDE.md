@@ -311,6 +311,8 @@ The default chat caps are `0`, which means disabled. When a configured chat cap 
 
 The Work page also shows direct-chat bot pressure against the active chat bot caps. Operators can set a chat bot cap at its current measured spend or clear a chat-specific override from that table without changing autonomous worker bot caps.
 
+Provider/model attribution is checked separately for autonomous task usage and direct chat usage. If Work reports token spend with missing provider/model attribution, treat that as telemetry debt before scaling throughput because caps and cost reviews will be harder to trust.
+
 ### 6.6 Repository Workspace Runtime and Toolchains
 
 Repository workspace actions and PM-generated assignment test runs execute in the configured repo workspace runtime for the project. In most self-hosted setups, that means the VM or container running NexusAI, not the operator's local laptop/browser session.
@@ -334,6 +336,10 @@ Supported built-in assignment execution stacks:
 Coverage artifact generation is built in for Python, Node, .NET, and Go. Rust and C/C++ test execution are supported, but coverage files still depend on repository-specific tooling.
 
 If that runtime does not have a required toolchain installed, the PM test step fails with an explicit blocker such as `repo workspace runtime is missing required tools: dotnet`.
+
+### 6.7 Bot Tooling Readiness
+
+The Bots page includes a Bot Tooling Readiness panel for worker-backed, browser-backed, HTTP-connection, and policy-gated bots. The panel groups blocked bots by cause and includes a recommended action for each group, such as restoring a browser session, refreshing CLI auth, configuring a vault key, repairing a worker runtime, fixing a model route, or reviewing project/bot policy. These recommendations are operator guidance only; they do not mutate bot config or credentials automatically.
 
 ## 7. GitHub Integration
 
