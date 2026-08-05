@@ -76,6 +76,63 @@
   <div class="state-info" style="margin-top:0.75rem;">{{ operating_summary.next_action }}</div>
 </section>
 
+{% set tooling = tooling_row or {} %}
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <div>
+      <h2 class="panel-title">Tooling Readiness</h2>
+      <div class="mini-note">Bot policy, worker bindings, browser/API permissions, and runtime probe evidence for this bot.</div>
+    </div>
+    <span class="badge badge-{{ tooling.state or 'unknown' }}">{{ tooling.state or 'unknown' }}</span>
+  </div>
+  <div class="split-grid" style="grid-template-columns:repeat(auto-fit, minmax(13rem, 1fr)); gap:0.75rem;">
+    <div>
+      <div class="mini-note">Blocker Category</div>
+      <strong>{{ tooling.blocking_category | replace('_', ' ') if tooling.blocking_category else 'none' }}</strong>
+    </div>
+    <div>
+      <div class="mini-note">Required Worker Tools</div>
+      <strong>{{ tooling.required_tools | join(', ') if tooling.required_tools else 'none' }}</strong>
+    </div>
+    <div>
+      <div class="mini-note">Connection Actions</div>
+      <strong>{{ tooling.connection_actions | length if tooling.connection_actions else 0 }}</strong>
+    </div>
+    <div>
+      <div class="mini-note">Browser Actions</div>
+      <strong>{{ tooling.browser_actions | length if tooling.browser_actions else 0 }}</strong>
+    </div>
+    <div>
+      <div class="mini-note">HTTP Connection Backends</div>
+      <strong>{{ tooling.connection_backend_count or 0 }}</strong>
+    </div>
+  </div>
+  {% if tooling.blocking_messages %}
+  <div class="state-info" style="margin-top:0.75rem;">
+    {% for message in tooling.blocking_messages %}
+    <div>{{ message }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if tooling.workers %}
+  <table style="margin-top:0.75rem;">
+    <thead><tr><th>Worker</th><th>Status</th><th>Enabled</th><th>Probe</th></tr></thead>
+    <tbody>
+      {% for worker in tooling.workers %}
+      <tr>
+        <td><code>{{ worker.worker_id }}</code></td>
+        <td><span class="badge badge-{{ worker.status }}">{{ worker.status }}</span></td>
+        <td>{{ 'yes' if worker.enabled else 'no' }}</td>
+        <td><span class="badge badge-{{ worker.probe_status }}">{{ worker.probe_status }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty" style="margin-top:0.75rem;">No worker binding declared for this bot.</div>
+  {% endif %}
+</section>
+
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Backend Chain Editor</h2>

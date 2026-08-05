@@ -539,12 +539,21 @@ def bot_detail_page(bot_id: str):
     cp_runs = cp.list_bot_runs(bot_id) or []
     cp_artifacts = cp.list_bot_artifacts(bot_id, limit=300, include_content=False) or []
     cp_workers = cp.list_workers() or []
+    worker_probes_getter = getattr(cp, "list_worker_probes", None)
+    cp_worker_probes = worker_probes_getter() if callable(worker_probes_getter) else None
     cp_models = cp.list_models() or []
     cp_keys = cp.list_keys() or []
 
     if cp_bot is not None:
         tasks = [t for t in (cp_tasks or []) if str(t.get("bot_id")) == str(bot_id)]
         bot_payload = _with_bot_chat_profiles([cp_bot])[0]
+        tooling_status = build_bot_tooling_status(
+            bots=[bot_payload],
+            readiness_payload={"readiness": [cp_readiness]} if isinstance(cp_readiness, dict) else None,
+            workers=cp_workers,
+            worker_probes_payload=cp_worker_probes if isinstance(cp_worker_probes, dict) else None,
+        )
+        tooling_row = (tooling_status.get("rows") or [{}])[0]
         return render_template(
             "bot_detail.html",
             bot=bot_payload,
@@ -555,6 +564,7 @@ def bot_detail_page(bot_id: str):
             models=cp_models,
             api_keys=cp_keys,
             readiness=cp_readiness,
+            tooling_row=tooling_row,
             bot_dependencies=cp_dependencies,
             operating_summary=_bot_detail_operating_summary(bot_payload, cp_readiness, cp_dependencies),
             error=None,
@@ -594,6 +604,12 @@ def bot_detail_page(bot_id: str):
             models=[],
             api_keys=[],
             readiness=None,
+            tooling_row=(build_bot_tooling_status(
+                bots=[bot_payload],
+                readiness_payload=None,
+                workers=[],
+                worker_probes_payload=None,
+            ).get("rows") or [{}])[0],
             bot_dependencies=None,
             operating_summary=_bot_detail_operating_summary(bot_payload, None, None),
             error=None,

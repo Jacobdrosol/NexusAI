@@ -1969,7 +1969,7 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                 "priority": 1,
                 "enabled": True,
                 "memory_profiles_enabled": True,
-                "backends": [],
+                "backends": [{"type": "remote_llm", "provider": "ollama_cloud", "model": "qwen3.5:397b", "worker_id": "coding-worker"}],
                 "routing_rules": {
                     "chat_profile": {
                         "mode": "coding",
@@ -1989,6 +1989,7 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                     },
                 },
                 "execution_policy": {
+                    "required_worker_tools": ["repo-search"],
                     "repo_output_mode": "allow",
                     "inline_coding_default": True,
                     "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
@@ -2027,7 +2028,10 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
             return []
 
         def list_workers(self):
-            return []
+            return [{"id": "coding-worker", "status": "online", "enabled": True}]
+
+        def list_worker_probes(self):
+            return {"probes": [{"worker_id": "coding-worker", "probe_status": "ready"}]}
 
         def list_models(self):
             return []
@@ -2041,6 +2045,7 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert resp.status_code == 200
     assert b"Chat Profile" in resp.data
     assert b"Operating Summary" in resp.data
+    assert b"Tooling Readiness" in resp.data
     assert b"scheduled" in resp.data
     assert b"ready" in resp.data
     assert b"1 active / 0 paused" in resp.data
@@ -2065,6 +2070,10 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"Browser Actions" in resp.data
     assert b"Browser Owner Approval Actions" in resp.data
     assert b"lesson_preview.read" in resp.data
+    assert b"Required Worker Tools" in resp.data
+    assert b"repo-search" in resp.data
+    assert b"coding-worker" in resp.data
+    assert b"No worker binding declared" not in resp.data
     assert b"repo search" in resp.data
     assert b"filesystem" in resp.data
     assert b'id="bot-chat-profile-mode"' in resp.data
