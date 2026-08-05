@@ -210,6 +210,8 @@
     <div>
       <div><strong>Repo Output Mode:</strong> {{ policy.repo_output_mode if policy else 'deny' }}</div>
       <div><strong>Required Worker Tools:</strong> {{ policy.required_worker_tools | join(', ') if policy and policy.required_worker_tools else 'none' }}</div>
+      <div><strong>Connection Actions:</strong> {{ policy.connection_action_allowlist | join(', ') if policy and policy.connection_action_allowlist else 'none' }}</div>
+      <div><strong>Owner Approval Actions:</strong> {{ policy.connection_action_owner_approval_required | join(', ') if policy and policy.connection_action_owner_approval_required else 'none' }}</div>
       <div><strong>Can Apply DB Actions:</strong> {{ 'yes' if policy and policy.can_apply_db_actions else 'no' }}</div>
       <div><strong>Allow Run Result Ingest:</strong> {{ 'yes' if not policy or policy.allow_run_result_ingest else 'no' }}</div>
     </div>

@@ -97,6 +97,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 66 in progress: expanded the chat effective-context API with normalized bot chat profile and non-secret connection-action metadata so chat clients can preflight selected bot role, tooling posture, and owner-approval requirements.
 - Batch 67 in progress: surfaced effective bot context in the chat composer summary, including use label, connection-action counts, owner-approval counts, and HTTP connection backend counts.
 - Batch 68 in progress: added a compact usage brief to the Work brief API with prompt/completion/total token totals plus top bot, provider/model, project, and manager consumers for monitor and mobile clients.
+- Batch 69 in progress: surfaced connection-action and owner-approval allowlists on bot detail execution policy panels so single-bot review shows mutation scope without opening raw JSON.
 
 ## Validation
 
@@ -168,3 +169,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_reports_active_memory_tools_and_coding tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_uses_explicit_bot_backend_model tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_explains_blocked_gates -q` passed for Batch 66 effective-context bot tooling metadata.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_reports_active_memory_tools_and_coding -q` passed for Batch 67 chat composer bot-context summary.
 - `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load tests/test_work_overview.py::test_work_overview_surfaces_token_governor_queue_cap_pressure tests/test_work_overview.py::test_work_overview_usage_fallback_has_stable_shape -q` passed for Batch 68 Work brief usage digest.
+- `pytest tests/test_dashboard_phase4_pages.py::test_bot_detail_page_renders_chat_profile_controls tests/test_bot_tooling_status.py -q` passed for Batch 69 bot detail connection-action policy visibility.

@@ -1872,6 +1872,8 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                 "execution_policy": {
                     "repo_output_mode": "allow",
                     "inline_coding_default": True,
+                    "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
+                    "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
                 },
             }
 
@@ -1925,6 +1927,9 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"Personal Memory" in resp.data
     assert b"enabled" in resp.data
     assert b"repo_search" in resp.data
+    assert b"Connection Actions" in resp.data
+    assert b"Owner Approval Actions" in resp.data
+    assert b"globeiq-agent-api.updateLesson" in resp.data
     assert b"repo search" in resp.data
     assert b"filesystem" in resp.data
     assert b'id="bot-chat-profile-mode"' in resp.data
