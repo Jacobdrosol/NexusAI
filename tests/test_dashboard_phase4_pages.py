@@ -780,24 +780,23 @@ def test_chat_mobile_layout_uses_a_conversation_drawer():
     assert ".page-chat .chat-panel-main" in css
     assert ".page-chat .chat-panel-side" in css
     assert "chat-mobile-conversations-open" in css
+    assert "chat-conversations-collapsed" in css
     assert "transform: translateX(-105%);" in css
     final_mobile_rules = css[css.rfind("@media (max-width: 900px)"):]
     assert ".page-chat .app-shell" in final_mobile_rules
     assert "height: 100dvh;" in final_mobile_rules
     assert ".page-chat .app-main" in final_mobile_rules
     assert "overflow: hidden;" in final_mobile_rules
-    assert ".page-chat .chat-bot-capability-summary" in final_mobile_rules
-    assert ".page-chat .chat-effective-context-summary" in final_mobile_rules
-    assert "#chat-default-model-selector" in final_mobile_rules
-    assert ".page-chat .chat-route-details" in final_mobile_rules
     assert "height: 100dvh;" in css
 
     template = Path("dashboard/templates/chat.html").read_text(encoding="utf-8")
     assert '<details class="chat-route-details"' in template
     assert template.index('<details class="chat-route-details"') < template.index('id="chat-bot-capability-summary"')
-    assert 'id="chat-mobile-conversations-toggle"' in template
+    assert 'id="chat-conversations-toggle"' in template
     assert 'id="chat-conversation-panel"' in template
-    assert "function setMobileConversationDrawerOpen" in template
+    assert 'id="modal-chat-settings"' in template
+    assert "function setConversationPanelOpen" in template
+    assert "function showChatSettings" in template
     assert "window.requestAnimationFrame(scrollMessagesToLatest);" in template
     assert "window.addEventListener('load'" in template
 

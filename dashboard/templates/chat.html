@@ -6,8 +6,8 @@
   <h1>Chat</h1>
   <div class="chat-page-header-actions">
     <button
-      id="chat-mobile-conversations-toggle"
-      class="btn chat-mobile-conversations-toggle"
+        id="chat-conversations-toggle"
+        class="btn chat-conversations-toggle"
       type="button"
       aria-controls="chat-conversation-panel"
       aria-expanded="false"
@@ -521,37 +521,6 @@
       <p class="mini-note">Optional per message. Uses semantic query against synced repo context.</p>
     </div>
     {% endif %}
-    <div class="form-group">
-      <label>Personal Memory</label>
-      <label class="context-item">
-        <input type="checkbox" id="chat-memory-enabled" {% if selected_conversation.memory_profiles_enabled %}checked{% endif %}>
-        <span>Allow this chat to use and build my memory profile</span>
-      </label>
-      <input class="form-control" id="chat-memory-profile-id" value="{{ selected_conversation.memory_profile_id or 'default' }}" aria-label="Memory profile id">
-      <div class="chat-tool-save-wrap">
-        <button type="button" class="btn btn-sm" onclick="saveConversationMemoryProfile()">Save Personal Memory</button>
-      </div>
-      <p class="mini-note">Memory is used only when this chat, the selected bot, and the scoped project all allow it. Unscoped chats ignore the project gate.</p>
-    </div>
-    <div class="form-group">
-      <label>Chat Tool Access</label>
-      <label class="context-item">
-        <input type="checkbox" id="chat-tool-enabled" {% if selected_conversation.tool_access_enabled %}checked{% endif %}>
-        <span>Enable workspace tools for this chat</span>
-      </label>
-      <label class="context-item">
-        <input type="checkbox" id="chat-tool-filesystem" {% if selected_conversation.tool_access_filesystem %}checked{% endif %}>
-        <span>Allow filesystem read/search</span>
-      </label>
-      <label class="context-item">
-        <input type="checkbox" id="chat-tool-repo-search" {% if selected_conversation.tool_access_repo_search %}checked{% endif %}>
-        <span>Allow repo semantic search</span>
-      </label>
-      <div class="chat-tool-save-wrap">
-        <button type="button" class="btn btn-sm" onclick="saveConversationToolAccess()">Save Chat Tool Access</button>
-      </div>
-      <p class="mini-note">Tool usage is allowed only when bot + project + chat switches are all enabled.</p>
-    </div>
     </div>
     </details>
     {% endif %}
@@ -562,59 +531,9 @@
       <h2 class="panel-title">Messages</h2>
       {% if selected_conversation %}
       <div class="chat-main-header-controls">
-        {% set active_message_bot_id = selected_conversation.default_bot_id or preselected_chat_bot_id %}
-        <select id="chat-bot-selector" class="form-control chat-bot-selector" aria-label="Message bot">
-          <option value="">Conversation Bot</option>
-          {% for group in chat_bots|groupby('chat_profile.label', default='Chat') %}
-          <optgroup label="{{ group.grouper or 'Chat' }}">
-            {% for b in group.list %}
-            {% set blocked_chat_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
-            <option value="{{ b.id }}" {% if active_message_bot_id and active_message_bot_id == b.id %}selected{% endif %} {% if blocked_chat_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>
-              {{ b.name }}{% if b.chat_profile and b.chat_profile.label %} - {{ b.chat_profile.label }}{% endif %}{% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% endif %}
-            </option>
-            {% endfor %}
-          </optgroup>
-          {% endfor %}
-        </select>
-        <select id="chat-default-model-selector" class="form-control chat-bot-selector" aria-label="Conversation default model">
-          <option value="">Bot default model</option>
-          {% for model in model_catalog %}
-          {% set model_value = model.id or model.name %}
-          {% set model_label = model.name or model.id %}
-          {% if model_value %}
-          <option value="{{ model_value }}" {% if selected_conversation.default_model_id and selected_conversation.default_model_id == model_value %}selected{% endif %} {% if model.enabled is defined and model.enabled == false %}disabled{% endif %}>
-            {% if model.provider %}{{ model.provider }} - {% endif %}{{ model_label }}{% if model.enabled is defined and model.enabled == false %} - disabled{% endif %}
-          </option>
-          {% endif %}
-          {% endfor %}
-        </select>
-        <button class="btn btn-sm" type="button" onclick="saveConversationRouteDefaults()">Save Defaults</button>
-        <details class="chat-overflow-menu">
-          <summary class="btn btn-sm chat-overflow-trigger" aria-label="Message actions">...</summary>
-          <div class="chat-overflow-menu-items">
-            <button class="btn btn-sm" type="button" onclick="ingestConversation('{{ selected_conversation.id }}')">Ingest This Chat</button>
-            <button class="btn btn-sm" type="button" onclick="openAssignModal()">Assign Message to PM</button>
-          </div>
-        </details>
+        <button class="btn btn-sm" type="button" onclick="showChatSettings()">Chat settings</button>
       </div>
     </div>
-    {% if selected_conversation %}
-    <details class="chat-route-details"{% if selected_default_bot_notice or selected_default_model_notice %} open{% endif %}>
-      <summary>Chat details</summary>
-      {% if selected_default_bot_notice %}
-      <div id="chat-default-bot-route-warning" class="chat-composer-status error">
-        Default bot unavailable: {{ selected_default_bot_notice.label }}. {{ selected_default_bot_notice.detail }}
-      </div>
-      {% endif %}
-      {% if selected_default_model_notice %}
-      <div id="chat-default-model-route-warning" class="chat-composer-status error">
-        Default model unavailable: {{ selected_default_model_notice.label }}. {{ selected_default_model_notice.detail }}
-      </div>
-      {% endif %}
-      <div id="chat-bot-capability-summary" class="mini-note chat-bot-capability-summary"></div>
-      <div id="chat-effective-context-summary" class="chat-effective-context-summary"></div>
-    </details>
-    {% endif %}
     <div id="task-events-shell" class="chat-task-shell" hidden>
       <div id="task-event-state" class="state-info chat-task-state"></div>
       <div id="task-events" class="list chat-task-events"></div>
@@ -802,6 +721,77 @@
     {% endif %}
   </section>
 </div>
+
+{% if selected_conversation %}
+<div id="modal-chat-settings" class="modal" style="display:none;">
+  <div class="modal-content chat-settings-modal">
+    <h2>Chat settings</h2>
+    <div class="form-group">
+      <label for="chat-bot-selector">Conversation bot</label>
+      {% set active_message_bot_id = selected_conversation.default_bot_id or preselected_chat_bot_id %}
+      <select id="chat-bot-selector" class="form-control" aria-label="Message bot">
+        <option value="">Conversation Bot</option>
+        {% for group in chat_bots|groupby('chat_profile.label', default='Chat') %}
+        <optgroup label="{{ group.grouper or 'Chat' }}">
+          {% for b in group.list %}
+          {% set blocked_chat_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
+          <option value="{{ b.id }}" {% if active_message_bot_id and active_message_bot_id == b.id %}selected{% endif %} {% if blocked_chat_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>
+            {{ b.name }}{% if b.chat_profile and b.chat_profile.label %} - {{ b.chat_profile.label }}{% endif %}{% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% endif %}
+          </option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="chat-default-model-selector">Default model</label>
+      <select id="chat-default-model-selector" class="form-control" aria-label="Conversation default model">
+        <option value="">Bot default model</option>
+        {% for model in model_catalog %}
+        {% set model_value = model.id or model.name %}
+        {% set model_label = model.name or model.id %}
+        {% if model_value %}
+        <option value="{{ model_value }}" {% if selected_conversation.default_model_id and selected_conversation.default_model_id == model_value %}selected{% endif %} {% if model.enabled is defined and model.enabled == false %}disabled{% endif %}>
+          {% if model.provider %}{{ model.provider }} - {% endif %}{{ model_label }}{% if model.enabled is defined and model.enabled == false %} - disabled{% endif %}
+        </option>
+        {% endif %}
+        {% endfor %}
+      </select>
+      <div class="chat-tool-save-wrap"><button class="btn btn-sm" type="button" onclick="saveConversationRouteDefaults()">Save routing</button></div>
+    </div>
+    <div class="form-group">
+      <label>Personal memory</label>
+      <label class="context-item">
+        <input type="checkbox" id="chat-memory-enabled" {% if selected_conversation.memory_profiles_enabled %}checked{% endif %}>
+        <span>Allow this chat to use and build my memory profile</span>
+      </label>
+      <input class="form-control" id="chat-memory-profile-id" value="{{ selected_conversation.memory_profile_id or 'default' }}" aria-label="Memory profile id">
+      <div class="chat-tool-save-wrap"><button type="button" class="btn btn-sm" onclick="saveConversationMemoryProfile()">Save memory</button></div>
+      <p class="mini-note">Memory is used only when this chat, the selected bot, and the scoped project all allow it. Unscoped chats ignore the project gate.</p>
+    </div>
+    <div class="form-group">
+      <label>Chat tool access</label>
+      <label class="context-item"><input type="checkbox" id="chat-tool-enabled" {% if selected_conversation.tool_access_enabled %}checked{% endif %}><span>Enable workspace tools for this chat</span></label>
+      <label class="context-item"><input type="checkbox" id="chat-tool-filesystem" {% if selected_conversation.tool_access_filesystem %}checked{% endif %}><span>Allow filesystem read/search</span></label>
+      <label class="context-item"><input type="checkbox" id="chat-tool-repo-search" {% if selected_conversation.tool_access_repo_search %}checked{% endif %}><span>Allow repo semantic search</span></label>
+      <div class="chat-tool-save-wrap"><button type="button" class="btn btn-sm" onclick="saveConversationToolAccess()">Save tool access</button></div>
+      <p class="mini-note">Tool usage is allowed only when bot, project, and chat switches are all enabled.</p>
+    </div>
+    <details class="chat-route-details"{% if selected_default_bot_notice or selected_default_model_notice %} open{% endif %}>
+      <summary>Route details</summary>
+      {% if selected_default_bot_notice %}<div id="chat-default-bot-route-warning" class="chat-composer-status error">Default bot unavailable: {{ selected_default_bot_notice.label }}. {{ selected_default_bot_notice.detail }}</div>{% endif %}
+      {% if selected_default_model_notice %}<div id="chat-default-model-route-warning" class="chat-composer-status error">Default model unavailable: {{ selected_default_model_notice.label }}. {{ selected_default_model_notice.detail }}</div>{% endif %}
+      <div id="chat-bot-capability-summary" class="mini-note chat-bot-capability-summary"></div>
+      <div id="chat-effective-context-summary" class="chat-effective-context-summary"></div>
+    </details>
+    <details class="chat-route-details">
+      <summary>Conversation actions</summary>
+      <div class="chat-route-actions"><button class="btn btn-sm" type="button" onclick="ingestConversation('{{ selected_conversation.id }}')">Ingest this chat</button><button class="btn btn-sm" type="button" onclick="openAssignModal()">Assign message to PM</button></div>
+    </details>
+    <div class="modal-actions"><button type="button" class="btn" onclick="hideModal('modal-chat-settings')">Close</button></div>
+  </div>
+</div>
+{% endif %}
 
 <div id="modal-create-convo" class="modal" style="display:none;">
   <div class="modal-content">
@@ -1225,13 +1215,19 @@ function clearConversationFilters() {
   applyConversationProjectFilter();
 }
 
-function setMobileConversationDrawerOpen(isOpen) {
+function setConversationPanelOpen(isOpen) {
   const grid = document.querySelector('.chat-split-grid');
-  const toggle = document.getElementById('chat-mobile-conversations-toggle');
+  const toggle = document.getElementById('chat-conversations-toggle');
   if (!grid || !toggle) return;
-  grid.classList.toggle('chat-mobile-conversations-open', !!isOpen);
+  const mobile = window.matchMedia('(max-width: 900px)').matches;
+  grid.classList.toggle('chat-mobile-conversations-open', mobile && !!isOpen);
+  grid.classList.toggle('chat-conversations-collapsed', !mobile && !isOpen);
   toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-  toggle.textContent = isOpen ? 'Close Chats' : 'Chats';
+  toggle.textContent = mobile ? (isOpen ? 'Close Chats' : 'Chats') : (isOpen ? 'Hide conversations' : 'Show conversations');
+}
+
+function showChatSettings() {
+  showModal('modal-chat-settings');
 }
 
 async function refreshMessagesUntilSettled(maxAttempts = 20, delayMs = 1000) {
@@ -4392,13 +4388,16 @@ document.getElementById('chat-project-filter')?.addEventListener('change', funct
 });
 document.getElementById('chat-conversation-search')?.addEventListener('input', applyConversationProjectFilter);
 document.getElementById('chat-clear-filters')?.addEventListener('click', clearConversationFilters);
-document.getElementById('chat-mobile-conversations-toggle')?.addEventListener('click', function() {
+document.getElementById('chat-conversations-toggle')?.addEventListener('click', function() {
   const isOpen = this.getAttribute('aria-expanded') === 'true';
-  setMobileConversationDrawerOpen(!isOpen);
+  setConversationPanelOpen(!isOpen);
 });
 document.querySelectorAll('.chat-conversation-link').forEach((link) => {
-  link.addEventListener('click', () => setMobileConversationDrawerOpen(false));
+  link.addEventListener('click', () => {
+    if (window.matchMedia('(max-width: 900px)').matches) setConversationPanelOpen(false);
+  });
 });
+setConversationPanelOpen(!window.matchMedia('(max-width: 900px)').matches);
 document.getElementById('create-convo-scope')?.addEventListener('change', () => {
   syncConversationScopeFields();
   syncCreateConversationToolFields();

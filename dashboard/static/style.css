@@ -866,8 +866,8 @@ select.form-control {
   gap: 0.45rem;
 }
 
-.chat-mobile-conversations-toggle {
-  display: none;
+.chat-conversations-toggle {
+  display: inline-flex;
 }
 
 .page-chat .chat-split-grid {
@@ -880,6 +880,18 @@ select.form-control {
   gap: 0;
   align-items: stretch;
   overflow: hidden;
+}
+
+.page-chat .chat-split-grid.chat-conversations-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+.page-chat .chat-split-grid.chat-conversations-collapsed .chat-panel-side {
+  padding: 0;
+  border-right: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .page-chat .chat-panel-side,
@@ -942,6 +954,17 @@ select.form-control {
 
 .page-chat .chat-route-details[open] summary {
   margin-bottom: 0.55rem;
+}
+
+.chat-settings-modal {
+  width: min(100%, 620px);
+}
+
+.chat-route-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
 }
 
 .page-chat .chat-main-header-controls {
@@ -2096,7 +2119,7 @@ select.form-control {
     padding: 0.75rem 0.65rem 1rem;
   }
 
-  .chat-mobile-conversations-toggle {
+  .chat-conversations-toggle {
     display: inline-flex;
   }
 
@@ -3084,11 +3107,4 @@ select.form-control {
     max-width: none;
   }
 
-  .page-chat #chat-default-model-selector,
-  .page-chat .chat-main-header-controls > button,
-  .page-chat .chat-route-details,
-  .page-chat .chat-bot-capability-summary,
-  .page-chat .chat-effective-context-summary {
-    display: none;
-  }
 }
