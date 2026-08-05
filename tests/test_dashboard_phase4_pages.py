@@ -487,6 +487,82 @@ def test_memory_api_create_forces_current_user(dashboard_client):
     assert captured["content"] == "Keep responses short."
 
 
+def test_memory_api_list_forces_current_user_and_bounds_limit(dashboard_client):
+    _login_admin(dashboard_client)
+    captured: dict[str, object] = {}
+
+    class FakeCP:
+        def list_memory_profile_items(self, *, user_id, profile_id="default", limit=200, query=None):
+            captured.update({"user_id": user_id, "profile_id": profile_id, "limit": limit, "query": query})
+            return [{"id": "memory-1", "role": "user", "content": "Use direct answers."}]
+
+    with patch("dashboard.routes.memory.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/memory/items?query=direct&limit=9999")
+
+    assert resp.status_code == 200
+    assert captured == {"user_id": "admin@test.com", "profile_id": "default", "limit": 500, "query": "direct"}
+    assert resp.get_json()["items"][0]["id"] == "memory-1"
+
+
+def test_memory_api_update_forces_current_user_and_manual_metadata(dashboard_client):
+    _login_admin(dashboard_client)
+    captured: dict[str, object] = {}
+
+    class FakeCP:
+        def update_memory_profile_item(self, item_id, body):
+            captured["item_id"] = item_id
+            captured["body"] = body
+            return {"id": item_id, **body}
+
+    with patch("dashboard.routes.memory.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/memory/items/memory-1",
+            json={"user_id": "other@test.com", "profile_id": "other", "content": "Prefer concise replies.", "role": "assistant"},
+        )
+
+    assert resp.status_code == 200
+    assert captured["item_id"] == "memory-1"
+    body = captured["body"]
+    assert body["user_id"] == "admin@test.com"
+    assert body["profile_id"] == "default"
+    assert body["role"] == "assistant"
+    assert body["metadata"] == {"source": "manual"}
+
+
+def test_memory_api_delete_forces_current_user(dashboard_client):
+    _login_admin(dashboard_client)
+    captured: dict[str, object] = {}
+
+    class FakeCP:
+        def delete_memory_profile_item(self, item_id, *, user_id):
+            captured["item_id"] = item_id
+            captured["user_id"] = user_id
+            return True
+
+    with patch("dashboard.routes.memory.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.delete("/api/memory/items/memory-1")
+
+    assert resp.status_code == 204
+    assert captured == {"item_id": "memory-1", "user_id": "admin@test.com"}
+
+
+def test_memory_api_delete_surfaces_control_plane_error(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def delete_memory_profile_item(self, item_id, *, user_id):
+            return False
+
+        def last_error(self):
+            return {"status_code": 403, "detail": "memory item belongs to another user"}
+
+    with patch("dashboard.routes.memory.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.delete("/api/memory/items/memory-1")
+
+    assert resp.status_code == 403
+    assert b"belongs to another user" in resp.data
+
+
 def test_project_memory_toggle_updates_project(dashboard_client):
     _login_admin(dashboard_client)
     updated_payload = {}
