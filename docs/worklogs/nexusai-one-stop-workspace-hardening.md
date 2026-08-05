@@ -432,3 +432,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Docs-only validation for Batch 202: reviewed `dashboard/routes/README.md` and worklog diffs; no runtime tests required.
 - Batch 203: reset chat stream SSE message-event tracking on blank event separators so metadata sanitization only applies to explicit `user_message` and `assistant_message` events, leaving unrelated unlabeled data frames untouched.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_stream_api_sanitizes_message_event_attachment_metadata tests/test_dashboard_phase4_pages.py::test_chat_stream_api_proxies_string_context_and_vault_ids -q` passed for Batch 203 SSE event-boundary handling.
+- Batch 204: replaced line-level chat stream message sanitization with event-level SSE buffering so split `data:` message payloads are normalized while non-message SSE frames remain passthrough.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_stream_api_sanitizes_message_event_attachment_metadata tests/test_dashboard_phase4_pages.py::test_chat_stream_api_proxies_string_context_and_vault_ids -q` passed for Batch 204 split SSE message sanitization.

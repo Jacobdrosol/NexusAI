@@ -4224,12 +4224,10 @@ def test_chat_stream_api_sanitizes_message_event_attachment_metadata(dashboard_c
 
         def iter_lines(self, decode_unicode=True):
             yield "event: user_message"
-            yield (
-                'data: {"id":"u1","role":"user","content":"see this","metadata":{"attachments":['
-                '{"name":"unsafe.svg","kind":"image","data_url":"data:image/svg+xml;base64,PHN2ZyA+","size_bytes":512},'
-                '{"name":"screen.png","kind":"image","data_url":"data:image/png;base64,aGVsbG8=","size_bytes":1024}'
-                ']}}'
-            )
+            yield 'data: {"id":"u1","role":"user","content":"see this","metadata":{"attachments":['
+            yield 'data: {"name":"unsafe.svg","kind":"image","data_url":"data:image/svg+xml;base64,PHN2ZyA+","size_bytes":512},'
+            yield 'data: {"name":"screen.png","kind":"image","data_url":"data:image/png;base64,aGVsbG8=","size_bytes":1024}'
+            yield "data: ]}}"
             yield ""
             yield 'data: {"metadata":{"attachments":[{"name":"status.svg","kind":"image","data_url":"data:image/svg+xml;base64,UNCHANGED"}]}}'
             yield ""
