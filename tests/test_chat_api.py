@@ -5738,6 +5738,52 @@ async def test_update_conversation_route_defaults_blocks_unknown_catalog_default
 
 
 @pytest.mark.anyio
+async def test_create_conversation_blocks_default_model_provider_mismatch(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post(
+            "/v1/models",
+            json={
+                "id": "openai-chat-model",
+                "name": "gpt-5",
+                "provider": "openai",
+                "enabled": True,
+            },
+        )
+        await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-chat-model",
+                "name": "gpt-oss:120b",
+                "provider": "ollama_cloud",
+                "enabled": True,
+            },
+        )
+        bot_resp = await client.post(
+            "/v1/bots",
+            json={
+                "id": "ollama-chat-bot",
+                "name": "Ollama Chat Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "gpt-oss:120b"}],
+                "enabled": True,
+            },
+        )
+        assert bot_resp.status_code == 200
+
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Provider Mismatch",
+                "default_bot_id": "ollama-chat-bot",
+                "default_model_id": "openai-chat-model",
+            },
+        )
+
+        assert create_resp.status_code == 400
+        assert "is not available on default_bot_id" in create_resp.text
+
+
+@pytest.mark.anyio
 async def test_chat_task_metadata_includes_project_id(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:

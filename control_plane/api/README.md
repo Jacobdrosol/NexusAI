@@ -90,7 +90,7 @@ All routes are prefixed with `/v1/`. Auth: set `X-Nexus-API-Key: <token>` header
 | `PUT` | `/v1/chat/conversations/{id}/tool-access` | Update tool access flags | `enabled`, `filesystem`, `repo_search` | 404 |
 | `GET` | `/v1/chat/conversations/{id}/memory` | Semantic search in conv memory | `query`, `limit` | 404 |
 
-`default_model_id` is copied into chat task metadata as `preferred_model_id` for normal and streaming message dispatch. When the model catalog has entries, conversation create and route-default updates reject disabled or unknown catalog model IDs. The scheduler resolves valid catalog IDs and applies the selected model only to compatible LLM backends.
+`default_model_id` is copied into chat task metadata as `preferred_model_id` for normal and streaming message dispatch. When the model catalog has entries, conversation create and route-default updates reject disabled or unknown catalog model IDs. If a default bot and default model are both set, the bot must expose an LLM backend for the catalog model provider. The scheduler resolves valid catalog IDs and applies the selected model only to compatible LLM backends.
 
 ---
 

@@ -77,6 +77,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 39 in progress: wired conversation default models into chat task metadata and scheduler backend selection so saved chat model defaults are actually used by normal and streaming messages.
 - Batch 40 in progress: added dashboard-side default-model validation so direct chat-create and route-default API calls reject disabled or unknown catalog model IDs before saving them.
 - Batch 41 in progress: added control-plane default-model validation so `/v1/chat` rejects disabled or unknown catalog model IDs even when callers bypass the dashboard.
+- Batch 42 in progress: added control-plane default bot/model provider compatibility validation so saved route defaults cannot pair a catalog model with a bot that has no matching LLM backend provider.
 
 ## Validation
 
@@ -121,3 +122,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_chat_api.py::test_chat_default_model_id_is_attached_to_scheduled_task tests/test_chat_api.py::test_stream_default_model_id_is_attached_to_scheduled_task tests/test_scheduler_api_keys.py::test_scheduler_preferred_model_uses_enabled_catalog_model tests/test_scheduler_api_keys.py::test_scheduler_preferred_model_rejects_provider_mismatch -q` passed for Batch 39 chat default-model dispatch.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_create_conversation_api_proxies_default_model tests/test_dashboard_phase4_pages.py::test_chat_create_conversation_api_blocks_disabled_default_model tests/test_dashboard_phase4_pages.py::test_chat_conversation_route_defaults_api_proxies_control_plane tests/test_dashboard_phase4_pages.py::test_chat_conversation_route_defaults_api_blocks_unknown_default_model tests/test_dashboard_phase4_pages.py::test_chat_conversation_route_defaults_api_blocks_unavailable_default_bot -q` passed for Batch 40 dashboard default-model guarding.
 - `pytest tests/test_chat_api.py::test_create_conversation_blocks_disabled_catalog_default_model tests/test_chat_api.py::test_update_conversation_route_defaults_blocks_unknown_catalog_default_model -q` passed for Batch 41 control-plane default-model guarding.
+- `pytest tests/test_chat_api.py::test_create_conversation_blocks_disabled_catalog_default_model tests/test_chat_api.py::test_update_conversation_route_defaults_blocks_unknown_catalog_default_model tests/test_chat_api.py::test_create_conversation_blocks_default_model_provider_mismatch -q` passed for Batch 42 default route provider compatibility.

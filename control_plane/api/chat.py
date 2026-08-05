@@ -609,24 +609,56 @@ async def _target_supports_image_attachments(request: Request, *, target_bot_id:
     return False
 
 
-async def _validate_default_model_id(request: Request, default_model_id: Optional[str]) -> None:
+async def _validate_default_model_id(request: Request, default_model_id: Optional[str]) -> Any | None:
     model_id = str(default_model_id or "").strip()
     if not model_id:
-        return
+        return None
     model_registry = getattr(request.app.state, "model_registry", None)
     if model_registry is None:
-        return
+        return None
     try:
         if not await model_registry.has_any():
-            return
+            return None
     except Exception:
-        return
+        return None
     try:
         catalog_model = await model_registry.get(model_id)
     except Exception:
         raise HTTPException(status_code=400, detail=f"default_model_id is not in the enabled model catalog: {model_id}")
     if not bool(getattr(catalog_model, "enabled", True)):
         raise HTTPException(status_code=400, detail=f"default_model_id is disabled: {model_id}")
+    return catalog_model
+
+
+async def _validate_default_model_compatible_with_bot(
+    request: Request,
+    *,
+    default_bot_id: Optional[str],
+    catalog_model: Any | None,
+) -> None:
+    bot_id = str(default_bot_id or "").strip()
+    if not bot_id or catalog_model is None:
+        return
+    expected_provider = str(getattr(catalog_model, "provider", "") or "").strip()
+    if not expected_provider:
+        return
+    bot_registry = getattr(request.app.state, "bot_registry", None)
+    if bot_registry is None:
+        return
+    try:
+        bot = await bot_registry.get(bot_id)
+    except Exception:
+        return
+    for backend in getattr(bot, "backends", None) or []:
+        backend_type = str(getattr(backend, "type", "") or "").strip()
+        if backend_type not in {"cloud_api", "local_llm", "remote_llm"}:
+            continue
+        if str(getattr(backend, "provider", "") or "").strip() == expected_provider:
+            return
+    raise HTTPException(
+        status_code=400,
+        detail=f"default_model_id provider '{expected_provider}' is not available on default_bot_id '{bot_id}'",
+    )
 
 
 _GROUNDING_NOTE_LINE_RE = re.compile(r"^\s*grounding\s+note\s*:\s*", re.IGNORECASE)
@@ -3664,7 +3696,12 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
             raise HTTPException(status_code=400, detail="project_id is required for bridged conversations")
         bridge_project_ids = [pid for pid in bridge_project_ids if pid != project_id]
 
-    await _validate_default_model_id(request, body.default_model_id)
+    catalog_model = await _validate_default_model_id(request, body.default_model_id)
+    await _validate_default_model_compatible_with_bot(
+        request,
+        default_bot_id=body.default_bot_id,
+        catalog_model=catalog_model,
+    )
 
     return await chat_manager.create_conversation(
         title=body.title,
@@ -3744,7 +3781,12 @@ async def update_conversation_route_defaults(
 ) -> ChatConversation:
     chat_manager = request.app.state.chat_manager
     try:
-        await _validate_default_model_id(request, body.default_model_id)
+        catalog_model = await _validate_default_model_id(request, body.default_model_id)
+        await _validate_default_model_compatible_with_bot(
+            request,
+            default_bot_id=body.default_bot_id,
+            catalog_model=catalog_model,
+        )
         return await chat_manager.update_conversation_route_defaults(
             conversation_id,
             default_bot_id=body.default_bot_id,
