@@ -769,6 +769,16 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
                     "assignment_capabilities": None,
                 },
                 {
+                    "id": "personal-blocked-chat",
+                    "name": "Personal Blocked Chat",
+                    "role": "assistant",
+                    "routing_rules": {
+                        "operator_profile": {"autonomy": "manual_chat_only"},
+                        "chat_profile": {"mode": "chat", "label": "Blocked Chat"},
+                    },
+                    "assignment_capabilities": None,
+                },
+                {
                     "id": "globeiq-live-audit-qc-02-bot",
                     "name": "GlobeIQ Live Audit QC 02",
                     "role": "qc",
@@ -797,7 +807,18 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
                                 "message": "backend ready for chat",
                             }
                         ],
-                    }
+                    },
+                    {
+                        "bot_id": "personal-blocked-chat",
+                        "state": "blocked",
+                        "ready": False,
+                        "checks": [
+                            {
+                                "status": "failed",
+                                "message": "model credential missing",
+                            }
+                        ],
+                    },
                 ]
             }
 
@@ -823,6 +844,9 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"function updateChatBotCapabilitySummary" in resp.data
     assert b"backend ready for chat" in resp.data
     assert b"readinessLabel" in resp.data
+    assert b"Personal Blocked Chat - Blocked Chat" in resp.data
+    assert b"model credential missing" in resp.data
+    assert b"function activeBotReadinessBlocker" in resp.data
 
 
 def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):

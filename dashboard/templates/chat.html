@@ -1358,6 +1358,19 @@ function activeBotSupportsImages() {
   return !!backend && modelSupportsImages(backend.provider, backend.model);
 }
 
+function activeBotReadinessBlocker() {
+  const bot = activeChatBot();
+  if (!bot) return '';
+  const readiness = bot.readiness && typeof bot.readiness === 'object' ? bot.readiness : {};
+  const state = String(readiness.state || '').trim().toLowerCase();
+  if (!['blocked', 'disabled'].includes(state)) return '';
+  const name = bot.name || bot.id || 'Selected bot';
+  const detail = String(readiness.detail || '').trim();
+  return detail
+    ? `${name} is ${state}: ${detail}`
+    : `${name} is ${state}. Choose a ready bot or fix its readiness first.`;
+}
+
 function chatBotToolAccess(bot) {
   const rules = bot?.routing_rules && typeof bot.routing_rules === 'object' ? bot.routing_rules : {};
   const raw = rules.chat_tool_access && typeof rules.chat_tool_access === 'object'
@@ -2276,6 +2289,11 @@ async function sendMessage(streamMode) {
   const fd = new FormData(form);
   const content = (fd.get('content') || '').toString().trim();
   if (!content && !pendingComposerAttachments.length) return;
+  const readinessBlocker = activeBotReadinessBlocker();
+  if (readinessBlocker) {
+    showChatComposerStatus(readinessBlocker);
+    return;
+  }
   if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
     showChatComposerStatus('The selected chat bot model does not support image attachments. Switch bots or remove the screenshots.');
     return;
