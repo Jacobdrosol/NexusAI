@@ -127,6 +127,7 @@ Dry-run validation also enforces source-link integrity before import:
 - Attachments must reference a message present in `messages.jsonl`.
 - Bridged project IDs must exist in the approved project list when one is supplied.
 - Attachment `import_action` must be `import`, `metadata_only`, `review`, or `skip`.
+- Unsupported executable/script attachment types block import when `import_action` is `import` or `review`. They are warnings when explicitly marked `metadata_only` or `skip`, preserving audit metadata without importing the file.
 
 Conversation record:
 
@@ -181,7 +182,7 @@ Attachment record:
 The dry-run report must block import until these are resolved:
 
 - Any secret-like value in message text, file names, attachment metadata, or source metadata.
-- Any unsupported attachment type that cannot be safely skipped or retained as metadata-only.
+- Any unsupported attachment type requested for import or review instead of being explicitly skipped or retained as metadata-only.
 - Any conversation mapped to a project that does not exist in NexusAI.
 - Any imported conversation requesting workspace tools.
 - Any imported conversation requesting memory training before owner review.

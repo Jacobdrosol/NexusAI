@@ -217,3 +217,70 @@ def test_chat_import_manifest_validator_blocks_unlinked_and_duplicate_source_rec
     assert "unknown_conversation" in codes
     assert "unknown_message" in codes
     assert "invalid_import_action" in codes
+
+
+def test_chat_import_manifest_validator_allows_unsupported_attachments_when_not_imported(tmp_path):
+    manifest_dir = tmp_path / "normalized"
+    manifest_dir.mkdir()
+    _write_jsonl(
+        manifest_dir / "conversations.jsonl",
+        [
+            {
+                "source_platform": "codex",
+                "source_conversation_id": "source-conv-1",
+                "title": "Repo notes",
+                "owner_user_id": "jacob@example.com",
+                "scope": "global",
+                "project_id": None,
+                "memory_profiles_enabled": False,
+                "tool_access_enabled": False,
+                "tool_access_filesystem": False,
+                "tool_access_repo_search": False,
+            }
+        ],
+    )
+    _write_jsonl(
+        manifest_dir / "messages.jsonl",
+        [
+            {
+                "source_platform": "codex",
+                "source_conversation_id": "source-conv-1",
+                "source_message_id": "msg-1",
+                "role": "assistant",
+                "content": "Created a helper script.",
+                "created_at": "2026-08-05T12:00:00+00:00",
+            }
+        ],
+    )
+    _write_jsonl(
+        manifest_dir / "attachments.jsonl",
+        [
+            {
+                "source_platform": "codex",
+                "source_conversation_id": "source-conv-1",
+                "source_message_id": "msg-1",
+                "name": "helper.ps1",
+                "mime_type": "text/plain",
+                "size_bytes": 42,
+                "staged_path": str(tmp_path / "raw" / "helper.ps1"),
+                "import_action": "metadata_only",
+            },
+            {
+                "source_platform": "codex",
+                "source_conversation_id": "source-conv-1",
+                "source_message_id": "msg-1",
+                "name": "run.sh",
+                "mime_type": "application/x-sh",
+                "size_bytes": 42,
+                "staged_path": str(tmp_path / "raw" / "run.sh"),
+                "import_action": "skip",
+            },
+        ],
+    )
+
+    result = validate_manifest(manifest_dir)
+    codes = [item.code for item in result.findings]
+
+    assert result.blocker_count == 0
+    assert result.warning_count == 2
+    assert codes == ["unsupported_attachment_not_imported", "unsupported_attachment_not_imported"]

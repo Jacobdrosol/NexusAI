@@ -177,8 +177,26 @@ def _validate_attachment(path: Path, line_no: int, record: dict[str, Any], resul
     name = _string(record, "name")
     mime_type = _string(record, "mime_type").lower()
     suffix = Path(name).suffix.lower()
+    import_action = _string(record, "import_action") or "review"
+    if import_action not in ALLOWED_IMPORT_ACTIONS:
+        result.add(
+            "blocker",
+            path,
+            line_no,
+            "invalid_import_action",
+            f"import_action must be one of: {', '.join(sorted(ALLOWED_IMPORT_ACTIONS))}",
+        )
     if suffix in UNSUPPORTED_ATTACHMENT_EXTENSIONS or mime_type.startswith(UNSUPPORTED_ATTACHMENT_MIME_PREFIXES):
-        result.add("blocker", path, line_no, "unsupported_attachment", f"unsupported attachment type: {name}")
+        if import_action in {"skip", "metadata_only"}:
+            result.add(
+                "warning",
+                path,
+                line_no,
+                "unsupported_attachment_not_imported",
+                f"unsupported attachment type will not be imported as a file: {name}",
+            )
+        else:
+            result.add("blocker", path, line_no, "unsupported_attachment", f"unsupported attachment type: {name}")
     try:
         size_bytes = int(record.get("size_bytes") or 0)
     except (TypeError, ValueError):
@@ -250,15 +268,6 @@ def validate_manifest(manifest_dir: Path, *, projects_file: Path | None = None) 
         )
         if all(message_key) and message_key not in message_keys:
             result.add("blocker", attachments_path, line_no, "unknown_message", "attachment references a message that is not in messages.jsonl")
-        import_action = _string(record, "import_action") or "review"
-        if import_action not in ALLOWED_IMPORT_ACTIONS:
-            result.add(
-                "blocker",
-                attachments_path,
-                line_no,
-                "invalid_import_action",
-                f"import_action must be one of: {', '.join(sorted(ALLOWED_IMPORT_ACTIONS))}",
-            )
     return result
 
 
