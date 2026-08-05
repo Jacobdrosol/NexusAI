@@ -62,6 +62,22 @@
       <div class="card-label">Browser Action Bots</div>
       <div class="card-value card-blue">{{ tooling_summary.browser_action_bot_count or 0 }}</div>
     </div>
+    <div class="card">
+      <div class="card-label">Worker Assignments</div>
+      <div class="card-value card-blue">{{ tooling_summary.worker_assignment_count or 0 }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Missing Workers</div>
+      <div class="card-value {% if tooling_summary.missing_worker_assignment_count %}card-red{% else %}card-green{% endif %}">{{ tooling_summary.missing_worker_assignment_count or 0 }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Offline Workers</div>
+      <div class="card-value {% if tooling_summary.offline_worker_assignment_count %}card-yellow{% else %}card-green{% endif %}">{{ tooling_summary.offline_worker_assignment_count or 0 }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Degraded Probes</div>
+      <div class="card-value {% if tooling_summary.degraded_worker_probe_count %}card-yellow{% else %}card-green{% endif %}">{{ tooling_summary.degraded_worker_probe_count or 0 }}</div>
+    </div>
   </div>
   <div class="split-grid bot-tooling-grid">
     <div>

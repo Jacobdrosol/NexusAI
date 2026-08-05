@@ -64,6 +64,13 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 "id": "disabled-bot",
                 "name": "Disabled Bot",
                 "enabled": False,
+                "backends": [{"worker_id": "missing-worker", "type": "remote_llm"}],
+            },
+            {
+                "id": "missing-worker-bot",
+                "name": "Missing Worker Bot",
+                "enabled": True,
+                "backends": [{"worker_id": "missing-worker", "type": "remote_llm"}],
             },
         ],
         readiness_payload={
@@ -82,11 +89,17 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 {"bot_id": "ready-bot", "state": "ready", "ready": True, "checks": []},
                 {"bot_id": "connection-bot", "state": "ready", "ready": True, "checks": []},
                 {"bot_id": "disabled-bot", "state": "disabled", "ready": False, "checks": []},
+                {
+                    "bot_id": "missing-worker-bot",
+                    "state": "blocked",
+                    "ready": False,
+                    "checks": [{"status": "failed", "message": "Worker 'missing-worker' is missing."}],
+                },
             ]
         },
         workers=[
             {"id": "browser-worker", "status": "online", "enabled": True},
-            {"id": "llm-worker", "status": "online", "enabled": True},
+            {"id": "llm-worker", "status": "offline", "enabled": True},
         ],
         worker_probes_payload={
             "probes": [
@@ -97,7 +110,7 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     )
 
     assert status["summary"]["ready"] == 2
-    assert status["summary"]["blocked"] == 1
+    assert status["summary"]["blocked"] == 2
     assert status["summary"]["disabled"] == 1
     assert status["summary"]["tooling_bot_count"] == 1
     assert status["summary"]["connection_action_bot_count"] == 1
@@ -105,6 +118,10 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert status["summary"]["owner_approval_action_count"] == 1
     assert status["summary"]["browser_owner_approval_action_count"] == 1
     assert status["summary"]["http_connection_backend_count"] == 1
+    assert status["summary"]["worker_assignment_count"] == 3
+    assert status["summary"]["missing_worker_assignment_count"] == 1
+    assert status["summary"]["offline_worker_assignment_count"] == 1
+    assert status["summary"]["degraded_worker_probe_count"] == 1
     assert status["required_tools"] == [{"tool": "browser-ui", "bot_count": 1}]
     assert status["connection_actions"] == [{"action": "globeiq-agent-api.updateLesson", "bot_count": 1}]
     assert status["browser_actions"] == [{"action": "question_bank.patch_existing", "bot_count": 1}]
@@ -204,6 +221,10 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"browser-ui" in page.data
     assert b"Connection Action Bots" in page.data
     assert b"Browser Action Bots" in page.data
+    assert b"Worker Assignments" in page.data
+    assert b"Missing Workers" in page.data
+    assert b"Offline Workers" in page.data
+    assert b"Degraded Probes" in page.data
     assert b"Connection actions" in page.data
     assert b"Browser actions" in page.data
     assert b"globeiq-agent-api.updateLesson" in page.data
@@ -220,6 +241,8 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert payload["summary"]["blocked"] == 1
     assert payload["summary"]["connection_action_bot_count"] == 1
     assert payload["summary"]["browser_action_bot_count"] == 1
+    assert payload["summary"]["worker_assignment_count"] == 1
+    assert payload["summary"]["degraded_worker_probe_count"] == 1
     assert payload["blocked_groups"][0]["category"] == "browser_session"
     assert payload["blocked_groups"][0]["label"] == "Authenticated browser session"
 

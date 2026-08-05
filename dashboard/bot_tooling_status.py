@@ -251,6 +251,24 @@ def build_bot_tooling_status(
             row["bot_id"],
         )
     )
+    worker_statuses = [
+        worker
+        for row in rows
+        if row["enabled"]
+        for worker in row["workers"]
+        if isinstance(worker, dict)
+    ]
+    missing_worker_count = sum(1 for worker in worker_statuses if worker.get("status") == "missing")
+    offline_worker_count = sum(
+        1
+        for worker in worker_statuses
+        if worker.get("status") != "missing"
+        and (
+            worker.get("status") not in {"online", "ready", "healthy"}
+            or not bool(worker.get("enabled", False))
+        )
+    )
+    degraded_probe_count = sum(1 for worker in worker_statuses if worker.get("probe_status") not in {"ready", "healthy", "unknown"})
 
     return {
         "summary": {
@@ -265,6 +283,10 @@ def build_bot_tooling_status(
             "browser_action_bot_count": sum(1 for row in rows if row["browser_actions"]),
             "browser_owner_approval_action_count": sum(len(row["browser_owner_approval_actions"]) for row in rows),
             "http_connection_backend_count": sum(row["connection_backend_count"] for row in rows),
+            "worker_assignment_count": len(worker_statuses),
+            "missing_worker_assignment_count": missing_worker_count,
+            "offline_worker_assignment_count": offline_worker_count,
+            "degraded_worker_probe_count": degraded_probe_count,
         },
         "state_counts": dict(state_counts),
         "required_tools": [
