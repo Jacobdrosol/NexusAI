@@ -83,6 +83,31 @@ def _connection_backend_count(bot: dict[str, Any]) -> int:
     return count
 
 
+def _safe_reference_label(value: Any) -> str:
+    label = str(value or "").strip()
+    if not label:
+        return ""
+    lowered = label.lower()
+    suspicious_prefixes = ("sk-", "xoxb-", "xoxp-", "ghp_", "github_pat_", "ya29.", "eyj")
+    if any(lowered.startswith(prefix) for prefix in suspicious_prefixes):
+        return "[redacted raw credential]"
+    if len(label) > 96:
+        return label[:93] + "..."
+    return label
+
+
+def _backend_credential_refs(bot: dict[str, Any]) -> list[str]:
+    refs = []
+    for backend in _as_list(bot.get("backends")):
+        if not isinstance(backend, dict):
+            continue
+        for key in ("api_key_ref", "credential_ref", "auth_token_ref"):
+            ref = _safe_reference_label(backend.get(key))
+            if ref and ref not in refs:
+                refs.append(ref)
+    return refs
+
+
 def _connection_context_label(bot: dict[str, Any]) -> str:
     routing = _as_dict(bot.get("routing_rules"))
     config = _as_dict(routing.get("connection_context"))
@@ -210,6 +235,7 @@ def build_bot_tooling_status(
         for action in browser_actions:
             browser_action_counts[action] += 1
         connection_backend_count = _connection_backend_count(bot)
+        credential_refs = _backend_credential_refs(bot)
         connection_context = _connection_context_label(bot)
         worker_ids = _worker_ids(bot)
         messages = _failed_messages(readiness)
@@ -242,6 +268,7 @@ def build_bot_tooling_status(
             "browser_actions": browser_actions,
             "browser_owner_approval_actions": browser_owner_approval_actions,
             "connection_backend_count": connection_backend_count,
+            "credential_refs": credential_refs,
             "connection_context": connection_context,
             "worker_ids": worker_ids,
             "workers": worker_statuses,
@@ -291,6 +318,8 @@ def build_bot_tooling_status(
             "browser_action_bot_count": sum(1 for row in rows if row["browser_actions"]),
             "browser_owner_approval_action_count": sum(len(row["browser_owner_approval_actions"]) for row in rows),
             "http_connection_backend_count": sum(row["connection_backend_count"] for row in rows),
+            "credential_ref_bot_count": sum(1 for row in rows if row["credential_refs"]),
+            "backend_credential_ref_count": sum(len(row["credential_refs"]) for row in rows),
             "worker_assignment_count": len(worker_statuses),
             "missing_worker_assignment_count": missing_worker_count,
             "offline_worker_assignment_count": offline_worker_count,

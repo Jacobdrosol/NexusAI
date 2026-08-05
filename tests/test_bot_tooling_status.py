@@ -50,7 +50,7 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 "id": "connection-bot",
                 "name": "Connection Bot",
                 "enabled": True,
-                "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http"}],
+                "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http", "api_key_ref": "GLOBEIQ_AGENT_TOKEN"}],
                 "routing_rules": {"connection_context": {"connection_name": "globeiq-agent-api"}},
                 "execution_policy": {
                     "connection_action_allowlist": [
@@ -83,6 +83,12 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 "name": "Project Policy Blocked",
                 "enabled": True,
                 "backends": [{"worker_id": "llm-worker", "type": "remote_llm"}],
+            },
+            {
+                "id": "raw-secret-bot",
+                "name": "Raw Secret Bot",
+                "enabled": True,
+                "backends": [{"type": "cloud_api", "provider": "openai", "api_key_ref": "sk-live-secret"}],
             },
         ],
         readiness_payload={
@@ -119,6 +125,7 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                     "ready": False,
                     "checks": [{"status": "failed", "message": "Project policy does not allow repo search."}],
                 },
+                {"bot_id": "raw-secret-bot", "state": "ready", "ready": True, "checks": []},
             ]
         },
         workers=[
@@ -133,7 +140,7 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
         },
     )
 
-    assert status["summary"]["ready"] == 2
+    assert status["summary"]["ready"] == 3
     assert status["summary"]["blocked"] == 4
     assert status["summary"]["disabled"] == 1
     assert status["summary"]["tooling_bot_count"] == 1
@@ -142,6 +149,8 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert status["summary"]["owner_approval_action_count"] == 1
     assert status["summary"]["browser_owner_approval_action_count"] == 1
     assert status["summary"]["http_connection_backend_count"] == 1
+    assert status["summary"]["credential_ref_bot_count"] == 2
+    assert status["summary"]["backend_credential_ref_count"] == 2
     assert status["summary"]["worker_assignment_count"] == 5
     assert status["summary"]["missing_worker_assignment_count"] == 1
     assert status["summary"]["offline_worker_assignment_count"] == 3
@@ -157,6 +166,9 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert connection_row["owner_approval_actions"] == ["globeiq-agent-api.updateLesson"]
     assert connection_row["connection_backend_count"] == 1
     assert connection_row["connection_context"] == "globeiq-agent-api"
+    assert connection_row["credential_refs"] == ["GLOBEIQ_AGENT_TOKEN"]
+    raw_secret_row = next(row for row in status["rows"] if row["bot_id"] == "raw-secret-bot")
+    assert raw_secret_row["credential_refs"] == ["[redacted raw credential]"]
     groups = {group["category"]: group for group in status["blocked_groups"]}
     assert groups["browser_session"]["label"] == "Authenticated browser session"
     assert "site account can exist" in groups["browser_session"]["detail"]
@@ -193,7 +205,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
                     "name": "Connection Bot",
                     "role": "site-updater",
                     "enabled": True,
-                    "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http"}],
+                    "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http", "api_key_ref": "GLOBEIQ_AGENT_TOKEN"}],
                     "routing_rules": {"connection_context": {"connection_name": "globeiq-agent-api"}},
                     "execution_policy": {
                         "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
@@ -250,6 +262,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Connection Action Bots" in page.data
     assert b"Browser Action Bots" in page.data
     assert b"Worker Assignments" in page.data
+    assert b"Credential Ref Bots" in page.data
     assert b"Missing Workers" in page.data
     assert b"Offline Workers" in page.data
     assert b"Degraded Probes" in page.data
@@ -260,6 +273,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Owner approval: 1" in page.data
     assert b"Browser owner approval: 1" in page.data
     assert b"Context: globeiq-agent-api" in page.data
+    assert b"Credential refs: GLOBEIQ_AGENT_TOKEN" in page.data
     page_html = page.data.decode("utf-8")
     connection_row_start = page_html.index('data-id="connection-bot"')
     connection_row = page_html[connection_row_start:page_html.index("</tr>", connection_row_start)]
@@ -269,6 +283,8 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert payload["summary"]["blocked"] == 1
     assert payload["summary"]["connection_action_bot_count"] == 1
     assert payload["summary"]["browser_action_bot_count"] == 1
+    assert payload["summary"]["credential_ref_bot_count"] == 1
+    assert payload["summary"]["backend_credential_ref_count"] == 1
     assert payload["summary"]["worker_assignment_count"] == 1
     assert payload["summary"]["degraded_worker_probe_count"] == 1
     assert payload["blocked_groups"][0]["category"] == "browser_session"

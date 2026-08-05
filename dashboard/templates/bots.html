@@ -67,6 +67,10 @@
       <div class="card-value card-blue">{{ tooling_summary.worker_assignment_count or 0 }}</div>
     </div>
     <div class="card">
+      <div class="card-label">Credential Ref Bots</div>
+      <div class="card-value card-blue">{{ tooling_summary.credential_ref_bot_count or 0 }}</div>
+    </div>
+    <div class="card">
       <div class="card-label">Missing Workers</div>
       <div class="card-value {% if tooling_summary.missing_worker_assignment_count %}card-red{% else %}card-green{% endif %}">{{ tooling_summary.missing_worker_assignment_count or 0 }}</div>
     </div>
@@ -219,6 +223,9 @@
         {% endif %}
         {% if bot_tooling and bot_tooling.connection_context %}
         <div class="metrics">Context: {{ bot_tooling.connection_context }}</div>
+        {% endif %}
+        {% if bot_tooling and bot_tooling.credential_refs %}
+        <div class="metrics">Credential refs: {{ bot_tooling.credential_refs | join(', ') }}</div>
         {% endif %}
       </td>
       <td class="actions">

@@ -106,6 +106,10 @@
       <div class="mini-note">HTTP Connection Backends</div>
       <strong>{{ tooling.connection_backend_count or 0 }}</strong>
     </div>
+    <div>
+      <div class="mini-note">Credential References</div>
+      <strong>{{ tooling.credential_refs | join(', ') if tooling.credential_refs else 'none' }}</strong>
+    </div>
   </div>
   {% if tooling.blocking_messages %}
   <div class="state-info" style="margin-top:0.75rem;">

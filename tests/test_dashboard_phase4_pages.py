@@ -1994,7 +1994,15 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                 "priority": 1,
                 "enabled": True,
                 "memory_profiles_enabled": True,
-                "backends": [{"type": "remote_llm", "provider": "ollama_cloud", "model": "qwen3.5:397b", "worker_id": "coding-worker"}],
+                "backends": [
+                    {
+                        "type": "remote_llm",
+                        "provider": "ollama_cloud",
+                        "model": "qwen3.5:397b",
+                        "worker_id": "coding-worker",
+                        "api_key_ref": "OLLAMA_CLOUD_KEY",
+                    }
+                ],
                 "routing_rules": {
                     "chat_profile": {
                         "mode": "coding",
@@ -2096,6 +2104,8 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"Browser Owner Approval Actions" in resp.data
     assert b"lesson_preview.read" in resp.data
     assert b"Required Worker Tools" in resp.data
+    assert b"Credential References" in resp.data
+    assert b"OLLAMA_CLOUD_KEY" in resp.data
     assert b"repo-search" in resp.data
     assert b"coding-worker" in resp.data
     assert b"No worker binding declared" not in resp.data
