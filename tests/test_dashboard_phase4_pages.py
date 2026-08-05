@@ -1610,6 +1610,9 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     assert b"personal-general-chat" in resp.data
     assert b"ollama-qwen" in resp.data
     assert b"applyConversationProjectFilter" in resp.data
+    assert b'id="chat-conversation-filter-summary"' in resp.data
+    assert b"Active 1 / Archived 0" in resp.data
+    assert b"Showing ${activeVisible} of ${activeTotal} active" in resp.data
 
 
 def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client):

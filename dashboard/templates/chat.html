@@ -277,6 +277,14 @@
         placeholder="Title, project, bot, or model"
         autocomplete="off"
       >
+      <div
+        id="chat-conversation-filter-summary"
+        class="mini-note"
+        data-active-total="{{ conversations|length }}"
+        data-archived-total="{{ archived_conversations|length }}"
+      >
+        Active {{ conversations|length }} / Archived {{ archived_conversations|length }}
+      </div>
     </div>
     <div class="list">
       {% for c in conversations %}
@@ -1072,6 +1080,15 @@ function applyConversationProjectFilter() {
       emptyEl.hidden = activeVisible > 0 || (!projectFilterActive && !searchActive) || !rows.some((row) => !row.closest('.chat-archived-list'));
     }
   });
+  const summaryEl = document.getElementById('chat-conversation-filter-summary');
+  if (summaryEl) {
+    const activeTotal = Number(summaryEl.dataset.activeTotal || activeVisible || 0);
+    const archivedTotal = Number(summaryEl.dataset.archivedTotal || archivedVisible || 0);
+    const filtered = projectFilterActive || searchActive;
+    summaryEl.textContent = filtered
+      ? `Showing ${activeVisible} of ${activeTotal} active / ${archivedVisible} of ${archivedTotal} archived`
+      : `Active ${activeTotal} / Archived ${archivedTotal}`;
+  }
 }
 
 async function refreshMessagesUntilSettled(maxAttempts = 20, delayMs = 1000) {
