@@ -385,7 +385,7 @@
       </div>
       <div class="table-wrap" style="margin-top:0.75rem;">
         <table>
-          <thead><tr><th>Chat</th><th>Project</th><th>Scope</th><th>Tokens</th><th>Measured</th><th>Missing</th></tr></thead>
+          <thead><tr><th>Chat</th><th>Project</th><th>Scope</th><th>Tokens</th><th>Measured</th><th>Missing</th><th>Latest</th></tr></thead>
           <tbody>
             {% for row in chat_usage.by_conversation[:10] %}
             <tr>
@@ -395,9 +395,10 @@
               <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
               <td>{{ row.messages_with_usage }}</td>
               <td>{{ row.messages_without_usage }}</td>
+              <td>{{ row.last_message_at or '' }}</td>
             </tr>
             {% else %}
-            <tr><td colspan="6" class="empty">No chat token usage in the selected window</td></tr>
+            <tr><td colspan="7" class="empty">No chat token usage in the selected window</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -405,7 +406,7 @@
       <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:1rem;margin-top:0.75rem;">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Chat Bot</th><th>Tokens</th><th>Measured</th><th>Missing</th></tr></thead>
+            <thead><tr><th>Chat Bot</th><th>Tokens</th><th>Measured</th><th>Missing</th><th>Latest</th></tr></thead>
             <tbody>
               {% for row in chat_usage.by_bot[:8] %}
               <tr>
@@ -413,16 +414,17 @@
                 <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
                 <td>{{ row.messages_with_usage }}</td>
                 <td>{{ row.messages_without_usage }}</td>
+                <td>{{ row.last_message_at or '' }}</td>
               </tr>
               {% else %}
-              <tr><td colspan="4" class="empty">No chat bot token usage in the selected window</td></tr>
+              <tr><td colspan="5" class="empty">No chat bot token usage in the selected window</td></tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Chat Provider</th><th>Model</th><th>Tokens</th><th>Measured</th></tr></thead>
+            <thead><tr><th>Chat Provider</th><th>Model</th><th>Tokens</th><th>Measured</th><th>Latest</th></tr></thead>
             <tbody>
               {% for row in chat_usage.by_provider_model[:8] %}
               <tr>
@@ -430,9 +432,10 @@
                 <td><code>{{ row.model or 'unknown' }}</code></td>
                 <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
                 <td>{{ row.messages_with_usage }}</td>
+                <td>{{ row.last_message_at or '' }}</td>
               </tr>
               {% else %}
-              <tr><td colspan="4" class="empty">No chat model token usage in the selected window</td></tr>
+              <tr><td colspan="5" class="empty">No chat model token usage in the selected window</td></tr>
               {% endfor %}
             </tbody>
           </table>

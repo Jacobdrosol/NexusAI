@@ -548,6 +548,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                         "total_tokens": 40,
                         "messages_with_usage": 1,
                         "messages_without_usage": 1,
+                        "last_message_at": "2026-08-05T01:02:03+00:00",
                     }
                 ],
                 "by_bot": [
@@ -556,6 +557,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                         "total_tokens": 40,
                         "messages_with_usage": 1,
                         "messages_without_usage": 1,
+                        "last_message_at": "2026-08-05T01:02:03+00:00",
                     }
                 ],
                 "by_provider_model": [
@@ -564,6 +566,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                         "model": "qwen3.5:397b",
                         "total_tokens": 40,
                         "messages_with_usage": 1,
+                        "last_message_at": "2026-08-05T01:02:03+00:00",
                     }
                 ],
             }
@@ -659,6 +662,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"lesson-writer" in resp.data
     assert b"Planning Chat" in resp.data
     assert b"general-chat" in resp.data
+    assert b"2026-08-05T01:02:03+00:00" in resp.data
     assert b"No chat token usage" not in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
@@ -741,6 +745,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["usage_brief"]["totals"]["completion_tokens"] == 80
     assert brief_data["chat_usage_brief"]["totals"]["prompt_tokens"] == 30
     assert brief_data["chat_usage_brief"]["top_conversations"][0]["conversation_id"] == "chat-1"
+    assert brief_data["chat_usage_brief"]["top_conversations"][0]["last_message_at"] == "2026-08-05T01:02:03+00:00"
     assert brief_data["usage_brief"]["top_bots"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["project_id"] == "globeiq"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["manager_id"] == "globeiq-pm"

@@ -1012,6 +1012,7 @@ class ChatManager:
             bot_id = str(row["bot_id"] or "unknown").strip() or "unknown"
             provider = str(row["provider"] or "unknown").strip().lower() or "unknown"
             model = str(row["model"] or "unknown").strip() or "unknown"
+            created_at = str(row["created_at"] or "")
             conv_bucket = by_conversation.setdefault(
                 conversation_id,
                 _new_bucket(
@@ -1029,6 +1030,8 @@ class ChatManager:
             )
             for bucket in (conv_bucket, bot_bucket, provider_model_bucket):
                 bucket["messages"] += 1
+                if created_at > str(bucket.get("last_message_at") or ""):
+                    bucket["last_message_at"] = created_at
 
             metadata = _metadata_dict(row["metadata"])
             usage = _usage_summary(metadata)

@@ -212,3 +212,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 87 chat usage metadata and API summary.
 - Batch 88: surfaced chat-message token usage on the Work page and Work brief API, including chat usage health, top conversations, chat bots, and chat provider/model totals separate from autonomous task usage.
 - `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load tests/test_work_overview.py::test_work_overview_usage_fallback_has_stable_shape -q` passed for Batch 88 chat usage Work visibility.
+- Batch 89: added `last_message_at` timestamps to chat usage conversation, bot, and provider/model buckets and rendered them on the Work page for quicker unmetered or expensive chat cleanup.
+- `pytest tests/test_chat_manager.py::test_summarize_message_usage_groups_by_conversation_bot_and_model -q` and `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 89 chat usage recency visibility.
