@@ -235,6 +235,19 @@ class UpdateConversationMemoryProfileRequest(BaseModel):
     profile_id: Optional[str] = "default"
 
 
+def _chat_turn_preferred_model_id(conversation: ChatConversation, requested_bot_id: Optional[str]) -> Optional[str]:
+    default_model_id = str(conversation.default_model_id or "").strip()
+    if not default_model_id:
+        return None
+    requested = str(requested_bot_id or "").strip()
+    if not requested:
+        return default_model_id
+    default_bot_id = str(conversation.default_bot_id or "").strip()
+    if not default_bot_id or requested == default_bot_id:
+        return default_model_id
+    return None
+
+
 class MemoryProfileItemCreateRequest(BaseModel):
     user_id: str
     profile_id: Optional[str] = "default"
@@ -4752,7 +4765,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 source="chat",
                 project_id=conversation.project_id,
                 conversation_id=conversation_id,
-                preferred_model_id=conversation.default_model_id,
+                preferred_model_id=_chat_turn_preferred_model_id(conversation, body.bot_id),
             ),
             status="running",
             created_at=user_message.created_at,
@@ -5696,7 +5709,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     source="chat",
                     project_id=conversation.project_id,
                     conversation_id=conversation_id,
-                    preferred_model_id=conversation.default_model_id,
+                    preferred_model_id=_chat_turn_preferred_model_id(conversation, body.bot_id),
                 ),
                 status="running",
                 created_at=user_message.created_at,

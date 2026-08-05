@@ -84,6 +84,46 @@ async def test_chat_default_model_id_is_attached_to_scheduled_task(cp_app):
 
 
 @pytest.mark.anyio
+async def test_chat_default_model_id_is_not_attached_to_explicit_bot_override(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Chat Model Override",
+                "default_bot_id": "bot-default-model",
+                "default_model_id": "ollama-cloud-gpt-oss-120b",
+            },
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        for bot_id, provider, model in (
+            ("bot-default-model", "ollama_cloud", "gpt-oss:120b"),
+            ("bot-explicit-override", "openai", "gpt-5"),
+        ):
+            await client.post(
+                "/v1/bots",
+                json={
+                    "id": bot_id,
+                    "name": bot_id,
+                    "role": "assistant",
+                    "backends": [{"type": "cloud_api", "provider": provider, "model": model}],
+                    "enabled": True,
+                },
+            )
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "hello", "bot_id": "bot-explicit-override"},
+        )
+        assert post_resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        assert task_arg.metadata is not None
+        assert task_arg.metadata.preferred_model_id is None
+
+
+@pytest.mark.anyio
 async def test_user_scoped_memory_profile_retrieved_on_later_eligible_turn(cp_app):
     captured_payloads = []
 
@@ -729,6 +769,53 @@ async def test_stream_default_model_id_is_attached_to_scheduled_task(cp_app):
         assert len(captured_tasks) == 1
         assert captured_tasks[0].metadata is not None
         assert captured_tasks[0].metadata.preferred_model_id == "ollama-cloud-gpt-oss-120b"
+
+
+@pytest.mark.anyio
+async def test_stream_default_model_id_is_not_attached_to_explicit_bot_override(cp_app):
+    captured_tasks = []
+
+    async def _stream(task):
+        captured_tasks.append(task)
+        yield {"event": "backend_selected", "provider": "openai", "model": "gpt-5", "worker_id": None}
+        yield {"event": "final", "output": "stream reply"}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Chat Stream Model Override",
+                "default_bot_id": "bot-stream-default-model",
+                "default_model_id": "ollama-cloud-gpt-oss-120b",
+            },
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        for bot_id, provider, model in (
+            ("bot-stream-default-model", "ollama_cloud", "gpt-oss:120b"),
+            ("bot-stream-explicit-override", "openai", "gpt-5"),
+        ):
+            await client.post(
+                "/v1/bots",
+                json={
+                    "id": bot_id,
+                    "name": bot_id,
+                    "role": "assistant",
+                    "backends": [{"type": "cloud_api", "provider": provider, "model": model}],
+                    "enabled": True,
+                },
+            )
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "hello", "bot_id": "bot-stream-explicit-override"},
+        )
+        assert stream_resp.status_code == 200
+        assert len(captured_tasks) == 1
+        assert captured_tasks[0].metadata is not None
+        assert captured_tasks[0].metadata.preferred_model_id is None
 
 
 @pytest.mark.anyio

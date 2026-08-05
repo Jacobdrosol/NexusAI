@@ -92,6 +92,8 @@ All routes are prefixed with `/v1/`. Auth: set `X-Nexus-API-Key: <token>` header
 
 `default_model_id` is copied into chat task metadata as `preferred_model_id` for normal and streaming message dispatch. When the model catalog has entries, conversation create and route-default updates reject disabled or unknown catalog model IDs. If a default bot and default model are both set, the bot must expose an LLM backend for the catalog model provider. The scheduler resolves valid catalog IDs and applies the selected model only to compatible LLM backends.
 
+For individual messages, the conversation default model is applied only when the request uses the conversation default bot, omits `bot_id`, or the conversation has no default bot. A one-off explicit `bot_id` override on a conversation with a different default bot uses that bot's own backend model instead of inheriting the conversation model.
+
 ---
 
 ## Vault — `/v1/vault`
