@@ -146,6 +146,7 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 {"worker_id": "llm-worker", "probe_status": "ready"},
             ]
         },
+        api_keys=[{"name": "GLOBEIQ_AGENT_TOKEN"}],
     )
 
     assert status["summary"]["ready"] == 3
@@ -198,6 +199,45 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert groups["project_policy"]["label"] == "Project tool policy"
     assert "scoped project" in groups["project_policy"]["detail"]
     assert groups["project_policy"]["recommended_action"]["label"] == "review project policy"
+
+
+def test_bot_tooling_status_blocks_missing_credential_refs():
+    status = build_bot_tooling_status(
+        bots=[
+            {
+                "id": "site-updater",
+                "name": "Site Updater",
+                "enabled": True,
+                "backends": [
+                    {
+                        "type": "custom",
+                        "provider": "http_connection",
+                        "model": "attached-http",
+                        "api_key_ref": "MISSING_SITE_TOKEN",
+                    }
+                ],
+                "execution_policy": {
+                    "connection_action_allowlist": ["site.update"],
+                },
+            }
+        ],
+        readiness_payload={"readiness": [{"bot_id": "site-updater", "state": "ready", "ready": True, "checks": []}]},
+        workers=[],
+        api_keys=[{"name": "OTHER_TOKEN"}],
+    )
+
+    row = status["rows"][0]
+    assert status["summary"]["ready"] == 0
+    assert status["summary"]["blocked"] == 1
+    assert status["summary"]["missing_credential_ref_bot_count"] == 1
+    assert status["summary"]["missing_credential_ref_count"] == 1
+    assert status["summary"]["recommended_action"]["label"] == "configure vault key"
+    assert row["state"] == "blocked"
+    assert row["blocking_category"] == "credential"
+    assert row["missing_credential_refs"] == ["MISSING_SITE_TOKEN"]
+    assert "Missing key-vault credential reference(s): MISSING_SITE_TOKEN" in row["blocking_messages"]
+    groups = {group["category"]: group for group in status["blocked_groups"]}
+    assert groups["credential"]["recommended_action"]["label"] == "configure vault key"
 
 
 def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
@@ -282,7 +322,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
             return []
 
         def list_keys(self):
-            return []
+            return [{"name": "GLOBEIQ_AGENT_TOKEN"}]
 
         def list_projects(self):
             return []
@@ -303,6 +343,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Browser Action Bots" in page.data
     assert b"Worker Assignments" in page.data
     assert b"Credential Ref Bots" in page.data
+    assert b"Missing Credential Refs" in page.data
     assert b"Route: browser on browser-worker" in page.data
     assert b"Route: http_connection / attached-http" in page.data
     assert b"Disabled Needs Fix" in page.data
@@ -338,6 +379,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert payload["summary"]["browser_action_bot_count"] == 1
     assert payload["summary"]["credential_ref_bot_count"] == 1
     assert payload["summary"]["backend_credential_ref_count"] == 1
+    assert payload["summary"]["missing_credential_ref_count"] == 0
     assert payload["summary"]["disabled_activation_blocker_bot_count"] == 1
     assert payload["summary"]["disabled_activation_blocker_count"] == 1
     assert payload["summary"]["worker_assignment_count"] == 1

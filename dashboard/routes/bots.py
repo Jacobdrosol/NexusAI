@@ -504,11 +504,16 @@ def bots_page() -> str:
         worker_probes, warning = _optional_cp_payload(cp, "worker probes", getattr(cp, "list_worker_probes", None))
         if warning:
             warnings.append(warning)
+        api_keys_payload, warning = _optional_cp_payload(cp, "API keys", getattr(cp, "list_keys", None))
+        if warning:
+            warnings.append(warning)
+        api_keys = api_keys_payload if isinstance(api_keys_payload, list) else None
         tooling_status = build_bot_tooling_status(
             bots=cp_data,
             readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
             workers=workers,
             worker_probes_payload=worker_probes if isinstance(worker_probes, dict) else None,
+            api_keys=api_keys,
         )
         _attach_tooling_data_warnings(tooling_status, warnings)
         return render_template(
@@ -517,7 +522,7 @@ def bots_page() -> str:
             tooling_status=tooling_status,
             workers=workers,
             models=_cp_catalog_items(cp, "list_models"),
-            api_keys=_cp_catalog_items(cp, "list_keys"),
+            api_keys=api_keys or [],
             projects=_cp_catalog_items(cp, "list_projects"),
             error=None,
         )
@@ -535,6 +540,7 @@ def bots_page() -> str:
                 readiness_payload=None,
                 workers=[],
                 worker_probes_payload=None,
+                api_keys=[],
             ),
             workers=[],
             models=[],
@@ -565,7 +571,8 @@ def bot_detail_page(bot_id: str):
     worker_probes_getter = getattr(cp, "list_worker_probes", None)
     cp_worker_probes = worker_probes_getter() if callable(worker_probes_getter) else None
     cp_models = cp.list_models() or []
-    cp_keys = cp.list_keys() or []
+    cp_keys_payload = cp.list_keys()
+    cp_keys = cp_keys_payload if isinstance(cp_keys_payload, list) else []
 
     if cp_bot is not None:
         tasks = [t for t in (cp_tasks or []) if str(t.get("bot_id")) == str(bot_id)]
@@ -575,6 +582,7 @@ def bot_detail_page(bot_id: str):
             readiness_payload={"readiness": [cp_readiness]} if isinstance(cp_readiness, dict) else None,
             workers=cp_workers,
             worker_probes_payload=cp_worker_probes if isinstance(cp_worker_probes, dict) else None,
+            api_keys=cp_keys_payload if isinstance(cp_keys_payload, list) else None,
         )
         tooling_row = (tooling_status.get("rows") or [{}])[0]
         return render_template(
@@ -632,6 +640,7 @@ def bot_detail_page(bot_id: str):
                 readiness_payload=None,
                 workers=[],
                 worker_probes_payload=None,
+                api_keys=[],
             ).get("rows") or [{}])[0],
             bot_dependencies=None,
             operating_summary=_bot_detail_operating_summary(bot_payload, None, None),
@@ -689,6 +698,9 @@ def api_bot_tooling_status():
     worker_probes, warning = _optional_cp_payload(cp, "worker probes", getattr(cp, "list_worker_probes", None))
     if warning:
         warnings.append(warning)
+    api_keys, warning = _optional_cp_payload(cp, "API keys", getattr(cp, "list_keys", None))
+    if warning:
+        warnings.append(warning)
     return jsonify(
         _attach_tooling_data_warnings(
             build_bot_tooling_status(
@@ -696,6 +708,7 @@ def api_bot_tooling_status():
                 readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
                 workers=workers,
                 worker_probes_payload=worker_probes if isinstance(worker_probes, dict) else None,
+                api_keys=api_keys if isinstance(api_keys, list) else None,
             ),
             warnings,
         )

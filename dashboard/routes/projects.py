@@ -628,11 +628,13 @@ def project_detail_page(project_id: str):
     project_bots = _with_project_bot_readiness_views(project_bots, readiness_payload)
     list_workers = getattr(cp, "list_workers", None)
     list_worker_probes = getattr(cp, "list_worker_probes", None)
+    list_keys = getattr(cp, "list_keys", None)
     project_tooling_status = build_bot_tooling_status(
         bots=project_bots,
         readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
         workers=list_workers() if callable(list_workers) else [],
         worker_probes_payload=list_worker_probes() if callable(list_worker_probes) else None,
+        api_keys=list_keys() if callable(list_keys) else None,
     )
     project_reports: list[dict[str, Any]] = []
     for bot in project_bots:

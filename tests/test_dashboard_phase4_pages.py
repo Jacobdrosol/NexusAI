@@ -311,6 +311,9 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
         def list_worker_probes(self):
             return {"probes": [{"worker_id": "globeiq-reader", "probe_status": "expired_browser_session"}]}
 
+        def list_keys(self):
+            return [{"name": "OLLAMA_CLOUD_KEY"}]
+
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/projects/globeiq")
 
@@ -2267,7 +2270,7 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
             return []
 
         def list_keys(self):
-            return []
+            return [{"name": "OLLAMA_CLOUD_KEY"}]
 
     with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/bots/coding-helper")

@@ -130,6 +130,10 @@
       <div class="mini-note">Credential References</div>
       <strong>{{ tooling.credential_refs | join(', ') if tooling.credential_refs else 'none' }}</strong>
     </div>
+    <div>
+      <div class="mini-note">Missing Credential References</div>
+      <strong>{{ tooling.missing_credential_refs | join(', ') if tooling.missing_credential_refs else 'none' }}</strong>
+    </div>
   </div>
   {% if tooling.blocking_messages %}
   <div class="state-info" style="margin-top:0.75rem;">

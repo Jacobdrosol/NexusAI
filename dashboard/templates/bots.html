@@ -84,6 +84,10 @@
       <div class="card-value card-blue">{{ tooling_summary.credential_ref_bot_count or 0 }}</div>
     </div>
     <div class="card">
+      <div class="card-label">Missing Credential Refs</div>
+      <div class="card-value {% if tooling_summary.missing_credential_ref_count %}card-red{% else %}card-green{% endif %}">{{ tooling_summary.missing_credential_ref_count or 0 }}</div>
+    </div>
+    <div class="card">
       <div class="card-label">Missing Workers</div>
       <div class="card-value {% if tooling_summary.missing_worker_assignment_count %}card-red{% else %}card-green{% endif %}">{{ tooling_summary.missing_worker_assignment_count or 0 }}</div>
     </div>
@@ -121,6 +125,7 @@
             <code>{{ bot.bot_id }}</code>
             {% if bot.required_tools %}tools: {{ bot.required_tools | join(', ') }}{% endif %}
             {% if bot.worker_ids %}worker: {{ bot.worker_ids | join(', ') }}{% endif %}
+            {% if bot.missing_credential_refs %}missing credentials: {{ bot.missing_credential_refs | join(', ') }}{% endif %}
           </small>
           {% if bot.blocking_messages %}
           <small>{{ bot.blocking_messages[0] }}</small>
@@ -212,8 +217,9 @@
       <td>{{ b.priority }}</td>
       <td><span class="badge badge-{{ 'enabled' if b.enabled else 'disabled' }}">{{ 'enabled' if b.enabled else 'disabled' }}</span></td>
       <td>
+        {% set readiness_state = bot_tooling.state if bot_tooling else (b.readiness.state if b.readiness else 'unknown') %}
         {% if b.readiness %}
-        <span class="badge badge-{{ b.readiness.state }}" title="{{ b.readiness.detail }}">{{ b.readiness.state }}</span>
+        <span class="badge badge-{{ readiness_state }}" title="{{ b.readiness.detail }}">{{ readiness_state }}</span>
         {% if b.readiness.state != 'disabled' and b.readiness.failed %}<div class="metrics">{{ b.readiness.failed }} check(s)</div>{% endif %}
         {% if bot_tooling and bot_tooling.recommended_action %}
         <div class="metrics">Action: {{ bot_tooling.recommended_action.label }}</div>
@@ -226,6 +232,9 @@
         {% if bot_tooling.disabled_activation_messages|length > 2 %}
         <div class="metrics">+{{ bot_tooling.disabled_activation_messages|length - 2 }} more blocker(s)</div>
         {% endif %}
+        {% endif %}
+        {% if bot_tooling and bot_tooling.missing_credential_refs %}
+        <div class="metrics">Missing credential refs: {{ bot_tooling.missing_credential_refs | join(', ') }}</div>
         {% endif %}
         {% else %}
         <span class="badge badge-unknown">unknown</span>
@@ -273,6 +282,9 @@
         {% endif %}
         {% if bot_tooling and bot_tooling.credential_refs %}
         <div class="metrics">Credential refs: {{ bot_tooling.credential_refs | join(', ') }}</div>
+        {% endif %}
+        {% if bot_tooling and bot_tooling.missing_credential_refs %}
+        <div class="metrics">Missing credential refs: {{ bot_tooling.missing_credential_refs | join(', ') }}</div>
         {% endif %}
       </td>
       <td class="actions">

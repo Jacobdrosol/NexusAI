@@ -108,6 +108,33 @@ def _backend_credential_refs(bot: dict[str, Any]) -> list[str]:
     return refs
 
 
+def _available_key_names(api_keys: Any) -> set[str] | None:
+    if api_keys is None:
+        return None
+    if not isinstance(api_keys, list):
+        return set()
+    names: set[str] = set()
+    for item in api_keys:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("id") or "").strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _missing_credential_refs(credential_refs: list[str], available_key_names: set[str] | None) -> list[str]:
+    if available_key_names is None:
+        return []
+    missing = []
+    for ref in credential_refs:
+        if not ref or ref == "[redacted raw credential]":
+            continue
+        if ref not in available_key_names:
+            missing.append(ref)
+    return missing
+
+
 def _connection_context_label(bot: dict[str, Any]) -> str:
     routing = _as_dict(bot.get("routing_rules"))
     config = _as_dict(routing.get("connection_context"))
@@ -296,12 +323,14 @@ def build_bot_tooling_status(
     readiness_payload: dict[str, Any] | None,
     workers: list[dict[str, Any]] | None,
     worker_probes_payload: dict[str, Any] | None = None,
+    api_keys: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a bounded operator view of bot tooling readiness."""
     bot_rows = [row for row in (bots or []) if isinstance(row, dict)]
     readiness_lookup = _readiness_by_bot(readiness_payload)
     workers_lookup = _worker_by_id(workers)
     probe_lookup = _probe_by_worker_id(worker_probes_payload)
+    key_names = _available_key_names(api_keys)
 
     state_counts: Counter[str] = Counter()
     tool_counts: Counter[str] = Counter()
@@ -320,7 +349,6 @@ def build_bot_tooling_status(
             state = "disabled" if not enabled else ("ready" if bool(readiness.get("ready")) else "blocked")
         if not enabled:
             state = "disabled"
-        state_counts[state] += 1
 
         tools = _required_tools(bot)
         for tool in tools:
@@ -335,10 +363,15 @@ def build_bot_tooling_status(
             browser_action_counts[action] += 1
         connection_backend_count = _connection_backend_count(bot)
         credential_refs = _backend_credential_refs(bot)
+        missing_credential_refs = _missing_credential_refs(credential_refs, key_names)
         connection_context = _connection_context_label(bot)
         worker_ids = _worker_ids(bot)
         messages = _failed_messages(readiness)
         disabled_activation_messages = _disabled_activation_messages(readiness) if state == "disabled" else []
+        if state != "disabled" and missing_credential_refs:
+            state = "blocked"
+            messages.append("Missing key-vault credential reference(s): " + ", ".join(missing_credential_refs))
+        state_counts[state] += 1
         category = _blocking_category(messages, tools, worker_ids) if state == "blocked" else ""
         if category:
             blocker_counts[category] += 1
@@ -375,6 +408,7 @@ def build_bot_tooling_status(
             "browser_owner_approval_actions": browser_owner_approval_actions,
             "connection_backend_count": connection_backend_count,
             "credential_refs": credential_refs,
+            "missing_credential_refs": missing_credential_refs,
             "connection_context": connection_context,
             "worker_ids": worker_ids,
             "workers": worker_statuses,
@@ -428,6 +462,8 @@ def build_bot_tooling_status(
             "http_connection_backend_count": sum(row["connection_backend_count"] for row in rows),
             "credential_ref_bot_count": sum(1 for row in rows if row["credential_refs"]),
             "backend_credential_ref_count": sum(len(row["credential_refs"]) for row in rows),
+            "missing_credential_ref_bot_count": sum(1 for row in rows if row["missing_credential_refs"]),
+            "missing_credential_ref_count": sum(len(row["missing_credential_refs"]) for row in rows),
             "disabled_activation_blocker_bot_count": sum(1 for row in rows if row["disabled_activation_messages"]),
             "disabled_activation_blocker_count": sum(len(row["disabled_activation_messages"]) for row in rows),
             "worker_assignment_count": len(worker_statuses),

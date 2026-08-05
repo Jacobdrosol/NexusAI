@@ -132,6 +132,10 @@
       <div class="mini-note">Credential Ref Bots</div>
       <strong>{{ project_tooling_summary.credential_ref_bot_count or 0 }}</strong>
     </div>
+    <div>
+      <div class="mini-note">Missing Credential Refs</div>
+      <strong>{{ project_tooling_summary.missing_credential_ref_count or 0 }}</strong>
+    </div>
   </div>
   <div class="split-grid" style="grid-template-columns:repeat(auto-fit, minmax(18rem, 1fr)); gap:0.75rem;">
     <div>
@@ -156,6 +160,7 @@
             <a href="{{ url_for('bots.bot_detail_page', bot_id=bot.bot_id) }}">{{ bot.name or bot.bot_id }}</a>
             {% if bot.required_tools %} · tools: {{ bot.required_tools | join(', ') }}{% endif %}
             {% if bot.worker_ids %} · worker: {{ bot.worker_ids | join(', ') }}{% endif %}
+            {% if bot.missing_credential_refs %} · missing credentials: {{ bot.missing_credential_refs | join(', ') }}{% endif %}
             {% if bot.workers %}
               {% for worker in bot.workers[:2] %}
                 · probe {{ worker.worker_id }}: {{ worker.probe_status }}
@@ -193,6 +198,7 @@
     <tbody>
       {% for bot in bots %}
       {% set scope = bot.scope_view or {} %}
+      {% set bot_tooling = (project_tooling.rows | selectattr('bot_id', 'equalto', bot.id) | list | first) if project_tooling.rows else None %}
       {% set approval_count = (scope.connection_owner_approvals | length) + (scope.browser_owner_approvals | length) %}
       <tr>
         <td>
@@ -211,6 +217,7 @@
           {% if scope.connection_actions %}<div>Site/API actions: {{ scope.connection_actions | join(', ') }}</div>{% endif %}
           {% if scope.browser_actions %}<div>Browser actions: {{ scope.browser_actions | join(', ') }}</div>{% endif %}
           {% if scope.credential_refs %}<div>Credential refs: {{ scope.credential_refs | join(', ') }}</div>{% endif %}
+          {% if bot_tooling and bot_tooling.missing_credential_refs %}<div>Missing credential refs: {{ bot_tooling.missing_credential_refs | join(', ') }}</div>{% endif %}
           {% if scope.repo_output_mode == 'allow' %}<div>Repo output: allow</div>{% endif %}
           {% if scope.can_apply_db_actions %}<div>Database actions: allowed</div>{% endif %}
           {% if not scope.backend_routes and not scope.required_tools and not scope.connection_actions and not scope.browser_actions and not scope.credential_refs and scope.repo_output_mode != 'allow' and not scope.can_apply_db_actions %}Chat/planning only{% endif %}
