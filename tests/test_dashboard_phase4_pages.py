@@ -689,7 +689,10 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
                     "id": "personal-general-chat",
                     "name": "Personal General Chat",
                     "role": "assistant",
-                    "routing_rules": {"operator_profile": {"autonomy": "manual_chat_only"}},
+                    "routing_rules": {
+                        "operator_profile": {"autonomy": "manual_chat_only"},
+                        "chat_profile": {"mode": "chat", "label": "General Chat"},
+                    },
                     "assignment_capabilities": None,
                 },
                 {
@@ -722,6 +725,7 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
 
     assert resp.status_code == 200
     assert b"Personal General Chat" in resp.data
+    assert b"Personal General Chat - General Chat" in resp.data
     assert b"GlobeIQ Live Audit QC 02" not in resp.data
     assert b"PM Orchestrator" in resp.data
     assert b"Select a project manager bot" in resp.data

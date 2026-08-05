@@ -10,6 +10,7 @@ import requests
 from flask import Blueprint, Response, jsonify, render_template, request, stream_with_context
 from flask_login import current_user, login_required
 
+from dashboard.bot_chat_profiles import with_bot_chat_profiles
 from dashboard.cp_client import get_cp_client
 from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
 from shared.chat_attachments import CHAT_ATTACHMENT_MAX_FILES, CHAT_ATTACHMENT_MAX_TOTAL_BYTES
@@ -37,7 +38,7 @@ def _routing_rules(bot: Any) -> dict[str, Any]:
 
 
 def _chat_selectable_bots(bots: Iterable[Any]) -> list[Any]:
-    selectable: list[Any] = []
+    selectable: list[dict[str, Any]] = []
     for bot in bots:
         rules = _routing_rules(bot)
         operator_profile = rules.get("operator_profile") if isinstance(rules.get("operator_profile"), dict) else {}
@@ -53,8 +54,25 @@ def _chat_selectable_bots(bots: Iterable[Any]) -> list[Any]:
             or bot_id.startswith("personal-")
             or "chat" in name
         ):
-            selectable.append(bot)
-    return selectable
+            if isinstance(bot, dict):
+                selectable.append(dict(bot))
+            elif hasattr(bot, "model_dump"):
+                dumped = bot.model_dump()
+                if isinstance(dumped, dict):
+                    selectable.append(dumped)
+            else:
+                selectable.append(
+                    {
+                        "id": _bot_value(bot, "id"),
+                        "name": _bot_value(bot, "name"),
+                        "role": _bot_value(bot, "role"),
+                        "backends": _bot_value(bot, "backends", []),
+                        "routing_rules": rules,
+                        "memory_profiles_enabled": bool(_bot_value(bot, "memory_profiles_enabled", False)),
+                        "execution_policy": _bot_value(bot, "execution_policy", None),
+                    }
+                )
+    return with_bot_chat_profiles(selectable)
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:

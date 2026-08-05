@@ -398,7 +398,7 @@
           <option value="">Conversation Bot</option>
           {% for b in chat_bots %}
           <option value="{{ b.id }}" {% if selected_conversation.default_bot_id and selected_conversation.default_bot_id == b.id %}selected{% endif %}>
-            {{ b.name }}
+            {{ b.name }}{% if b.chat_profile and b.chat_profile.label %} - {{ b.chat_profile.label }}{% endif %}
           </option>
           {% endfor %}
         </select>
@@ -1366,13 +1366,15 @@ function updateChatBotCapabilitySummary() {
     return;
   }
   const rules = bot.routing_rules && typeof bot.routing_rules === 'object' ? bot.routing_rules : {};
-  const profile = rules.chat_profile && typeof rules.chat_profile === 'object' ? rules.chat_profile : {};
+  const profile = bot.chat_profile && typeof bot.chat_profile === 'object'
+    ? bot.chat_profile
+    : (rules.chat_profile && typeof rules.chat_profile === 'object' ? rules.chat_profile : {});
   const tools = chatBotToolAccess(bot);
   const backend = Array.isArray(bot.backends) && bot.backends.length ? bot.backends[0] : {};
   const toolParts = [];
   if (tools.filesystem) toolParts.push('filesystem');
   if (tools.repo_search) toolParts.push('repo search');
-  const toolLabel = tools.enabled ? (toolParts.length ? toolParts.join(', ') : 'enabled') : 'off';
+  const toolLabel = profile.tool_label || (tools.enabled ? (toolParts.length ? toolParts.join(', ') : 'enabled') : 'off');
   const memoryLabel = bot.memory_profiles_enabled === true ? 'memory on' : 'memory off';
   const imageLabel = activeBotSupportsImages() ? 'images supported' : 'text only';
   const modelLabel = [backend.provider, backend.model].filter(Boolean).join(' / ') || 'model unknown';

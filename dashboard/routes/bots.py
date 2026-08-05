@@ -12,6 +12,7 @@ from typing import Any
 from flask import Blueprint, flash, jsonify, render_template, request, send_file
 from flask_login import login_required
 
+from dashboard.bot_chat_profiles import bot_chat_profile, bot_chat_tool_access, with_bot_chat_profiles
 from dashboard.bot_tooling_status import build_bot_tooling_status
 from dashboard.connections_service import (
     mask_auth_payload,
@@ -70,105 +71,16 @@ def _merge_routing_rules(data: dict[str, Any], existing: Any = None) -> dict[str
     return merged
 
 
-_CHAT_PROFILE_LABELS = {
-    "chat": "Chat Only",
-    "tutor": "Tutor / Reasoning",
-    "vision": "Vision / Math",
-    "coding": "Coding",
-    "automation": "Automation",
-}
-
-
-def _dict_from_any(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if value is None:
-        return {}
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump()
-        return dumped if isinstance(dumped, dict) else {}
-    return {}
-
-
 def _bot_chat_tool_access(bot: dict[str, Any]) -> dict[str, Any]:
-    routing = bot.get("routing_rules") if isinstance(bot.get("routing_rules"), dict) else {}
-    raw = routing.get("chat_tool_access") if isinstance(routing, dict) else None
-    if not isinstance(raw, dict):
-        raw = routing.get("tool_access") if isinstance(routing, dict) else None
-    cfg = raw if isinstance(raw, dict) else {}
-    return {
-        "enabled": bool(cfg.get("enabled", False)),
-        "filesystem": bool(cfg.get("filesystem", False)),
-        "repo_search": bool(cfg.get("repo_search", False)),
-    }
+    return bot_chat_tool_access(bot)
 
 
 def _bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
-    routing = bot.get("routing_rules") if isinstance(bot.get("routing_rules"), dict) else {}
-    raw_profile = routing.get("chat_profile") if isinstance(routing, dict) else None
-    profile = raw_profile if isinstance(raw_profile, dict) else {}
-    operator_profile = routing.get("operator_profile") if isinstance(routing, dict) else None
-    operator_profile = operator_profile if isinstance(operator_profile, dict) else {}
-    tool_access = _bot_chat_tool_access(bot)
-    policy = _dict_from_any(bot.get("execution_policy"))
-    mode = str(profile.get("mode") or "").strip().lower()
-    if mode not in _CHAT_PROFILE_LABELS:
-        if (
-            str(policy.get("repo_output_mode") or "").strip().lower() == "allow"
-            or bool(policy.get("inline_coding_default", False))
-            or bool(tool_access.get("filesystem", False))
-        ):
-            mode = "coding"
-        elif any(
-            str(cap or "").strip().lower() in {"vision", "image", "images", "multimodal", "math"}
-            for backend in bot.get("backends") or []
-            for cap in (
-                backend.get("capabilities", []) if isinstance(backend, dict) and isinstance(backend.get("capabilities"), list) else []
-            )
-        ):
-            mode = "vision"
-        else:
-            mode = "chat"
-    capabilities: list[str] = []
-    if bool(profile.get("attachments", True)):
-        capabilities.append("attachments")
-    if mode in {"vision", "tutor"} or bool(profile.get("image_understanding", False)):
-        capabilities.append("image_understanding")
-    if mode in {"vision", "tutor"} or bool(profile.get("diagrams", False)):
-        capabilities.append("diagrams")
-    if bool(tool_access.get("repo_search", False)):
-        capabilities.append("repo_search")
-    if bool(tool_access.get("filesystem", False)):
-        capabilities.append("filesystem")
-    if bool(policy.get("inline_coding_default", False)):
-        capabilities.append("inline_coding_default")
-    if str(policy.get("repo_output_mode") or "").strip().lower() == "allow":
-        capabilities.append("repo_output")
-    tool_labels: list[str] = []
-    if bool(tool_access.get("filesystem", False)):
-        tool_labels.append("filesystem")
-    if bool(tool_access.get("repo_search", False)):
-        tool_labels.append("repo_search")
-    return {
-        "mode": mode,
-        "label": str(profile.get("label") or _CHAT_PROFILE_LABELS[mode]).strip(),
-        "description": str(profile.get("description") or "").strip(),
-        "capabilities": capabilities,
-        "tool_access": tool_access,
-        "tool_label": ", ".join(tool_labels) if bool(tool_access.get("enabled", False)) else "off",
-        "autonomy": str(operator_profile.get("autonomy") or "").strip() or "unspecified",
-        "repo_output_mode": str(policy.get("repo_output_mode") or "deny").strip().lower(),
-        "inline_coding_default": bool(policy.get("inline_coding_default", False)),
-    }
+    return bot_chat_profile(bot)
 
 
 def _with_bot_chat_profiles(bots: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    enriched: list[dict[str, Any]] = []
-    for bot in bots:
-        row = dict(bot)
-        row["chat_profile"] = _bot_chat_profile(row)
-        enriched.append(row)
-    return enriched
+    return with_bot_chat_profiles(bots)
 
 
 def _bot_to_dict(b: Bot) -> dict[str, Any]:
