@@ -244,7 +244,7 @@
           {% if worker_profile %}
           <div>Worker scope: {{ worker_profile.task_scope or worker_profile.role or 'scoped worker' }}</div>
           <div>Edits: {{ 'allowed' if worker_profile.can_edit else 'not allowed' }}</div>
-          {% if worker_profile.site_account %}<div>Site account: {{ worker_profile.site_account }}</div>{% endif %}
+          {% if worker_profile.site_account %}<div>Site login: {{ worker_profile.site_account }}</div>{% endif %}
           {% if worker_profile.course_scope %}<div>Courses: {{ worker_profile.course_scope | join(', ') }}</div>{% endif %}
           {% if worker_profile.lesson_scope %}<div>Lessons: {{ worker_profile.lesson_scope | join(', ') }}</div>{% endif %}
           {% if worker_profile.allowed_pages %}<div>Pages: {{ worker_profile.allowed_pages | join(', ') }}</div>{% endif %}

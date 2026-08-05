@@ -362,7 +362,7 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert b"Repo output: allow" in resp.data
     assert b"Worker scope: published-lesson-quality-audit" in resp.data
     assert b"Edits: not allowed" in resp.data
-    assert b"Site account: qc.quinn@globaliq.local" in resp.data
+    assert b"Site login: qc.quinn@globaliq.local" in resp.data
     assert b"Courses: 57, 101" in resp.data
     assert b"Lessons: lesson-1" in resp.data
     assert b"Pages: lesson_preview" in resp.data
@@ -2913,7 +2913,7 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"Required Worker Tools" in resp.data
     assert b"Worker profile:" in resp.data
     assert b"single-repo-coding-help" in resp.data
-    assert b"Site account: code.casey@globaliq.local" in resp.data
+    assert b"Site login: code.casey@globaliq.local" in resp.data
     assert b"Courses: nexusai" in resp.data
     assert b"Lessons: chat-ui" in resp.data
     assert b"Pages: chat, bots" in resp.data
@@ -7186,7 +7186,7 @@ def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client
     assert b"Routes: browser / browser-ui on globeiq-worker" in resp.data
     assert b"published-lesson-quality-audit" in resp.data
     assert b"Site: GlobeIQ" in resp.data
-    assert b"Site account: qc.quinn@globaliq.local" in resp.data
+    assert b"Site login: qc.quinn@globaliq.local" in resp.data
     assert b"Courses: 101, 102" in resp.data
     assert b"Lessons: lesson-1001, lesson-1002" in resp.data
     assert b"Pages: lesson_preview, lesson_builder" in resp.data
