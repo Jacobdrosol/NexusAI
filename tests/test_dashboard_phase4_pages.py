@@ -6551,6 +6551,72 @@ def test_project_chat_tool_access_api_proxies_control_plane(dashboard_client):
     assert fake_cp.updated["repo_search"] is True
 
 
+def test_project_chat_tool_access_api_normalizes_disabled_modes(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.updated = None
+
+        def get_project_chat_tool_access(self, project_id):
+            return {
+                "project_id": project_id,
+                "enabled": False,
+                "filesystem": True,
+                "repo_search": True,
+                "workspace_root": "C:\\repo\\demo",
+            }
+
+        def update_project_chat_tool_access(self, **kwargs):
+            self.updated = kwargs
+            return {"status": "ok", **kwargs}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.routes.projects.get_cp_client", return_value=fake_cp):
+        get_resp = dashboard_client.get("/api/projects/proj-1/chat-tool-access")
+        put_resp = dashboard_client.put(
+            "/api/projects/proj-1/chat-tool-access",
+            json={
+                "enabled": False,
+                "filesystem": True,
+                "repo_search": True,
+                "workspace_root": "C:\\repo\\demo",
+            },
+        )
+
+    assert get_resp.status_code == 200
+    assert get_resp.get_json()["enabled"] is False
+    assert get_resp.get_json()["filesystem"] is False
+    assert get_resp.get_json()["repo_search"] is False
+    assert put_resp.status_code == 200
+    assert fake_cp.updated == {
+        "project_id": "proj-1",
+        "enabled": False,
+        "filesystem": False,
+        "repo_search": False,
+        "workspace_root": "C:\\repo\\demo",
+    }
+    assert put_resp.get_json()["filesystem"] is False
+    assert put_resp.get_json()["repo_search"] is False
+
+
+def test_project_chat_tool_access_api_blocks_enablement_without_modes(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def update_project_chat_tool_access(self, **kwargs):
+            raise AssertionError("mode-less project chat tool enablement should not reach control plane")
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/projects/proj-1/chat-tool-access",
+            json={"enabled": True, "filesystem": False, "repo_search": False},
+        )
+
+    assert resp.status_code == 400
+    assert b"project chat workspace tools require at least one enabled tool mode" in resp.data
+
+
 def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
     _login_admin(dashboard_client)
 

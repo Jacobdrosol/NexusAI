@@ -121,13 +121,37 @@ def _normalize_webhook_events(raw: Any) -> list[dict[str, Any]]:
 def _normalize_project_chat_tool_access(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
+    enabled = bool(raw.get("enabled", False))
     workspace_root = str(raw.get("workspace_root") or "").strip() or None
     return {
-        "enabled": bool(raw.get("enabled", False)),
-        "filesystem": bool(raw.get("filesystem", False)),
-        "repo_search": bool(raw.get("repo_search", False)),
+        "enabled": enabled,
+        "filesystem": bool(raw.get("filesystem", False)) if enabled else False,
+        "repo_search": bool(raw.get("repo_search", False)) if enabled else False,
         "workspace_root": workspace_root,
     }
+
+
+def _request_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _normalize_project_chat_tool_access_request(data: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    enabled = _request_bool(data.get("enabled", False))
+    normalized = {
+        "enabled": enabled,
+        "filesystem": _request_bool(data.get("filesystem", False)) if enabled else False,
+        "repo_search": _request_bool(data.get("repo_search", False)) if enabled else False,
+        "workspace_root": str(data.get("workspace_root") or "").strip() or None,
+    }
+    if enabled and not (normalized["filesystem"] or normalized["repo_search"]):
+        return normalized, "project chat workspace tools require at least one enabled tool mode"
+    return normalized, ""
 
 
 def _attach_project_chat_tool_access(projects: list[dict[str, Any]], cp: Any) -> list[dict[str, Any]]:
@@ -946,7 +970,7 @@ def api_get_project_chat_tool_access(project_id: str):
     result = cp.get_project_chat_tool_access(project_id)
     if result is None:
         return _cp_error_response(cp)
-    return jsonify(result)
+    return jsonify(_normalize_project_chat_tool_access(result))
 
 
 @bp.put("/api/projects/<project_id>/chat-tool-access")
@@ -954,16 +978,19 @@ def api_get_project_chat_tool_access(project_id: str):
 def api_update_project_chat_tool_access(project_id: str):
     data: dict[str, Any] = request.get_json(force=True) or {}
     cp = get_cp_client()
+    tool_access, tool_access_error = _normalize_project_chat_tool_access_request(data)
+    if tool_access_error:
+        return jsonify({"error": tool_access_error}), 400
     result = cp.update_project_chat_tool_access(
         project_id=project_id,
-        enabled=bool(data.get("enabled", False)),
-        filesystem=bool(data.get("filesystem", False)),
-        repo_search=bool(data.get("repo_search", False)),
-        workspace_root=(str(data.get("workspace_root") or "").strip() or None),
+        enabled=tool_access["enabled"],
+        filesystem=tool_access["filesystem"],
+        repo_search=tool_access["repo_search"],
+        workspace_root=tool_access["workspace_root"],
     )
     if result is None:
         return _cp_error_response(cp, "failed to update chat tool access")
-    return jsonify(result)
+    return jsonify(_normalize_project_chat_tool_access(result))
 
 
 @bp.get("/api/projects/<project_id>/repo/workspace")
