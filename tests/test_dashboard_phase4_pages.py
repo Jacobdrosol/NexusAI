@@ -251,6 +251,12 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
                             "model": "qwen3.5:cloud",
                             "worker_id": "globeiq-reader",
                             "api_key_ref": "OLLAMA_CLOUD_KEY",
+                        },
+                        {
+                            "type": "cloud_api",
+                            "provider": "openai",
+                            "model": "gpt-5",
+                            "api_key_ref": "sk-live-secret",
                         }
                     ],
                     "execution_policy": {
@@ -335,6 +341,9 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert b"Site/API actions: globeiq-agent-api.updateLesson" in resp.data
     assert b"Browser actions: lesson_preview.read" in resp.data
     assert b"Credential refs: OLLAMA_CLOUD_KEY" in resp.data
+    assert b"Raw Credential Refs" in resp.data
+    assert b"[redacted raw credential]" in resp.data
+    assert b"sk-live-secret" not in resp.data
     assert b"Repo output: allow" in resp.data
     assert b"2 approval gates" in resp.data
     assert b"Enabled for filesystem, repo search." in resp.data
