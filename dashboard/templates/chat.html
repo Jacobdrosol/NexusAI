@@ -597,6 +597,10 @@
           </div>
         </details>
       </div>
+    </div>
+    {% if selected_conversation %}
+    <details class="chat-route-details"{% if selected_default_bot_notice or selected_default_model_notice %} open{% endif %}>
+      <summary>Chat details</summary>
       {% if selected_default_bot_notice %}
       <div id="chat-default-bot-route-warning" class="chat-composer-status error">
         Default bot unavailable: {{ selected_default_bot_notice.label }}. {{ selected_default_bot_notice.detail }}
@@ -609,9 +613,8 @@
       {% endif %}
       <div id="chat-bot-capability-summary" class="mini-note chat-bot-capability-summary"></div>
       <div id="chat-effective-context-summary" class="chat-effective-context-summary"></div>
-      {% endif %}
-    </div>
-    {% if selected_conversation %}
+    </details>
+    {% endif %}
     <div id="task-events-shell" class="chat-task-shell" hidden>
       <div id="task-event-state" class="state-info chat-task-state"></div>
       <div id="task-events" class="list chat-task-events"></div>

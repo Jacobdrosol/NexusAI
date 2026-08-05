@@ -926,6 +926,24 @@ select.form-control {
   margin-bottom: 0;
 }
 
+.page-chat .chat-route-details {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0.45rem 0.9rem;
+  border-bottom: 1px solid #303030;
+  background: #1c1c1c;
+}
+
+.page-chat .chat-route-details summary {
+  cursor: pointer;
+  color: #bdbdbd;
+  font-size: 0.8rem;
+}
+
+.page-chat .chat-route-details[open] summary {
+  margin-bottom: 0.55rem;
+}
+
 .page-chat .chat-main-header-controls {
   display: flex;
   align-items: center;
@@ -3068,6 +3086,7 @@ select.form-control {
 
   .page-chat #chat-default-model-selector,
   .page-chat .chat-main-header-controls > button,
+  .page-chat .chat-route-details,
   .page-chat .chat-bot-capability-summary,
   .page-chat .chat-effective-context-summary {
     display: none;

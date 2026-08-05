@@ -789,9 +789,12 @@ def test_chat_mobile_layout_uses_a_conversation_drawer():
     assert ".page-chat .chat-bot-capability-summary" in final_mobile_rules
     assert ".page-chat .chat-effective-context-summary" in final_mobile_rules
     assert "#chat-default-model-selector" in final_mobile_rules
+    assert ".page-chat .chat-route-details" in final_mobile_rules
     assert "height: 100dvh;" in css
 
     template = Path("dashboard/templates/chat.html").read_text(encoding="utf-8")
+    assert '<details class="chat-route-details"' in template
+    assert template.index('<details class="chat-route-details"') < template.index('id="chat-bot-capability-summary"')
     assert 'id="chat-mobile-conversations-toggle"' in template
     assert 'id="chat-conversation-panel"' in template
     assert "function setMobileConversationDrawerOpen" in template
