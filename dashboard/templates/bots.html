@@ -291,6 +291,9 @@
         {% if profile.allowed_pages %}
         <div class="metrics">Pages: {{ profile.allowed_pages | join(', ') }}</div>
         {% endif %}
+        {% if profile.cli_tools %}
+        <div class="metrics">CLI tools: {{ profile.cli_tools | join(', ') }}</div>
+        {% endif %}
         {% if profile.site_account %}
         <div class="metrics">Site account: {{ profile.site_account }}</div>
         {% endif %}
