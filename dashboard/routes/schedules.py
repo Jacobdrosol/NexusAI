@@ -34,14 +34,40 @@ def _safe_limit(value: Any, default: int = 100) -> int:
     return max(1, min(parsed, 500))
 
 
+def _schedule_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    status_counts: dict[str, int] = {}
+    unattested_active = 0
+    failed_recent = 0
+    for row in rows:
+        status = str(row.get("status") or "unknown").strip().lower() or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if status == "active" and not bool(metadata.get("mutation_safe", False)):
+            unattested_active += 1
+        last_status = str(row.get("last_run_status") or "").strip().lower()
+        if last_status in {"failed", "error", "blocked", "timeout"}:
+            failed_recent += 1
+    return {
+        "total": len(rows),
+        "active": status_counts.get("active", 0),
+        "paused": status_counts.get("paused", 0),
+        "disabled": status_counts.get("disabled", 0),
+        "unattested_active": unattested_active,
+        "failed_recent": failed_recent,
+        "status_counts": status_counts,
+    }
+
+
 @bp.get("/schedules")
 @login_required
 def schedules_page() -> str:
     cp = get_cp_client()
     schedule_response = cp.list_schedules(limit=200)
+    schedules = _as_rows(schedule_response, "schedules")
     return render_template(
         "schedules.html",
-        schedules=_as_rows(schedule_response, "schedules"),
+        schedules=schedules,
+        schedule_summary=_schedule_summary(schedules),
         bots=cp.list_bots() or [],
         projects=cp.list_projects() or [],
         error=None if schedule_response is not None else "Control plane unavailable",

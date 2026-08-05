@@ -12,6 +12,31 @@
 {% endif %}
 
 <section class="panel">
+  <div class="compact-cards">
+    <div class="card">
+      <div class="card-label">Total</div>
+      <div class="card-value">{{ schedule_summary.total }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Active</div>
+      <div class="card-value {% if schedule_summary.active %}card-green{% endif %}">{{ schedule_summary.active }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Paused</div>
+      <div class="card-value {% if schedule_summary.paused %}card-yellow{% endif %}">{{ schedule_summary.paused }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Recent Failures</div>
+      <div class="card-value {% if schedule_summary.failed_recent %}card-red{% else %}card-green{% endif %}">{{ schedule_summary.failed_recent }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Active Unattested</div>
+      <div class="card-value {% if schedule_summary.unattested_active %}card-red{% else %}card-green{% endif %}">{{ schedule_summary.unattested_active }}</div>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
   <table>
     <thead>
       <tr>

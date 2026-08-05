@@ -3377,6 +3377,20 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
                         "next_run_at": "2026-07-19T08:00:00+00:00",
                         "last_run_at": None,
                         "last_run_status": None,
+                        "metadata": {"mutation_safe": True},
+                    },
+                    {
+                        "id": "schedule-unsafe",
+                        "name": "Unsafe Active",
+                        "status": "active",
+                        "cron_expression": "*/15 * * * *",
+                        "timezone": "UTC",
+                        "target_bot_id": "reviewer",
+                        "assignment_pm_bot_id": None,
+                        "next_run_at": "2026-07-19T08:15:00+00:00",
+                        "last_run_at": "2026-07-19T08:00:00+00:00",
+                        "last_run_status": "failed",
+                        "metadata": {},
                     }
                 ]
             }
@@ -3437,6 +3451,9 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
     assert b"schedule-csv-source" in page.data
     assert b"schedule-csv-payload-map" in page.data
     assert b"Daily Review" in page.data
+    assert b"Unsafe Active" in page.data
+    assert b"Active Unattested" in page.data
+    assert b"Recent Failures" in page.data
     assert b"Origin" in page.data
     assert b"Retry After" in page.data
     assert b"retry_not_before" in page.data
