@@ -2513,6 +2513,37 @@ def test_chat_create_conversation_api_proxies_default_model(dashboard_client):
     assert captured["owner_user_id"] == "admin@test.com"
 
 
+def test_chat_create_conversation_api_blocks_disabled_default_model(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_models(self):
+            return [
+                {
+                    "id": "disabled-chat-model",
+                    "name": "disabled-model",
+                    "provider": "ollama_cloud",
+                    "enabled": False,
+                }
+            ]
+
+        def create_conversation(self, body):
+            raise AssertionError("disabled default model should not reach control plane create")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/conversations",
+            json={"title": "Disabled Model", "default_model_id": "disabled-chat-model"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Default model is unavailable" in resp.data
+    assert b"disabled-model is disabled" in resp.data
+
+
 def test_chat_assignment_preview_api_blocks_unavailable_pm_bot(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -2876,6 +2907,37 @@ def test_chat_conversation_route_defaults_api_blocks_unavailable_default_bot(das
     assert resp.status_code == 409
     assert b"Default bot is unavailable" in resp.data
     assert b"backend missing" in resp.data
+
+
+def test_chat_conversation_route_defaults_api_blocks_unknown_default_model(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_models(self):
+            return [
+                {
+                    "id": "known-chat-model",
+                    "name": "known-model",
+                    "provider": "ollama_cloud",
+                    "enabled": True,
+                }
+            ]
+
+        def update_conversation_route_defaults(self, *args, **kwargs):
+            raise AssertionError("unknown default model should not reach control plane route defaults update")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/route-defaults",
+            json={"default_bot_id": "", "default_model_id": "missing-chat-model"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Default model is unavailable" in resp.data
+    assert b"missing-chat-model is not in the enabled model catalog" in resp.data
 
 
 def test_chat_stream_api_blocks_unavailable_explicit_bot(dashboard_client):

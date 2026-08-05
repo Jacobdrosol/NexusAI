@@ -126,6 +126,8 @@ Blueprint: `chat`.
 | GET | `/api/chat/orchestrations/<orchestration_id>/graph` | Build DAG graph of all tasks in an orchestration | Yes |
 | GET | `/api/chat/orchestrations/<orchestration_id>/recap` | Full text recap of all task results in an orchestration | Yes |
 
+Conversation create and route-default endpoints validate default bot readiness and default model catalog state before proxying changes to the control plane. Disabled or unknown catalog model IDs return `409` instead of being saved as stale chat routing defaults.
+
 ---
 
 ## `routes/connections.py`

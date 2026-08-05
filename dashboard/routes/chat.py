@@ -256,6 +256,29 @@ def _bot_readiness_blocker_from_cp(cp: Any, bot_id: str) -> str:
     return f"{safe_bot_id} is {state}: {detail}" if detail else f"{safe_bot_id} is {state}"
 
 
+def _model_catalog_blocker_from_cp(cp: Any, model_id: str) -> str:
+    safe_model_id = str(model_id or "").strip()
+    if not safe_model_id or not hasattr(cp, "list_models"):
+        return ""
+    try:
+        models = cp.list_models()
+    except Exception:
+        return ""
+    if not isinstance(models, list) or not models:
+        return ""
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        candidate_id = str(model.get("id") or "").strip()
+        if candidate_id != safe_model_id:
+            continue
+        if model.get("enabled", True) is False:
+            label = str(model.get("name") or candidate_id).strip() or candidate_id
+            return f"{label} is disabled"
+        return ""
+    return f"{safe_model_id} is not in the enabled model catalog"
+
+
 def _conversation_from_cp(cp: Any, conversation_id: str) -> dict[str, Any] | None:
     safe_conversation_id = str(conversation_id or "").strip()
     if not safe_conversation_id or not hasattr(cp, "list_conversations"):
@@ -1103,6 +1126,9 @@ def api_create_conversation():
     readiness_blocker = _bot_readiness_blocker_from_cp(cp, default_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Default bot is unavailable: {readiness_blocker}"}), 409
+    model_blocker = _model_catalog_blocker_from_cp(cp, default_model_id)
+    if model_blocker:
+        return jsonify({"error": f"Default model is unavailable: {model_blocker}"}), 409
     created = cp.create_conversation(
         {
             "title": title,
@@ -1195,6 +1221,9 @@ def api_update_conversation_route_defaults(conversation_id: str):
     readiness_blocker = _bot_readiness_blocker_from_cp(cp, default_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Default bot is unavailable: {readiness_blocker}"}), 409
+    model_blocker = _model_catalog_blocker_from_cp(cp, default_model_id)
+    if model_blocker:
+        return jsonify({"error": f"Default model is unavailable: {model_blocker}"}), 409
     updated = cp.update_conversation_route_defaults(
         conversation_id=conversation_id,
         default_bot_id=default_bot_id or None,
