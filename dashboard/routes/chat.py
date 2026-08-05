@@ -256,6 +256,29 @@ def _bot_readiness_blocker_from_cp(cp: Any, bot_id: str) -> str:
     return f"{safe_bot_id} is {state}: {detail}" if detail else f"{safe_bot_id} is {state}"
 
 
+def _conversation_default_bot_id_from_cp(cp: Any, conversation_id: str) -> str:
+    safe_conversation_id = str(conversation_id or "").strip()
+    if not safe_conversation_id or not hasattr(cp, "list_conversations"):
+        return ""
+    try:
+        conversations = cp.list_conversations(archived="all")
+    except TypeError:
+        try:
+            conversations = cp.list_conversations()
+        except Exception:
+            return ""
+    except Exception:
+        return ""
+    if not isinstance(conversations, list):
+        return ""
+    for row in conversations:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("id") or "").strip() == safe_conversation_id:
+            return str(row.get("default_bot_id") or "").strip()
+    return ""
+
+
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
@@ -1052,7 +1075,8 @@ def api_send_message():
         return jsonify({"error": "conversation_id and either content or attachments are required"}), 400
     cp = get_cp_client()
     bot_id = str(data.get("bot_id") or "").strip()
-    readiness_blocker = _bot_readiness_blocker_from_cp(cp, bot_id)
+    readiness_bot_id = bot_id or _conversation_default_bot_id_from_cp(cp, conversation_id)
+    readiness_blocker = _bot_readiness_blocker_from_cp(cp, readiness_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), 409
 
@@ -1262,7 +1286,8 @@ def api_send_message_stream():
 
     cp = get_cp_client()
     bot_id = str(data.get("bot_id") or "").strip()
-    readiness_blocker = _bot_readiness_blocker_from_cp(cp, bot_id)
+    readiness_bot_id = bot_id or _conversation_default_bot_id_from_cp(cp, conversation_id)
+    readiness_blocker = _bot_readiness_blocker_from_cp(cp, readiness_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), 409
     cp_base = (

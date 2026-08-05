@@ -2299,6 +2299,39 @@ def test_chat_message_api_blocks_unavailable_explicit_bot(dashboard_client):
     assert b"chat model credential missing" in resp.data
 
 
+def test_chat_message_api_blocks_unavailable_conversation_default_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "default_bot_id": "blocked-default"}]
+
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {
+                        "bot_id": "blocked-default",
+                        "state": "blocked",
+                        "ready": False,
+                        "checks": [{"status": "failed", "message": "default bot disabled after chat creation"}],
+                    }
+                ]
+            }
+
+        def post_message(self, conversation_id, body):
+            raise AssertionError("blocked default chat bot should not reach control plane post")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Selected bot is unavailable" in resp.data
+    assert b"default bot disabled after chat creation" in resp.data
+
+
 def test_chat_assignment_create_api_blocks_unavailable_pm_bot(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -2413,6 +2446,42 @@ def test_chat_stream_api_blocks_unavailable_explicit_bot(dashboard_client):
     assert resp.status_code == 409
     assert b"Selected bot is unavailable" in resp.data
     assert b"stream model disabled" in resp.data
+
+
+def test_chat_stream_api_blocks_unavailable_conversation_default_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "default_bot_id": "blocked-default"}]
+
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {
+                        "bot_id": "blocked-default",
+                        "state": "blocked",
+                        "ready": False,
+                        "checks": [{"status": "failed", "message": "default stream bot blocked"}],
+                    }
+                ]
+            }
+
+    def _fake_post(*args, **kwargs):
+        raise AssertionError("blocked default stream bot should not open an upstream request")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={"conversation_id": "c1", "content": "hello"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Selected bot is unavailable" in resp.data
+    assert b"default stream bot blocked" in resp.data
 
 
 def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):
