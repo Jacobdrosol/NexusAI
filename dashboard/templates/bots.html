@@ -768,9 +768,26 @@ function submitBotImport(bundle, overwrite, fileName) {
       if (!confirmOverwrite) return null;
       return submitBotImport(bundle, true, fileName);
     }
-    if (!r.ok) throw new Error(data.error || 'Import failed');
+    if (!r.ok) throw new Error(botImportErrorMessage(data));
     return data;
   });
+}
+
+function botImportErrorMessage(data) {
+  const base = String(data?.error || 'Import failed');
+  const readiness = data?.readiness && typeof data.readiness === 'object' ? data.readiness : null;
+  const checks = Array.isArray(readiness?.checks) ? readiness.checks : [];
+  const failed = checks
+    .filter((check) => {
+      const status = String(check?.status || '').trim().toLowerCase();
+      return status === 'failed' || status === 'blocking';
+    })
+    .map((check) => String(check?.message || check?.component || '').trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  if (!failed.length) return base;
+  const suffix = failed.map((message) => '\n- ' + message).join('');
+  return base + '\nReadiness blockers:' + suffix;
 }
 
 function setBotTableFilter(mode) {

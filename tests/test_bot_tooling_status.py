@@ -290,6 +290,9 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
 
     assert page.status_code == 200
     assert b"Bot Tooling Readiness" in page.data
+    assert b"function botImportErrorMessage" in page.data
+    assert b"Readiness blockers:" in page.data
+    assert b"throw new Error(botImportErrorMessage(data))" in page.data
     assert b"Authenticated browser session" in page.data
     assert b"site account can exist" in page.data
     assert b"browser-ui" in page.data
