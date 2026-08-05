@@ -1689,8 +1689,17 @@ function startMessageStream() {
     stopMessageStream();
     refreshSessionHeader().catch(() => {});
   });
-  source.addEventListener('error', () => {
+  source.addEventListener('error', (event) => {
     stopMessageStream();
+    const rawError = String(event?.data || '').trim();
+    if (rawError) {
+      try {
+        const parsed = JSON.parse(rawError);
+        setStatus('operator-chat-status', parsed.error || rawError, true);
+      } catch (error) {
+        setStatus('operator-chat-status', rawError, true);
+      }
+    }
     setTimeout(() => { refreshSessionHeader().catch(() => {}); }, 1200);
   });
 }

@@ -5874,6 +5874,48 @@ def test_work_page_surfaces_provider_model_usage(dashboard_client):
     assert b"continue monitoring" in resp.data
 
 
+def test_platform_ai_session_stream_error_payload_is_displayed(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_platform_ai_session(self, session_id):
+            return {
+                "id": session_id,
+                "mode": "bot_creator",
+                "status": "running",
+                "archived": False,
+                "metadata": {},
+                "created_at": "2026-03-12T00:00:00+00:00",
+                "updated_at": "2026-03-12T00:00:00+00:00",
+            }
+
+        def list_platform_ai_messages(self, session_id, limit=400):
+            return {"messages": []}
+
+        def list_platform_ai_events(self, session_id, limit=600):
+            return {"events": []}
+
+        def list_platform_ai_proposals(self, session_id, limit=100):
+            return {"proposals": []}
+
+        def list_projects(self):
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_workers(self):
+            return []
+
+    with patch("dashboard.routes.platform_ai.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/platform-ai/sessions/session-1")
+
+    assert resp.status_code == 200
+    assert b"source.addEventListener('error', (event)" in resp.data
+    assert b"parsed.error || rawError" in resp.data
+    assert b"operator-chat-status" in resp.data
+
+
 def test_vault_upload_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/vault/upload", data={"source_mode": "paste"})
