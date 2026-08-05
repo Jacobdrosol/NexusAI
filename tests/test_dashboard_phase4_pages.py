@@ -2175,9 +2175,11 @@ def test_chat_messages_api_surfaces_control_plane_error(dashboard_client):
 
 def test_chat_apply_assignment_api_proxies_control_plane(dashboard_client):
     _login_admin(dashboard_client)
+    seen: dict[str, object] = {}
 
     class FakeCP:
         def apply_project_assignment_to_repo_workspace(self, project_id, orchestration_id, overwrite=True):
+            seen["overwrite"] = overwrite
             return {
                 "status": "ok",
                 "project_id": project_id,
@@ -2189,17 +2191,19 @@ def test_chat_apply_assignment_api_proxies_control_plane(dashboard_client):
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.post(
             "/api/chat/assignments/apply",
-            json={"project_id": "proj-1", "orchestration_id": "orch-1", "overwrite": True},
+            json={"project_id": "proj-1", "orchestration_id": "orch-1", "overwrite": "false"},
         )
 
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["status"] == "ok"
     assert body["applied_files"][0]["path"] == "src/demo.ts"
+    assert seen["overwrite"] is False
 
 
 def test_chat_review_assignment_api_proxies_control_plane(dashboard_client):
     _login_admin(dashboard_client)
+    seen: dict[str, object] = {}
 
     class FakeCP:
         def review_project_assignment_files(
@@ -2210,6 +2214,9 @@ def test_chat_review_assignment_api_proxies_control_plane(dashboard_client):
             max_content_chars=20000,
             diff_context_lines=3,
         ):
+            seen["include_content"] = include_content
+            seen["max_content_chars"] = max_content_chars
+            seen["diff_context_lines"] = diff_context_lines
             return {
                 "status": "ok",
                 "project_id": project_id,
@@ -2232,13 +2239,37 @@ def test_chat_review_assignment_api_proxies_control_plane(dashboard_client):
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.post(
             "/api/chat/assignments/review",
-            json={"project_id": "proj-1", "orchestration_id": "orch-1", "include_content": True},
+            json={
+                "project_id": "proj-1",
+                "orchestration_id": "orch-1",
+                "include_content": "false",
+                "max_content_chars": "500",
+                "diff_context_lines": "99",
+            },
         )
 
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["status"] == "ok"
     assert body["review_files"][0]["path"] == "docs/demo.md"
+    assert seen == {"include_content": False, "max_content_chars": 1000, "diff_context_lines": 20}
+
+
+def test_chat_review_assignment_api_rejects_invalid_numeric_options(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def review_project_assignment_files(self, **kwargs):
+            raise AssertionError("invalid review options should not reach control plane")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/assignments/review",
+            json={"project_id": "proj-1", "orchestration_id": "orch-1", "max_content_chars": "many"},
+        )
+
+    assert resp.status_code == 400
+    assert b"must be integers" in resp.data
 
 
 def test_chat_orchestration_recap_api_builds_full_recap(dashboard_client):

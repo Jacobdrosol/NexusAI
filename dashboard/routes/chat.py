@@ -771,6 +771,13 @@ def _request_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _request_int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
+    if value in (None, ""):
+        return default
+    parsed = int(value)
+    return max(minimum, min(maximum, parsed))
+
+
 def _project_memory_profiles_enabled(projects: list[Any], project_id: str) -> bool:
     normalized_project_id = str(project_id or "").strip()
     if not normalized_project_id:
@@ -1351,7 +1358,7 @@ def api_apply_assignment_files():
     result = cp.apply_project_assignment_to_repo_workspace(
         project_id=project_id,
         orchestration_id=orchestration_id,
-        overwrite=bool(data.get("overwrite", True)),
+        overwrite=_request_bool(data.get("overwrite", True)),
     )
     if result is None:
         return _cp_error_response(cp, "assignment apply failed")
@@ -1370,12 +1377,17 @@ def api_review_assignment_files():
         return jsonify({"error": "project_id is required"}), 400
 
     cp = get_cp_client()
+    try:
+        max_content_chars = _request_int(data.get("max_content_chars"), 20000, minimum=1000, maximum=200000)
+        diff_context_lines = _request_int(data.get("diff_context_lines"), 3, minimum=0, maximum=20)
+    except (TypeError, ValueError):
+        return jsonify({"error": "max_content_chars and diff_context_lines must be integers"}), 400
     result = cp.review_project_assignment_files(
         project_id=project_id,
         orchestration_id=orchestration_id,
-        include_content=bool(data.get("include_content", True)),
-        max_content_chars=int(data.get("max_content_chars", 20000) or 20000),
-        diff_context_lines=int(data.get("diff_context_lines", 3) or 3),
+        include_content=_request_bool(data.get("include_content", True)),
+        max_content_chars=max_content_chars,
+        diff_context_lines=diff_context_lines,
     )
     if result is None:
         return _cp_error_response(cp, "assignment review failed")
