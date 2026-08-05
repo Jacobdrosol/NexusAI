@@ -122,6 +122,40 @@ async def test_assignment_preview_create_and_lineage(cp_client):
 
 
 @pytest.mark.anyio
+async def test_assignment_context_items_are_bounded(cp_client):
+    oversized_context = "x" * 12001
+    too_many_context_items = [f"context {idx}" for idx in range(51)]
+
+    preview_item_resp = await cp_client.post(
+        "/v1/assignments/preview",
+        json={
+            "conversation_id": "conversation-1",
+            "instruction": "Preview with oversized context.",
+            "pm_bot_id": "pm-bot",
+            "context_items": [oversized_context],
+        },
+    )
+    assert preview_item_resp.status_code == 422
+
+    create_count_resp = await cp_client.post(
+        "/v1/assignments",
+        json={
+            "conversation_id": "conversation-1",
+            "instruction": "Create with too much context.",
+            "pm_bot_id": "pm-bot",
+            "context_items": too_many_context_items,
+        },
+    )
+    assert create_count_resp.status_code == 422
+
+    splice_item_resp = await cp_client.post(
+        "/v1/assignments/assignment-1/splice",
+        json={"from_node_id": "node-1", "context_items": [oversized_context]},
+    )
+    assert splice_item_resp.status_code == 422
+
+
+@pytest.mark.anyio
 async def test_assignment_splice_posts_messages_to_origin_chat(cp_client):
     create_conversation = await cp_client.post("/v1/chat/conversations", json={"title": "Assignment Splice"})
     conversation_id = create_conversation.json()["id"]

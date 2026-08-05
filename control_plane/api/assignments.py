@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -13,6 +13,10 @@ from control_plane.api.chat import (
 
 
 router = APIRouter(prefix="/v1/assignments", tags=["assignments"])
+
+_ASSIGNMENT_CONTEXT_ITEM_MAX_CHARS = 12000
+_ASSIGNMENT_CONTEXT_ITEM_MAX_COUNT = 50
+AssignmentContextItem = Annotated[str, Field(max_length=_ASSIGNMENT_CONTEXT_ITEM_MAX_CHARS)]
 
 
 class NodeConnectionBinding(BaseModel):
@@ -33,7 +37,7 @@ class PreviewAssignmentRequest(BaseModel):
     pm_bot_id: str
     instruction: str
     node_overrides: Dict[str, NodeOverride] = Field(default_factory=dict)
-    context_items: List[str] = Field(default_factory=list)
+    context_items: List[AssignmentContextItem] = Field(default_factory=list, max_length=_ASSIGNMENT_CONTEXT_ITEM_MAX_COUNT)
 
 
 class CreateAssignmentRequest(BaseModel):
@@ -42,13 +46,13 @@ class CreateAssignmentRequest(BaseModel):
     instruction: str
     run_id: Optional[str] = None
     node_overrides: Dict[str, NodeOverride] = Field(default_factory=dict)
-    context_items: List[str] = Field(default_factory=list)
+    context_items: List[AssignmentContextItem] = Field(default_factory=list, max_length=_ASSIGNMENT_CONTEXT_ITEM_MAX_COUNT)
 
 
 class SpliceAssignmentRequest(BaseModel):
     from_node_id: str
     node_overrides: Dict[str, NodeOverride] = Field(default_factory=dict)
-    context_items: List[str] = Field(default_factory=list)
+    context_items: List[AssignmentContextItem] = Field(default_factory=list, max_length=_ASSIGNMENT_CONTEXT_ITEM_MAX_COUNT)
 
 
 class RerunNodeRequest(BaseModel):
