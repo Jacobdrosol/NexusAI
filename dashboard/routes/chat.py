@@ -435,6 +435,43 @@ def _attachment_payload_blocker(raw_attachments: Any) -> str:
     return ""
 
 
+def _attachments_include_image(attachments: Any) -> bool:
+    if not isinstance(attachments, list):
+        return False
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        mime_type = str(item.get("mime_type") or "").strip().lower()
+        if kind == "image" or mime_type.startswith("image/"):
+            return True
+    return False
+
+
+def _image_attachment_model_blocker_from_cp(
+    cp: Any,
+    conversation_id: str,
+    requested_bot_id: str,
+    attachments: Any,
+) -> str:
+    if not _attachments_include_image(attachments):
+        return ""
+    context = _effective_chat_context_from_cp(
+        cp,
+        conversation_id,
+        requested_bot_id=requested_bot_id,
+        use_workspace_tools=False,
+        inline_coding_enabled=False,
+    )
+    if context is None:
+        return "conversation unavailable"
+    model = context.get("model") if isinstance(context.get("model"), dict) else {}
+    if model.get("image_attachments_supported") is True:
+        return ""
+    blocker = str(model.get("blocker") or "").strip()
+    return "selected chat bot model does not support image attachments" + (f": {blocker}" if blocker else "")
+
+
 def _conversation_from_cp(cp: Any, conversation_id: str) -> dict[str, Any] | None:
     safe_conversation_id = str(conversation_id or "").strip()
     if not safe_conversation_id or not hasattr(cp, "list_conversations"):
@@ -1551,6 +1588,9 @@ def api_send_message():
     readiness_blocker = _bot_readiness_blocker_from_cp(cp, readiness_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), 409
+    image_model_blocker = _image_attachment_model_blocker_from_cp(cp, conversation_id, bot_id, attachments)
+    if image_model_blocker:
+        return jsonify({"error": f"Image attachments are not available: {image_model_blocker}"}), 409
     use_workspace_tools = _request_bool(data.get("use_workspace_tools", False))
     if use_workspace_tools:
         tool_blocker = _workspace_tool_request_blocker_from_cp(cp, conversation_id, bot_id)
@@ -1780,6 +1820,9 @@ def api_send_message_stream():
     readiness_blocker = _bot_readiness_blocker_from_cp(cp, readiness_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), 409
+    image_model_blocker = _image_attachment_model_blocker_from_cp(cp, conversation_id, bot_id, attachments)
+    if image_model_blocker:
+        return jsonify({"error": f"Image attachments are not available: {image_model_blocker}"}), 409
     use_workspace_tools = _request_bool(data.get("use_workspace_tools", False))
     if use_workspace_tools:
         tool_blocker = _workspace_tool_request_blocker_from_cp(cp, conversation_id, bot_id)

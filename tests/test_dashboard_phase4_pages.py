@@ -2583,6 +2583,71 @@ def test_chat_message_api_blocks_attachment_count_limit(dashboard_client):
     assert b"maximum is 15 files per message" in resp.data
 
 
+def test_chat_message_api_blocks_image_attachment_for_text_only_effective_model(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "project_id": None, "default_bot_id": "text-bot"}]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [{"id": "text-bot", "backends": [{"provider": "openai", "model": "gpt-3.5-turbo"}]}]
+
+        def post_message(self, conversation_id, body):
+            raise AssertionError("unsupported image attachment should not reach control plane message send")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={
+                "conversation_id": "c1",
+                "content": "read this screenshot",
+                "attachments": [{"name": "screen.png", "kind": "image", "mime_type": "image/png", "size_bytes": 42}],
+            },
+        )
+
+    assert resp.status_code == 409
+    assert b"Image attachments are not available" in resp.data
+    assert b"selected chat bot model does not support image attachments" in resp.data
+
+
+def test_chat_stream_api_blocks_image_attachment_for_text_only_effective_model(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "project_id": None, "default_bot_id": "text-bot"}]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [{"id": "text-bot", "backends": [{"provider": "openai", "model": "gpt-3.5-turbo"}]}]
+
+    def _fake_post(*args, **kwargs):
+        raise AssertionError("unsupported image attachment should not open an upstream stream request")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={
+                "conversation_id": "c1",
+                "content": "read this screenshot",
+                "attachments": [{"name": "screen.png", "kind": "image", "mime_type": "image/png", "size_bytes": 42}],
+            },
+        )
+
+    assert resp.status_code == 409
+    assert b"Image attachments are not available" in resp.data
+    assert b"selected chat bot model does not support image attachments" in resp.data
+
+
 def test_chat_stream_api_blocks_attachment_total_size_limit(dashboard_client):
     _login_admin(dashboard_client)
 
