@@ -828,6 +828,59 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert b"Model ollama-cloud/kimi-k2" in resp.data
 
 
+def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return []
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "personal-vision-math-tutor",
+                    "name": "Vision Math Tutor",
+                    "role": "assistant",
+                    "enabled": True,
+                    "memory_profiles_enabled": True,
+                    "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "gpt-oss:120b"}],
+                    "routing_rules": {
+                        "operator_profile": {"autonomy": "chat"},
+                        "chat_profile": {"label": "Tutor / Reasoning", "use_label": "Homework and engineering help", "tool_label": "off"},
+                        "chat_tool_access": {"enabled": False, "filesystem": False, "repo_search": False},
+                    },
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return {"bots": [{"bot_id": "personal-vision-math-tutor", "state": "ready", "detail": ""}]}
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return [{"id": "ollama-cloud-gpt-oss-120b", "name": "gpt-oss:120b", "provider": "ollama_cloud", "capabilities": ["text"], "enabled": True}]
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat")
+
+    assert resp.status_code == 200
+    assert b'id="create-convo-default-bot-id"' in resp.data
+    assert b'id="create-convo-default-model-id"' in resp.data
+    assert b'id="create-convo-bot-summary"' in resp.data
+    assert b"Vision Math Tutor (personal-vision-math-tutor)" in resp.data
+    assert b"function botCapabilitySummaryText" in resp.data
+    assert b"updateCreateConversationBotSummary" in resp.data
+    assert b"Homework and engineering help" in resp.data
+    assert b"Select a default bot or leave blank to use the platform default." in resp.data
+
+
 def test_chat_page_project_filter_limits_conversation_list(dashboard_client):
     _login_admin(dashboard_client)
 

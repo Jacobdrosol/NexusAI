@@ -764,17 +764,18 @@
       </div>
       <div class="form-group">
         <label>Default Bot</label>
-        <select class="form-control" name="default_bot_id">
+        <select class="form-control" name="default_bot_id" id="create-convo-default-bot-id">
           <option value="">None</option>
           {% for b in chat_bots %}
           {% set blocked_default_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
           <option value="{{ b.id }}" {% if blocked_default_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>{{ b.name }} ({{ b.id }}){% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% if b.readiness.detail %}: {{ b.readiness.detail }}{% endif %}{% endif %}</option>
           {% endfor %}
         </select>
+        <p class="mini-note" id="create-convo-bot-summary">Select a default bot or leave blank to use the platform default.</p>
       </div>
       <div class="form-group">
         <label>Default Model</label>
-        <select class="form-control" name="default_model_id">
+        <select class="form-control" name="default_model_id" id="create-convo-default-model-id">
           <option value="">Bot default</option>
           {% for model in model_catalog %}
           {% set model_value = model.id or model.name %}
@@ -1703,6 +1704,44 @@ function updateChatBotCapabilitySummary() {
     ? `readiness ${readinessState} (${readinessDetail})`
     : `readiness ${readinessState}`;
   summary.textContent = `${bot.name || bot.id}: ${profileLabel}; ${routeLabel} ${modelLabel}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}.`;
+}
+
+function botCapabilitySummaryText(bot, modelId = '') {
+  if (!bot) return 'Select a default bot or leave blank to use the platform default.';
+  const rules = bot.routing_rules && typeof bot.routing_rules === 'object' ? bot.routing_rules : {};
+  const profile = bot.chat_profile && typeof bot.chat_profile === 'object'
+    ? bot.chat_profile
+    : (rules.chat_profile && typeof rules.chat_profile === 'object' ? rules.chat_profile : {});
+  const tools = chatBotToolAccess(bot);
+  const toolParts = [];
+  if (tools.filesystem) toolParts.push('filesystem');
+  if (tools.repo_search) toolParts.push('repo search');
+  const toolLabel = profile.tool_label || (tools.enabled ? (toolParts.length ? toolParts.join(', ') : 'enabled') : 'off');
+  const memoryLabel = bot.memory_profiles_enabled === true ? 'memory on' : 'memory off';
+  const selectedModel = modelCatalogEntryById(modelId);
+  const backend = Array.isArray(bot.backends) && bot.backends.length ? bot.backends[0] : null;
+  const provider = selectedModel?.provider || backend?.provider || '';
+  const model = selectedModel ? (selectedModel.name || selectedModel.id) : (backend?.model || 'bot default model');
+  const modelSource = selectedModel ? 'selected model' : 'bot backend';
+  const imageLabel = modelSupportsImages(provider, model, selectedModel ? modelCatalogCapabilities(selectedModel) : []) ? 'images supported' : 'text only';
+  const profileLabel = String(profile.label || profile.mode || bot.role || 'chat').trim();
+  const useLabel = String(profile.use_label || '').trim();
+  const readiness = bot.readiness && typeof bot.readiness === 'object' ? bot.readiness : {};
+  const readinessState = String(readiness.state || 'unknown').trim() || 'unknown';
+  const readinessDetail = String(readiness.detail || '').trim();
+  const readinessLabel = readinessDetail
+    ? `readiness ${readinessState} (${readinessDetail})`
+    : `readiness ${readinessState}`;
+  const usePrefix = useLabel ? `${useLabel}; ` : '';
+  return `${bot.name || bot.id}: ${usePrefix}${profileLabel}; ${modelSource} ${[provider, model].filter(Boolean).join(' / ') || 'model unknown'}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}.`;
+}
+
+function updateCreateConversationBotSummary() {
+  const summary = document.getElementById('create-convo-bot-summary');
+  if (!summary) return;
+  const botId = String(document.getElementById('create-convo-default-bot-id')?.value || '').trim();
+  const modelId = String(document.getElementById('create-convo-default-model-id')?.value || '').trim();
+  summary.textContent = botCapabilitySummaryText(chatBotById(botId), modelId);
 }
 
 function _chatGateCheckboxValue(id, fallback) {
@@ -3922,6 +3961,8 @@ document.getElementById('chat-project-filter')?.addEventListener('change', funct
 document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
 document.getElementById('create-convo-project-id')?.addEventListener('change', syncConversationScopeFields);
 document.getElementById('create-convo-bridged-primary')?.addEventListener('change', syncConversationScopeFields);
+document.getElementById('create-convo-default-bot-id')?.addEventListener('change', updateCreateConversationBotSummary);
+document.getElementById('create-convo-default-model-id')?.addEventListener('change', updateCreateConversationBotSummary);
 document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
 document.getElementById('chat-tool-enabled')?.addEventListener('change', () => {
   syncConversationToolAccessEditor();
@@ -3966,6 +4007,7 @@ document.getElementById('chat-bot-selector')?.addEventListener('change', () => {
 });
 syncConversationScopeFields();
 syncCreateConversationToolFields();
+updateCreateConversationBotSummary();
 syncConversationToolAccessEditor();
 syncSendBotSelection();
 updateChatBotCapabilitySummary();
