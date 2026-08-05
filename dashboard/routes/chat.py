@@ -1261,6 +1261,10 @@ def api_send_message_stream():
         return jsonify({"error": "conversation_id and either content or attachments are required"}), 400
 
     cp = get_cp_client()
+    bot_id = str(data.get("bot_id") or "").strip()
+    readiness_blocker = _bot_readiness_blocker_from_cp(cp, bot_id)
+    if readiness_blocker:
+        return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), 409
     cp_base = (
         cp.base_url
         if hasattr(cp, "base_url")
@@ -1269,7 +1273,7 @@ def api_send_message_stream():
     stream_url = f"{cp_base.rstrip('/')}/v1/chat/conversations/{conversation_id}/stream"
     payload = {
         "content": content,
-        "bot_id": data.get("bot_id"),
+        "bot_id": bot_id or data.get("bot_id"),
         "user_id": _current_memory_user_id(),
         "attachments": data.get("attachments") or [],
         "context_items": data.get("context_items"),

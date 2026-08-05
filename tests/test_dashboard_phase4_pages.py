@@ -2382,6 +2382,39 @@ def test_chat_conversation_tool_access_api_surfaces_control_plane_error(dashboar
     assert b"tool access update blocked" in resp.data
 
 
+def test_chat_stream_api_blocks_unavailable_explicit_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {
+                        "bot_id": "blocked-chat",
+                        "state": "disabled",
+                        "ready": False,
+                        "checks": [{"status": "failed", "message": "stream model disabled"}],
+                    }
+                ]
+            }
+
+    def _fake_post(*args, **kwargs):
+        raise AssertionError("blocked stream bot should not open an upstream request")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={"conversation_id": "c1", "content": "hello", "bot_id": "blocked-chat"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Selected bot is unavailable" in resp.data
+    assert b"stream model disabled" in resp.data
+
+
 def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):
     _login_admin(dashboard_client)
 
