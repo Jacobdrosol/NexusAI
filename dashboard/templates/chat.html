@@ -1733,7 +1733,9 @@ function botCapabilitySummaryText(bot, modelId = '') {
     ? `readiness ${readinessState} (${readinessDetail})`
     : `readiness ${readinessState}`;
   const usePrefix = useLabel ? `${useLabel}; ` : '';
-  return `${bot.name || bot.id}: ${usePrefix}${profileLabel}; ${modelSource} ${[provider, model].filter(Boolean).join(' / ') || 'model unknown'}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}.`;
+  const routeBlocker = routeDefaultCompatibilityBlocker(bot.id || '', modelId);
+  const routeWarning = routeBlocker ? `; route warning ${routeBlocker}` : '';
+  return `${bot.name || bot.id}: ${usePrefix}${profileLabel}; ${modelSource} ${[provider, model].filter(Boolean).join(' / ') || 'model unknown'}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}${routeWarning}.`;
 }
 
 function updateCreateConversationBotSummary() {

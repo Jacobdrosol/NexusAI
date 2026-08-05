@@ -862,7 +862,10 @@ def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_cli
             return []
 
         def list_models(self):
-            return [{"id": "ollama-cloud-gpt-oss-120b", "name": "gpt-oss:120b", "provider": "ollama_cloud", "capabilities": ["text"], "enabled": True}]
+            return [
+                {"id": "ollama-cloud-gpt-oss-120b", "name": "gpt-oss:120b", "provider": "ollama_cloud", "capabilities": ["text"], "enabled": True},
+                {"id": "openai-gpt-5", "name": "gpt-5", "provider": "openai", "capabilities": ["text"], "enabled": True},
+            ]
 
         def list_vault_items(self, **kwargs):
             return []
@@ -878,6 +881,8 @@ def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_cli
     assert b"function botCapabilitySummaryText" in resp.data
     assert b"updateCreateConversationBotSummary" in resp.data
     assert b"Homework and engineering help" in resp.data
+    assert b"route warning" in resp.data
+    assert b"Default model provider" in resp.data
     assert b"Select a default bot or leave blank to use the platform default." in resp.data
 
 
