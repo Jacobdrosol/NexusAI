@@ -734,8 +734,23 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
                     "title": "Project Chat",
                     "project_id": "globeiq",
                     "bridge_project_ids": ["bridge-a", "bridge-b"],
+                    "default_bot_id": "personal-general-chat",
+                    "default_model_id": "ollama-cloud/gpt-oss-120b",
                     "updated_at": "2026-03-12T00:00:00+00:00",
                     "archived_at": None,
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                },
+                {
+                    "id": "c-archived",
+                    "title": "Archived Project Chat",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": [],
+                    "default_bot_id": "personal-research-chat",
+                    "default_model_id": "ollama-cloud/kimi-k2",
+                    "updated_at": "2026-03-11T00:00:00+00:00",
+                    "archived_at": "2026-03-11T01:00:00+00:00",
                     "tool_access_enabled": False,
                     "tool_access_filesystem": False,
                     "tool_access_repo_search": False,
@@ -764,6 +779,10 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert b"row.hidden = !matches" in resp.data
     assert b"All projects" in resp.data
     assert b"Project globeiq" in resp.data
+    assert b"Bot personal-general-chat" in resp.data
+    assert b"Model ollama-cloud/gpt-oss-120b" in resp.data
+    assert b"Bot personal-research-chat" in resp.data
+    assert b"Model ollama-cloud/kimi-k2" in resp.data
 
 
 def test_chat_page_project_filter_limits_conversation_list(dashboard_client):

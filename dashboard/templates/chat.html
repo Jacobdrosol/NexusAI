@@ -171,6 +171,18 @@
   line-height: 1;
   padding: 0.22rem 0.38rem;
 }
+.chat-conversation-route-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+.chat-conversation-route-row .badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chat-attachment-trigger-label {
   position: absolute;
   width: 1px;
@@ -277,6 +289,12 @@
             <span class="badge badge-disabled chat-scope-badge">Unscoped</span>
             {% endif %}
           </div>
+          {% if c.default_bot_id or c.default_model_id %}
+          <div class="chat-conversation-route-row">
+            {% if c.default_bot_id %}<span class="badge badge-info">Bot {{ c.default_bot_id }}</span>{% endif %}
+            {% if c.default_model_id %}<span class="badge badge-info">Model {{ c.default_model_id }}</span>{% endif %}
+          </div>
+          {% endif %}
           <small>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T', ' ') }}</small>
         </a>
         <button
@@ -314,6 +332,12 @@
               <span class="badge badge-disabled chat-scope-badge">Unscoped</span>
               {% endif %}
             </div>
+            {% if c.default_bot_id or c.default_model_id %}
+            <div class="chat-conversation-route-row">
+              {% if c.default_bot_id %}<span class="badge badge-info">Bot {{ c.default_bot_id }}</span>{% endif %}
+              {% if c.default_model_id %}<span class="badge badge-info">Model {{ c.default_model_id }}</span>{% endif %}
+            </div>
+            {% endif %}
             <small>Archived {{ (c.archived_at[:19] if c.archived_at else '') | replace('T', ' ') }}</small>
           </a>
           <div class="chat-row-actions">
