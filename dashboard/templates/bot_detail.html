@@ -47,6 +47,37 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Operating Summary</h2>
+    {% set operating_badge = 'running' if operating_summary.dispatch_state == 'scheduled' else ('warning' if operating_summary.dispatch_state == 'manual' else operating_summary.dispatch_state) %}
+    <span class="badge badge-{{ operating_badge }}">{{ operating_summary.dispatch_state }}</span>
+  </div>
+  <div class="split-grid" style="grid-template-columns:repeat(auto-fit, minmax(12rem, 1fr)); gap:0.75rem;">
+    <div>
+      <div class="mini-note">Readiness</div>
+      <strong>{{ operating_summary.readiness_state }}</strong>
+    </div>
+    <div>
+      <div class="mini-note">Schedules</div>
+      <strong>{{ operating_summary.active_schedule_count }} active / {{ operating_summary.paused_schedule_count }} paused</strong>
+    </div>
+    <div>
+      <div class="mini-note">Chat Mode</div>
+      <strong>{{ operating_summary.chat_profile_label }}</strong>
+    </div>
+    <div>
+      <div class="mini-note">Chat Tools</div>
+      <strong>{{ operating_summary.chat_tool_label }}</strong>
+    </div>
+    <div>
+      <div class="mini-note">Personal Memory</div>
+      <span class="badge badge-{{ 'enabled' if operating_summary.memory_enabled else 'disabled' }}">{{ 'enabled' if operating_summary.memory_enabled else 'off' }}</span>
+    </div>
+  </div>
+  <div class="state-info" style="margin-top:0.75rem;">{{ operating_summary.next_action }}</div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Backend Chain Editor</h2>
     <div>
       <button class="btn" onclick="openBotEdit()">Edit Bot Info</button>

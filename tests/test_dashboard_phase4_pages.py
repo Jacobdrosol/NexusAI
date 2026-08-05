@@ -1317,6 +1317,7 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                 "role": "coder",
                 "priority": 1,
                 "enabled": True,
+                "memory_profiles_enabled": True,
                 "backends": [],
                 "routing_rules": {
                     "chat_profile": {
@@ -1343,7 +1344,20 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
             return {"bot_id": bot_id, "ready": True, "summary": {"checks": 0, "blocking": 0, "warnings": 0}, "checks": []}
 
         def get_bot_dependencies(self, bot_id):
-            return {"dependencies": []}
+            return {
+                "schedule_references": [
+                    {
+                        "id": "coding-helper-hourly",
+                        "name": "Coding Helper Hourly",
+                        "relation": "target_bot",
+                        "project_id": "nexusai",
+                        "status": "active",
+                    }
+                ],
+                "workflow_references": [],
+                "can_disable": False,
+                "can_delete": False,
+            }
 
         def list_tasks(self, **kwargs):
             return []
@@ -1368,8 +1382,15 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
 
     assert resp.status_code == 200
     assert b"Chat Profile" in resp.data
+    assert b"Operating Summary" in resp.data
+    assert b"scheduled" in resp.data
+    assert b"ready" in resp.data
+    assert b"1 active / 0 paused" in resp.data
     assert b"Coding" in resp.data
+    assert b"Personal Memory" in resp.data
+    assert b"enabled" in resp.data
     assert b"repo_search" in resp.data
+    assert b"repo search" in resp.data
     assert b"filesystem" in resp.data
     assert b'id="bot-chat-profile-mode"' in resp.data
     assert b'id="bot-chat-profile-description"' in resp.data

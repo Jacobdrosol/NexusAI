@@ -281,6 +281,64 @@ def _bot_dependency_view(payload: Any) -> dict[str, Any] | None:
     }
 
 
+def _bot_detail_operating_summary(
+    bot: dict[str, Any],
+    readiness: Any,
+    dependencies: dict[str, Any] | None,
+) -> dict[str, Any]:
+    schedules = (dependencies or {}).get("schedule_references") or []
+    active_schedules = [
+        schedule
+        for schedule in schedules
+        if isinstance(schedule, dict) and str(schedule.get("status") or "").strip().lower() == "active"
+    ]
+    paused_schedules = [
+        schedule
+        for schedule in schedules
+        if isinstance(schedule, dict) and str(schedule.get("status") or "").strip().lower() == "paused"
+    ]
+    chat_profile = bot.get("chat_profile") if isinstance(bot.get("chat_profile"), dict) else _bot_chat_profile(bot)
+    chat_tools = _bot_chat_tool_access(bot)
+    tool_modes = [
+        label
+        for key, label in (("filesystem", "filesystem"), ("repo_search", "repo search"))
+        if bool(chat_tools.get(key, False))
+    ]
+    readiness_view = _bot_readiness_view(readiness)
+    readiness_state = readiness_view["state"] if readiness_view else "unknown"
+
+    if not bool(bot.get("enabled", True)):
+        dispatch_state = "disabled"
+        next_action = "Enable the bot before assigning work."
+    elif readiness_state == "blocked":
+        dispatch_state = "blocked"
+        next_action = str((readiness_view or {}).get("detail") or "Resolve readiness blockers before dispatch.")
+    elif active_schedules:
+        dispatch_state = "scheduled"
+        next_action = f"{len(active_schedules)} active recurring schedule(s)."
+    elif paused_schedules:
+        dispatch_state = "paused"
+        next_action = f"{len(paused_schedules)} paused schedule(s); resume only after confirming scope."
+    else:
+        dispatch_state = "manual"
+        next_action = "No active recurring schedule; dispatch manually or add a scoped schedule."
+
+    return {
+        "dispatch_state": dispatch_state,
+        "next_action": next_action,
+        "active_schedule_count": len(active_schedules),
+        "paused_schedule_count": len(paused_schedules),
+        "readiness_state": readiness_state,
+        "chat_profile_label": chat_profile.get("label") or chat_profile.get("mode") or "Chat",
+        "chat_tool_label": (
+            ", ".join(tool_modes)
+            if bool(chat_tools.get("enabled", False)) and tool_modes
+            else ("enabled" if bool(chat_tools.get("enabled", False)) else "off")
+        ),
+        "memory_enabled": bool(bot.get("memory_profiles_enabled", False)),
+    }
+
+
 def _bot_schedule_mode(schedule_payload: Any) -> dict[str, dict[str, Any]]:
     schedules = schedule_payload.get("schedules") if isinstance(schedule_payload, dict) else []
     schedule_refs: dict[str, list[dict[str, Any]]] = {}
@@ -433,9 +491,10 @@ def bot_detail_page(bot_id: str):
 
     if cp_bot is not None:
         tasks = [t for t in (cp_tasks or []) if str(t.get("bot_id")) == str(bot_id)]
+        bot_payload = _with_bot_chat_profiles([cp_bot])[0]
         return render_template(
             "bot_detail.html",
-            bot=_with_bot_chat_profiles([cp_bot])[0],
+            bot=bot_payload,
             tasks=tasks,
             runs=cp_runs,
             artifacts=cp_artifacts,
@@ -444,6 +503,7 @@ def bot_detail_page(bot_id: str):
             api_keys=cp_keys,
             readiness=cp_readiness,
             bot_dependencies=cp_dependencies,
+            operating_summary=_bot_detail_operating_summary(bot_payload, cp_readiness, cp_dependencies),
             error=None,
         )
 
@@ -470,9 +530,10 @@ def bot_detail_page(bot_id: str):
                     "updated_at": t.updated_at.isoformat() if t.updated_at else "",
                 }
             )
+        bot_payload = _bot_to_dict(bot)
         return render_template(
             "bot_detail.html",
-            bot=_bot_to_dict(bot),
+            bot=bot_payload,
             tasks=tasks,
             runs=[],
             artifacts=[],
@@ -481,6 +542,7 @@ def bot_detail_page(bot_id: str):
             api_keys=[],
             readiness=None,
             bot_dependencies=None,
+            operating_summary=_bot_detail_operating_summary(bot_payload, None, None),
             error=None,
         )
     finally:
