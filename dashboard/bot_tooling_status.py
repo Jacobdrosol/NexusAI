@@ -185,6 +185,87 @@ def _blocking_category_view(category: str) -> dict[str, str]:
     return {"label": labels[normalized], "detail": details[normalized]}
 
 
+def _blocking_category_recommended_action(category: str) -> dict[str, str]:
+    actions = {
+        "browser_session": {
+            "label": "restore browser session",
+            "level": "critical",
+            "detail": "Open the worker browser profile, confirm the site login, then rerun the worker probe.",
+        },
+        "cli_auth": {
+            "label": "refresh CLI login",
+            "level": "critical",
+            "detail": "Authenticate the configured CLI on the worker host, then rerun readiness.",
+        },
+        "credential": {
+            "label": "configure vault key",
+            "level": "critical",
+            "detail": "Create or repair the named vault credential reference without storing raw secret material in bot config.",
+        },
+        "project_policy": {
+            "label": "review project policy",
+            "level": "warning",
+            "detail": "Enable the required project tool policy only if this project should allow that bot capability.",
+        },
+        "bot_policy": {
+            "label": "review bot policy",
+            "level": "warning",
+            "detail": "Update the bot execution policy or use a bot already scoped for the requested tooling.",
+        },
+        "worker_runtime": {
+            "label": "restore worker runtime",
+            "level": "critical",
+            "detail": "Start or repair the assigned worker, verify required tools are installed, then rerun the probe.",
+        },
+        "model": {
+            "label": "fix model route",
+            "level": "critical",
+            "detail": "Choose an enabled model/backend route or repair the provider configuration.",
+        },
+        "readiness": {
+            "label": "inspect readiness",
+            "level": "warning",
+            "detail": "Open the bot readiness checks and resolve the reported blocker before assigning work.",
+        },
+        "unknown": {
+            "label": "inspect bot",
+            "level": "warning",
+            "detail": "Open the bot detail and readiness checks because no specific blocker category was reported.",
+        },
+    }
+    return actions.get(category, actions["unknown"])
+
+
+def _summary_recommended_action(blocker_counts: Counter[str], summary: dict[str, int]) -> dict[str, str]:
+    priority = [
+        "credential",
+        "worker_runtime",
+        "browser_session",
+        "cli_auth",
+        "model",
+        "project_policy",
+        "bot_policy",
+        "readiness",
+        "unknown",
+    ]
+    for category in priority:
+        if int(blocker_counts.get(category, 0)):
+            action = dict(_blocking_category_recommended_action(category))
+            action["detail"] = f"{blocker_counts[category]} bot(s) need this action. {action['detail']}"
+            return action
+    if int(summary.get("degraded_worker_probe_count", 0)):
+        return {
+            "label": "rerun degraded probes",
+            "level": "warning",
+            "detail": f"{summary['degraded_worker_probe_count']} assigned worker probe(s) are degraded.",
+        }
+    return {
+        "label": "continue",
+        "level": "ready",
+        "detail": "No blocking bot tooling readiness issue is currently reported.",
+    }
+
+
 def _probe_status(worker_id: str, probes: dict[str, dict[str, Any]]) -> str:
     probe = probes.get(worker_id) or {}
     status = str(probe.get("probe_status") or "").strip().lower()
@@ -305,8 +386,7 @@ def build_bot_tooling_status(
     )
     degraded_probe_count = sum(1 for worker in worker_statuses if worker.get("probe_status") not in {"ready", "healthy", "unknown"})
 
-    return {
-        "summary": {
+    summary = {
             "total": len(bot_rows),
             "ready": int(state_counts.get("ready", 0)),
             "blocked": int(state_counts.get("blocked", 0)),
@@ -324,6 +404,11 @@ def build_bot_tooling_status(
             "missing_worker_assignment_count": missing_worker_count,
             "offline_worker_assignment_count": offline_worker_count,
             "degraded_worker_probe_count": degraded_probe_count,
+        }
+    return {
+        "summary": {
+            **summary,
+            "recommended_action": _summary_recommended_action(blocker_counts, summary),
         },
         "state_counts": dict(state_counts),
         "required_tools": [
@@ -343,6 +428,7 @@ def build_bot_tooling_status(
                 "category": category,
                 "label": _blocking_category_view(category)["label"],
                 "detail": _blocking_category_view(category)["detail"],
+                "recommended_action": _blocking_category_recommended_action(category),
                 "count": len(group),
                 "bots": group[:8],
             }

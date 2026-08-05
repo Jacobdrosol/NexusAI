@@ -37,6 +37,14 @@
     {% endfor %}
   </div>
   {% endif %}
+  {% set tooling_action = tooling_summary.recommended_action or {} %}
+  <div class="mini-note" style="margin-bottom:0.75rem;">
+    Recommended action:
+    <span class="badge {% if tooling_action.level == 'critical' %}badge-failed{% elif tooling_action.level == 'warning' %}badge-yellow{% elif tooling_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
+      {{ tooling_action.label or "inspect" }}
+    </span>
+    {{ tooling_action.detail or "Open blocked bot rows and review readiness checks." }}
+  </div>
   <div class="cards compact-cards">
     <div class="card">
       <div class="card-label">Ready</div>
@@ -93,6 +101,15 @@
           <small><span class="badge badge-blocked">{{ group.count }} bot(s)</span></small>
           {% if group.detail %}
           <small>{{ group.detail }}</small>
+          {% endif %}
+          {% if group.recommended_action %}
+          <small>
+            Recommended action:
+            <span class="badge {% if group.recommended_action.level == 'critical' %}badge-failed{% elif group.recommended_action.level == 'warning' %}badge-yellow{% elif group.recommended_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
+              {{ group.recommended_action.label }}
+            </span>
+            {{ group.recommended_action.detail }}
+          </small>
           {% endif %}
           {% for bot in group.bots[:4] %}
           <small>

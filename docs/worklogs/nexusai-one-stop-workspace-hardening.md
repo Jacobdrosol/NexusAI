@@ -264,3 +264,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_platform_ai_session_uses_server_upload_limits -q` passed for Batch 119 Platform AI upload-limit visibility.
 - Batch 120: added worker and chat provider/model attribution health to Work usage briefs and the Work page so token spend without provider/model telemetry is explicitly flagged.
 - `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load tests/test_work_overview.py::test_work_overview_usage_fallback_has_stable_shape tests/test_work_overview.py::test_work_overview_flags_missing_provider_model_attribution -q` passed for Batch 120 provider/model attribution health.
+- Batch 121: added recommended operator actions to Bot Tooling Readiness summaries and blocked groups so credential, worker, browser, CLI, model, project-policy, and bot-policy blockers each identify the next repair step.
+- `pytest tests/test_bot_tooling_status.py -q` passed for Batch 121 bot tooling recommended actions.

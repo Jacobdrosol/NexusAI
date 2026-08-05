@@ -155,6 +155,9 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert status["summary"]["missing_worker_assignment_count"] == 1
     assert status["summary"]["offline_worker_assignment_count"] == 3
     assert status["summary"]["degraded_worker_probe_count"] == 1
+    assert status["summary"]["recommended_action"]["label"] == "restore worker runtime"
+    assert status["summary"]["recommended_action"]["level"] == "critical"
+    assert "1 bot(s)" in status["summary"]["recommended_action"]["detail"]
     assert status["required_tools"] == [{"tool": "browser-ui", "bot_count": 1}]
     assert status["connection_actions"] == [{"action": "globeiq-agent-api.updateLesson", "bot_count": 1}]
     assert status["browser_actions"] == [{"action": "question_bank.patch_existing", "bot_count": 1}]
@@ -172,11 +175,14 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     groups = {group["category"]: group for group in status["blocked_groups"]}
     assert groups["browser_session"]["label"] == "Authenticated browser session"
     assert "site account can exist" in groups["browser_session"]["detail"]
+    assert groups["browser_session"]["recommended_action"]["label"] == "restore browser session"
     assert groups["browser_session"]["bots"][0]["workers"][0]["probe_status"] == "degraded"
     assert groups["bot_policy"]["label"] == "Bot tool policy"
     assert "bot configuration" in groups["bot_policy"]["detail"]
+    assert groups["bot_policy"]["recommended_action"]["label"] == "review bot policy"
     assert groups["project_policy"]["label"] == "Project tool policy"
     assert "scoped project" in groups["project_policy"]["detail"]
+    assert groups["project_policy"]["recommended_action"]["label"] == "review project policy"
 
 
 def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
@@ -263,6 +269,9 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Browser Action Bots" in page.data
     assert b"Worker Assignments" in page.data
     assert b"Credential Ref Bots" in page.data
+    assert b"Recommended action:" in page.data
+    assert b"restore browser session" in page.data
+    assert b"Open the worker browser profile" in page.data
     assert b"Missing Workers" in page.data
     assert b"Offline Workers" in page.data
     assert b"Degraded Probes" in page.data
@@ -287,8 +296,10 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert payload["summary"]["backend_credential_ref_count"] == 1
     assert payload["summary"]["worker_assignment_count"] == 1
     assert payload["summary"]["degraded_worker_probe_count"] == 1
+    assert payload["summary"]["recommended_action"]["label"] == "restore browser session"
     assert payload["blocked_groups"][0]["category"] == "browser_session"
     assert payload["blocked_groups"][0]["label"] == "Authenticated browser session"
+    assert payload["blocked_groups"][0]["recommended_action"]["label"] == "restore browser session"
 
 
 def test_bots_tooling_status_surfaces_partial_control_plane_data(dashboard_client):
