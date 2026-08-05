@@ -111,6 +111,14 @@ If a source only supports copied transcripts, import them as `archive` or `unsco
 
 The first importer pass should emit JSONL files with one object per line and no database writes.
 
+Validate the dry-run files before approving any import:
+
+```bash
+python scripts/validate_chat_import_manifest.py <operator-staging-root>/normalized --projects-file <approved-projects.json>
+```
+
+The optional projects file may be a JSON list such as `["globeiq", "nexusai"]` or an object with `project_ids`/`projects`. The validator exits non-zero when import blockers are present.
+
 Conversation record:
 
 ```json

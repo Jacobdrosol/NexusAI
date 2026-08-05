@@ -303,3 +303,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance -q` passed for Batch 139 live timestamp/provenance ordering.
 - Batch 140: expanded the chat-history migration staging guide with operator staging layout, source-specific export handling, dry-run JSONL contracts, and import blockers so external ChatGPT/Codex/Claude/Gemini/OpenWebUI history can be prepared without committing private exports or enabling tools/memory by default.
 - Docs-only validation for Batch 140: reviewed `docs/CHAT_HISTORY_MIGRATION.md` diff; no runtime tests required.
+- Batch 141: added `scripts/validate_chat_import_manifest.py`, a dry-run JSONL validator for staged chat-history imports that blocks unsafe memory/tool defaults, unknown project mappings, secret-like values, malformed timestamps, and unsafe attachment types before any database import path exists.
+- `pytest tests/test_chat_import_manifest_validator.py -q` passed for Batch 141 chat import manifest validation.
