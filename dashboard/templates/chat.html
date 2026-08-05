@@ -604,9 +604,10 @@
         {% elif m.metadata and m.metadata.get('mode') == 'assign_error' %}
         <div class="message-indicator message-indicator-failed">PM assignment failed</div>
         {% endif %}
-        {% if m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending'] and (m.metadata.get('assignment_context_strategy') or m.metadata.get('assignment_memory_hits')) %}
+        {% if m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending'] and (m.metadata.get('assignment_context_strategy') or m.metadata.get('assignment_memory_hits') or m.metadata.get('assignment_explicit_context_item_count')) %}
         {% set context_strategy = m.metadata.get('assignment_context_strategy') %}
         {% set context_hits = m.metadata.get('assignment_memory_hits') or [] %}
+        {% set explicit_context_sources = m.metadata.get('assignment_explicit_context_sources') or [] %}
         <div class="message-context">
           <div class="message-context-summary">
             PM context:
@@ -631,7 +632,13 @@
             {% if m.metadata.get('assignment_memory_hit_count') %}
             · {{ m.metadata.get('assignment_memory_hit_count') }} semantic hit{{ '' if m.metadata.get('assignment_memory_hit_count') == 1 else 's' }}
             {% endif %}
+            {% if m.metadata.get('assignment_explicit_context_item_count') %}
+            · {{ m.metadata.get('assignment_explicit_context_item_count') }} explicit item{{ '' if m.metadata.get('assignment_explicit_context_item_count') == 1 else 's' }}
+            {% endif %}
           </div>
+          {% if explicit_context_sources %}
+          <div class="message-context-hit-meta">Explicit sources: {{ explicit_context_sources|join(', ') }}</div>
+          {% endif %}
           {% if context_hits %}
           <details class="message-context-details">
             <summary class="chat-summary">Assignment memory snippets</summary>
@@ -1512,7 +1519,9 @@ function renderAssignmentContextHtml(meta) {
   const messageCount = Number(meta?.assignment_context_message_count || 0);
   const hits = Array.isArray(meta?.assignment_memory_hits) ? meta.assignment_memory_hits : [];
   const hitCount = Number(meta?.assignment_memory_hit_count || hits.length || 0);
-  if (!strategy && !hits.length) return '';
+  const explicitCount = Number(meta?.assignment_explicit_context_item_count || 0);
+  const explicitSources = Array.isArray(meta?.assignment_explicit_context_sources) ? meta.assignment_explicit_context_sources : [];
+  if (!strategy && !hits.length && explicitCount <= 0) return '';
   let strategyLabel = 'transcript snapshot';
   if (strategy === 'full') strategyLabel = 'full chat transcript';
   else if (strategy === 'semantic_excerpt') strategyLabel = 'semantic excerpt';
@@ -1523,6 +1532,10 @@ function renderAssignmentContextHtml(meta) {
   const parts = ['PM context: ' + esc(strategyLabel)];
   if (messageCount > 0) parts.push(`${messageCount} message${messageCount === 1 ? '' : 's'}`);
   if (hitCount > 0) parts.push(`${hitCount} semantic hit${hitCount === 1 ? '' : 's'}`);
+  if (explicitCount > 0) parts.push(`${explicitCount} explicit item${explicitCount === 1 ? '' : 's'}`);
+  const explicitHtml = explicitSources.length
+    ? `<div class="message-context-hit-meta">Explicit sources: ${explicitSources.map((source) => esc(String(source || '').trim())).filter(Boolean).join(', ')}</div>`
+    : '';
   const hitsHtml = hits.length ? `
     <details class="message-context-details">
       <summary class="chat-summary">Assignment memory snippets</summary>
@@ -1545,6 +1558,7 @@ function renderAssignmentContextHtml(meta) {
   return `
     <div class="message-context">
       <div class="message-context-summary">${parts.join(' · ')}</div>
+      ${explicitHtml}
       ${hitsHtml}
     </div>
   `;

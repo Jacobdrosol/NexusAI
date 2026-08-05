@@ -1740,6 +1740,65 @@ def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client)
     assert b"function formatMessageUsageLabel" in resp.data
 
 
+def test_chat_page_surfaces_assignment_explicit_context_metadata(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-chat",
+                    "title": "Chat",
+                    "scope": "global",
+                    "project_id": None,
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "default_bot_id": "pm-bot",
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return [
+                {
+                    "id": "m-assign",
+                    "role": "user",
+                    "content": "@assign Fix the bug",
+                    "metadata": {
+                        "mode": "assign_request",
+                        "assignment_context_strategy": "semantic_excerpt",
+                        "assignment_context_message_count": 2,
+                        "assignment_explicit_context_item_count": 2,
+                        "assignment_explicit_context_sources": ["vault:vault-1 Architecture Note"],
+                    },
+                }
+            ]
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-chat")
+
+    assert resp.status_code == 200
+    assert b"2 explicit items" in resp.data
+    assert b"Explicit sources: vault:vault-1 Architecture Note" in resp.data
+    assert b"explicitCount" in resp.data
+    assert b"assignment_explicit_context_sources" in resp.data
+
+
 def test_chat_page_resolves_id_only_message_provenance_labels(dashboard_client):
     _login_admin(dashboard_client)
 
