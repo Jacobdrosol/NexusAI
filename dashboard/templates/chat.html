@@ -2818,7 +2818,10 @@ async function sendMessageToVault(btn) {
     }),
   });
   if (res.ok) alert('Message sent to vault.');
-  else alert('Send to vault failed.');
+  else {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Send to vault failed.');
+  }
 }
 
 async function markPmRunFailed(orchestrationId, buttonEl) {
