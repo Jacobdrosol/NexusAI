@@ -775,13 +775,18 @@ def test_bots_api_prefers_control_plane_bots(dashboard_client):
     assert resp.get_json()[0]["memory_profiles_enabled"] is True
 
 
-def test_chat_mobile_layout_prioritizes_active_conversation():
+def test_chat_mobile_layout_uses_a_conversation_drawer():
     css = Path("dashboard/static/style.css").read_text(encoding="utf-8")
     assert ".page-chat .chat-panel-main" in css
-    assert "grid-row: 1;" in css
     assert ".page-chat .chat-panel-side" in css
-    assert "grid-row: 2;" in css
-    assert "min-height: calc(100dvh - 11rem);" in css
+    assert "chat-mobile-conversations-open" in css
+    assert "transform: translateX(-105%);" in css
+    assert "height: 100dvh;" in css
+
+    template = Path("dashboard/templates/chat.html").read_text(encoding="utf-8")
+    assert 'id="chat-mobile-conversations-toggle"' in template
+    assert 'id="chat-conversation-panel"' in template
+    assert "function setMobileConversationDrawerOpen" in template
 
 
 def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client):

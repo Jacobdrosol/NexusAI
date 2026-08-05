@@ -860,6 +860,16 @@ select.form-control {
   font-weight: 600;
 }
 
+.page-chat .chat-page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.chat-mobile-conversations-toggle {
+  display: none;
+}
+
 .page-chat .chat-split-grid {
   flex: 1 1 auto;
   height: 100%;
@@ -1994,14 +2004,20 @@ select.form-control {
 
   .page-chat {
     min-height: 100dvh;
-    height: auto;
-    overflow: auto;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .page-chat .app-shell {
+    height: 100dvh;
+    min-height: 0;
   }
 
   .page-chat .container {
+    flex: 1 1 auto;
     min-height: 0;
     padding: 0;
-    overflow: auto;
+    overflow: hidden;
   }
 
   .page-chat .chat-page-header h1 {
@@ -2009,25 +2025,36 @@ select.form-control {
   }
 
   .page-chat .chat-split-grid {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto;
-    gap: 0;
-    overflow: visible;
+    position: relative;
+    display: block;
+    height: 100%;
+    overflow: hidden;
   }
 
   .page-chat .chat-panel-side {
-    grid-row: 2;
-    max-height: 28vh;
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 5;
+    width: min(88vw, 340px);
+    max-height: none;
+    padding: 0.75rem;
     border-right: 0;
-    border-top: 1px solid #303030;
-    border-bottom: 1px solid #303030;
+    border-top: 0;
+    border-bottom: 0;
+    border-right: 1px solid #303030;
+    box-shadow: 14px 0 32px rgba(0, 0, 0, 0.35);
     overflow-y: auto;
+    transform: translateX(-105%);
+    transition: transform 0.18s ease;
+  }
+
+  .page-chat .chat-split-grid.chat-mobile-conversations-open .chat-panel-side {
+    transform: translateX(0);
   }
 
   .page-chat .chat-panel-main {
-    grid-row: 1;
-    min-height: calc(100dvh - 11rem);
-    height: auto;
+    min-height: 0;
+    height: 100%;
   }
 
   .page-chat .chat-main-header {
@@ -2049,6 +2076,10 @@ select.form-control {
     min-height: 34vh;
     max-height: none;
     padding: 0.75rem 0.65rem 1rem;
+  }
+
+  .chat-mobile-conversations-toggle {
+    display: inline-flex;
   }
 
   .page-chat .chat-composer {

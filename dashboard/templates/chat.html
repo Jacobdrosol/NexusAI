@@ -4,7 +4,16 @@
 {% block content %}
 <div class="page-header chat-page-header">
   <h1>Chat</h1>
-  <button class="btn btn-primary" onclick="showCreateConversation()">+ New Conversation</button>
+  <div class="chat-page-header-actions">
+    <button
+      id="chat-mobile-conversations-toggle"
+      class="btn chat-mobile-conversations-toggle"
+      type="button"
+      aria-controls="chat-conversation-panel"
+      aria-expanded="false"
+    >Chats</button>
+    <button class="btn btn-primary" onclick="showCreateConversation()">+ New Conversation</button>
+  </div>
 </div>
 <div id="chat-usage-pressure-banner" class="chat-composer-status info" hidden></div>
 {% if error %}
@@ -264,7 +273,7 @@
 </style>
 
 <div class="split-grid chat-split-grid">
-  <section class="panel chat-panel-side">
+  <section id="chat-conversation-panel" class="panel chat-panel-side">
     <h2 class="panel-title">Conversations</h2>
     <div class="chat-conversation-toolbar">
       <label for="chat-project-filter" class="mini-note">Filter by project</label>
@@ -1207,6 +1216,15 @@ function clearConversationFilters() {
   if (filterEl) filterEl.value = '';
   if (searchEl) searchEl.value = '';
   applyConversationProjectFilter();
+}
+
+function setMobileConversationDrawerOpen(isOpen) {
+  const grid = document.querySelector('.chat-split-grid');
+  const toggle = document.getElementById('chat-mobile-conversations-toggle');
+  if (!grid || !toggle) return;
+  grid.classList.toggle('chat-mobile-conversations-open', !!isOpen);
+  toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  toggle.textContent = isOpen ? 'Close Chats' : 'Chats';
 }
 
 async function refreshMessagesUntilSettled(maxAttempts = 20, delayMs = 1000) {
@@ -4367,6 +4385,13 @@ document.getElementById('chat-project-filter')?.addEventListener('change', funct
 });
 document.getElementById('chat-conversation-search')?.addEventListener('input', applyConversationProjectFilter);
 document.getElementById('chat-clear-filters')?.addEventListener('click', clearConversationFilters);
+document.getElementById('chat-mobile-conversations-toggle')?.addEventListener('click', function() {
+  const isOpen = this.getAttribute('aria-expanded') === 'true';
+  setMobileConversationDrawerOpen(!isOpen);
+});
+document.querySelectorAll('.chat-conversation-link').forEach((link) => {
+  link.addEventListener('click', () => setMobileConversationDrawerOpen(false));
+});
 document.getElementById('create-convo-scope')?.addEventListener('change', () => {
   syncConversationScopeFields();
   syncCreateConversationToolFields();
