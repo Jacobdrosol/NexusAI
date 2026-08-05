@@ -1396,6 +1396,7 @@ def test_chat_page_warns_when_conversation_default_bot_is_not_chat_selectable(da
     assert b'id="chat-default-bot-route-warning"' in resp.data
     assert b"Default bot unavailable: GlobeIQ Live Audit QC 02 (globeiq-live-audit-qc-02-bot)." in resp.data
     assert b"not configured for manual chat use" in resp.data
+    assert b"Default bot unavailable</span>" in resp.data
     page_html = resp.data.decode("utf-8")
     selector_start = page_html.index('id="chat-bot-selector"')
     chat_selector = page_html[selector_start:page_html.index("</select>", selector_start)]

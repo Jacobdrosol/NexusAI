@@ -315,6 +315,10 @@
           <div class="chat-conversation-route-row">
             {% if c.default_bot_id %}<span class="badge badge-info" title="Bot {{ c.default_bot_id }}">Bot {{ bot_display_labels.get(c.default_bot_id, c.default_bot_id) }}</span>{% endif %}
             {% if c.default_model_id %}<span class="badge badge-info" title="Model {{ c.default_model_id }}">Model {{ model_display_labels.get(c.default_model_id, c.default_model_id) }}</span>{% endif %}
+            {% set default_bot_notice = (conversation_default_bot_notices or {}).get(c.id) %}
+            {% if default_bot_notice %}
+            <span class="badge badge-attention" title="{{ default_bot_notice.detail }}">Default bot unavailable</span>
+            {% endif %}
           </div>
           {% endif %}
           <small>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T', ' ') }}</small>
@@ -359,6 +363,10 @@
             <div class="chat-conversation-route-row">
               {% if c.default_bot_id %}<span class="badge badge-info" title="Bot {{ c.default_bot_id }}">Bot {{ bot_display_labels.get(c.default_bot_id, c.default_bot_id) }}</span>{% endif %}
               {% if c.default_model_id %}<span class="badge badge-info" title="Model {{ c.default_model_id }}">Model {{ model_display_labels.get(c.default_model_id, c.default_model_id) }}</span>{% endif %}
+              {% set default_bot_notice = (conversation_default_bot_notices or {}).get(c.id) %}
+              {% if default_bot_notice %}
+              <span class="badge badge-attention" title="{{ default_bot_notice.detail }}">Default bot unavailable</span>
+              {% endif %}
             </div>
             {% endif %}
             <small>Archived {{ (c.archived_at[:19] if c.archived_at else '') | replace('T', ' ') }}</small>

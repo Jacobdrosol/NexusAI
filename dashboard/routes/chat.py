@@ -457,6 +457,25 @@ def _selected_default_bot_notice(
     return {"bot_id": default_bot_id, "label": label, "detail": detail}
 
 
+def _conversation_default_bot_notices(
+    conversations: Iterable[dict[str, Any]],
+    *,
+    bots: list[dict[str, Any]],
+    chat_bots: list[dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    notices: dict[str, dict[str, str]] = {}
+    for conversation in conversations or []:
+        if not isinstance(conversation, dict):
+            continue
+        conversation_id = str(conversation.get("id") or "").strip()
+        if not conversation_id:
+            continue
+        notice = _selected_default_bot_notice(conversation, bots=bots, chat_bots=chat_bots)
+        if notice:
+            notices[conversation_id] = notice
+    return notices
+
+
 def _model_catalog_blocker_from_cp(cp: Any, model_id: str) -> str:
     _, blocker = _model_catalog_entry_from_cp(cp, model_id)
     return blocker
@@ -1742,6 +1761,11 @@ def chat_page() -> str:
             bots=bots,
             chat_bots=chat_bots,
         )
+        conversation_default_bot_notices = _conversation_default_bot_notices(
+            conversations,
+            bots=bots,
+            chat_bots=chat_bots,
+        )
 
         return render_template(
             "chat.html",
@@ -1756,6 +1780,7 @@ def chat_page() -> str:
             chat_bots=chat_bots,
             assignment_bots=assignment_bots,
             selected_default_bot_notice=selected_default_bot_notice,
+            conversation_default_bot_notices=conversation_default_bot_notices,
             projects=projects,
             vault_items=vault_items,
             repo_context_items=repo_context_items,
