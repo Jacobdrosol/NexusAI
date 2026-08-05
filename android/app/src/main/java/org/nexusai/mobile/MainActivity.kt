@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
 private fun NexusMobileApp(store: InstanceStore) {
     val scope = rememberCoroutineScope()
     var apiClient by remember { mutableStateOf(NexusApiClient(store)) }
+    var configuredInstance by remember { mutableStateOf(store.instanceUrl() != null) }
     var session by remember { mutableStateOf<MobileSession?>(null) }
     var status by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
@@ -82,8 +83,8 @@ private fun NexusMobileApp(store: InstanceStore) {
                 onSessionExpired = { session = null; status = "Your session expired. Sign in again." },
                 onDisconnect = { apiClient.clearSession(); session = null; status = "Disconnected." },
             )
-            store.instanceUrl() == null -> ConnectionScreen(Modifier.padding(padding)) { rawUrl ->
-                store.saveInstanceUrl(rawUrl).onSuccess { apiClient = NexusApiClient(store); status = "Instance saved. Sign in." }
+            !configuredInstance -> ConnectionScreen(Modifier.padding(padding)) { rawUrl ->
+                store.saveInstanceUrl(rawUrl).onSuccess { apiClient = NexusApiClient(store); configuredInstance = true; status = "Instance saved. Sign in." }
                     .onFailure { status = it.message.orEmpty() }
             }
             else -> LoginScreen(
@@ -100,7 +101,7 @@ private fun NexusMobileApp(store: InstanceStore) {
                         loading = false
                     }
                 },
-                onChangeInstance = { apiClient.clearSession(); apiClient = NexusApiClient(store); status = "" },
+                onChangeInstance = { apiClient.clearSession(); apiClient = NexusApiClient(store); configuredInstance = false; status = "" },
             )
         }
     }

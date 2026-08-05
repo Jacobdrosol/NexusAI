@@ -25,8 +25,12 @@ class InstanceStore(val context: Context) {
         if (url.scheme != "https") {
             return Result.failure(IllegalArgumentException("NexusAI mobile connections require HTTPS."))
         }
-        preferences.edit().putString(KEY_INSTANCE_URL, url.toString().trimEnd('/')).apply()
-        return Result.success(url)
+        if (url.username.isNotBlank() || url.password.isNotBlank()) {
+            return Result.failure(IllegalArgumentException("Use the NexusAI HTTPS origin without credentials."))
+        }
+        val origin = url.newBuilder().encodedPath("/").query(null).fragment(null).build()
+        preferences.edit().putString(KEY_INSTANCE_URL, origin.toString().trimEnd('/')).apply()
+        return Result.success(origin)
     }
 
     fun clear() {
