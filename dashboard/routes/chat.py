@@ -531,6 +531,61 @@ def _model_display_labels(models: list[dict[str, Any]]) -> dict[str, str]:
     return labels
 
 
+def _default_model_notice(
+    conversation: dict[str, Any] | None,
+    *,
+    model_catalog: list[dict[str, Any]],
+    model_catalog_available: bool,
+) -> dict[str, str] | None:
+    default_model_id = str((conversation or {}).get("default_model_id") or "").strip()
+    if not default_model_id or not model_catalog_available:
+        return None
+    for model in model_catalog or []:
+        if not isinstance(model, dict):
+            continue
+        model_id = str(model.get("id") or model.get("name") or "").strip()
+        if model_id != default_model_id:
+            continue
+        label = str(model.get("name") or model_id).strip() or model_id
+        provider = str(model.get("provider") or "").strip()
+        display_label = f"{provider} / {label}" if provider else label
+        if model.get("enabled", True) is False:
+            return {
+                "model_id": default_model_id,
+                "label": display_label,
+                "detail": "This conversation default model is disabled. Pick an enabled model and save defaults before sending.",
+            }
+        return None
+    return {
+        "model_id": default_model_id,
+        "label": default_model_id,
+        "detail": "This conversation default model is not present in the enabled model catalog. Pick an available model and save defaults before sending.",
+    }
+
+
+def _conversation_default_model_notices(
+    conversations: Iterable[dict[str, Any]],
+    *,
+    model_catalog: list[dict[str, Any]],
+    model_catalog_available: bool,
+) -> dict[str, dict[str, str]]:
+    notices: dict[str, dict[str, str]] = {}
+    for conversation in conversations or []:
+        if not isinstance(conversation, dict):
+            continue
+        conversation_id = str(conversation.get("id") or "").strip()
+        if not conversation_id:
+            continue
+        notice = _default_model_notice(
+            conversation,
+            model_catalog=model_catalog,
+            model_catalog_available=model_catalog_available,
+        )
+        if notice:
+            notices[conversation_id] = notice
+    return notices
+
+
 def _model_capabilities(model: dict[str, Any] | None) -> list[str]:
     raw = (model or {}).get("capabilities")
     if not isinstance(raw, list):
@@ -1656,10 +1711,12 @@ def chat_page() -> str:
             projects = cp.list_projects() or []
         except Exception:
             projects = []
+        model_catalog_available = True
         try:
             model_catalog = cp.list_models() or []
         except Exception:
             model_catalog = []
+            model_catalog_available = False
 
         conversation_scope_counts = _conversation_scope_counts(conversations)
         if active_project_filter:
@@ -1766,6 +1823,16 @@ def chat_page() -> str:
             bots=bots,
             chat_bots=chat_bots,
         )
+        selected_default_model_notice = _default_model_notice(
+            selected,
+            model_catalog=model_catalog,
+            model_catalog_available=model_catalog_available,
+        )
+        conversation_default_model_notices = _conversation_default_model_notices(
+            conversations,
+            model_catalog=model_catalog,
+            model_catalog_available=model_catalog_available,
+        )
 
         return render_template(
             "chat.html",
@@ -1781,6 +1848,8 @@ def chat_page() -> str:
             assignment_bots=assignment_bots,
             selected_default_bot_notice=selected_default_bot_notice,
             conversation_default_bot_notices=conversation_default_bot_notices,
+            selected_default_model_notice=selected_default_model_notice,
+            conversation_default_model_notices=conversation_default_model_notices,
             projects=projects,
             vault_items=vault_items,
             repo_context_items=repo_context_items,

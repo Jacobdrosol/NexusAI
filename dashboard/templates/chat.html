@@ -319,6 +319,10 @@
             {% if default_bot_notice %}
             <span class="badge badge-attention" title="{{ default_bot_notice.detail }}">Default bot unavailable</span>
             {% endif %}
+            {% set default_model_notice = (conversation_default_model_notices or {}).get(c.id) %}
+            {% if default_model_notice %}
+            <span class="badge badge-attention" title="{{ default_model_notice.detail }}">Default model unavailable</span>
+            {% endif %}
           </div>
           {% endif %}
           <small>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T', ' ') }}</small>
@@ -366,6 +370,10 @@
               {% set default_bot_notice = (conversation_default_bot_notices or {}).get(c.id) %}
               {% if default_bot_notice %}
               <span class="badge badge-attention" title="{{ default_bot_notice.detail }}">Default bot unavailable</span>
+              {% endif %}
+              {% set default_model_notice = (conversation_default_model_notices or {}).get(c.id) %}
+              {% if default_model_notice %}
+              <span class="badge badge-attention" title="{{ default_model_notice.detail }}">Default model unavailable</span>
               {% endif %}
             </div>
             {% endif %}
@@ -570,6 +578,11 @@
       {% if selected_default_bot_notice %}
       <div id="chat-default-bot-route-warning" class="chat-composer-status error">
         Default bot unavailable: {{ selected_default_bot_notice.label }}. {{ selected_default_bot_notice.detail }}
+      </div>
+      {% endif %}
+      {% if selected_default_model_notice %}
+      <div id="chat-default-model-route-warning" class="chat-composer-status error">
+        Default model unavailable: {{ selected_default_model_notice.label }}. {{ selected_default_model_notice.detail }}
       </div>
       {% endif %}
       <div id="chat-bot-capability-summary" class="mini-note chat-bot-capability-summary"></div>

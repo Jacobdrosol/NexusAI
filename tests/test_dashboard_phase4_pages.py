@@ -1466,6 +1466,124 @@ def test_chat_page_does_not_warn_for_plain_model_backed_default_bot(dashboard_cl
     assert b"Default bot unavailable" not in resp.data
 
 
+def test_chat_page_warns_when_conversation_default_model_is_unavailable(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-disabled-model",
+                    "title": "Disabled Model",
+                    "project_id": None,
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "default_bot_id": "text-bot",
+                    "default_model_id": "disabled-model",
+                    "memory_profiles_enabled": True,
+                    "memory_profile_id": "default",
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return [{"id": "text-bot", "name": "Text Bot", "backends": [{"provider": "openai", "model": "gpt-4o-mini"}]}]
+
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "text-bot", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return [{"id": "disabled-model", "name": "old-model", "provider": "ollama_cloud", "enabled": False}]
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-disabled-model")
+
+    assert resp.status_code == 200
+    assert b'id="chat-default-model-route-warning"' in resp.data
+    assert b"Default model unavailable: ollama_cloud / old-model." in resp.data
+    assert b"This conversation default model is disabled." in resp.data
+    assert b"Default model unavailable</span>" in resp.data
+
+
+def test_chat_page_does_not_warn_for_default_model_when_catalog_unavailable(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-model-catalog-down",
+                    "title": "Catalog Down",
+                    "project_id": None,
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "default_bot_id": "text-bot",
+                    "default_model_id": "possibly-valid-model",
+                    "memory_profiles_enabled": True,
+                    "memory_profile_id": "default",
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return [{"id": "text-bot", "name": "Text Bot", "backends": [{"provider": "openai", "model": "gpt-4o-mini"}]}]
+
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "text-bot", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            raise RuntimeError("catalog unavailable")
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-model-catalog-down")
+
+    assert resp.status_code == 200
+    assert b'id="chat-default-model-route-warning"' not in resp.data
+    assert b"Default model unavailable" not in resp.data
+
+
 def test_chat_page_does_not_block_chat_bot_when_readiness_is_unreported(dashboard_client):
     _login_admin(dashboard_client)
 
