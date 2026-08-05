@@ -132,7 +132,26 @@ def _worker_probe_view(probe: Any) -> dict[str, Any] | None:
 def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
-    dependent_bots = [item for item in payload.get("dependent_bots") or [] if isinstance(item, dict)]
+    dependent_bots = []
+    for item in payload.get("dependent_bots") or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        routing = row.get("routing_rules") if isinstance(row.get("routing_rules"), dict) else {}
+        worker_profile = routing.get("worker_profile") if isinstance(routing.get("worker_profile"), dict) else {}
+        raw_course_scope = worker_profile.get("course_scope")
+        if isinstance(raw_course_scope, list):
+            course_scope = [str(value).strip() for value in raw_course_scope if str(value).strip()]
+        else:
+            course_value = str(raw_course_scope or "").strip()
+            course_scope = [course_value] if course_value else []
+        row["worker_profile_view"] = {
+            "can_edit": worker_profile.get("can_edit") if isinstance(worker_profile.get("can_edit"), bool) else None,
+            "task_scope": str(worker_profile.get("task_scope") or "").strip(),
+            "site_scope": str(worker_profile.get("site_scope") or worker_profile.get("site") or "").strip(),
+            "course_scope": course_scope,
+        }
+        dependent_bots.append(row)
     active_schedules = [item for item in payload.get("active_schedules") or [] if isinstance(item, dict)]
     return {
         "dependent_bots": dependent_bots,

@@ -4379,6 +4379,65 @@ def test_worker_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Last Heartbeat" in resp.data
 
 
+def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_worker(self, worker_id):
+            assert worker_id == "globeiq-worker"
+            return {
+                "id": "globeiq-worker",
+                "name": "GlobeIQ Worker",
+                "host": "100.81.64.82",
+                "port": 8080,
+                "status": "online",
+                "enabled": True,
+                "runtime_limits": {},
+                "last_heartbeat_at": "2026-08-04T21:10:00+00:00",
+                "capabilities": [],
+                "metrics": {},
+            }
+
+        def get_worker_probe(self, worker_id):
+            return {"worker_id": worker_id, "probe_status": "ready", "checks": []}
+
+        def get_worker_dependencies(self, worker_id):
+            return {
+                "can_disable": False,
+                "can_delete": False,
+                "dependent_bots": [
+                    {
+                        "id": "course-repair-bot",
+                        "name": "Course Repair Bot",
+                        "project_id": "globeiq",
+                        "enabled": True,
+                        "routing_rules": {
+                            "worker_profile": {
+                                "can_edit": False,
+                                "task_scope": "published-lesson-quality-audit",
+                                "site_scope": "GlobeIQ",
+                                "course_scope": ["101", "102"],
+                            }
+                        },
+                    }
+                ],
+                "active_schedules": [],
+            }
+
+        def list_tasks(self, **kwargs):
+            return []
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/workers/globeiq-worker")
+
+    assert resp.status_code == 200
+    assert b"Worker Scope" in resp.data
+    assert b"published-lesson-quality-audit" in resp.data
+    assert b"Site: GlobeIQ" in resp.data
+    assert b"Courses: 101, 102" in resp.data
+    assert b"read only" in resp.data
+
+
 def test_workers_page_surfaces_runtime_tool_evidence(dashboard_client):
     _login_admin(dashboard_client)
 
