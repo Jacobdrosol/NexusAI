@@ -238,6 +238,18 @@
       </td>
       <td>
         {{ b.backends | length }} backend(s)
+        {% for backend in b.backends[:3] if backend %}
+        <div class="metrics">
+          {% set backend_type = backend.get('type') %}
+          {% set backend_provider = backend.get('provider') %}
+          {% set backend_model = backend.get('model') %}
+          {% set backend_worker = backend.get('worker_id') %}
+          Route: {{ backend_provider or backend_type or 'backend' }}{% if backend_model %} / {{ backend_model }}{% endif %}{% if backend_worker %} on {{ backend_worker }}{% endif %}
+        </div>
+        {% endfor %}
+        {% if b.backends|length > 3 %}
+        <div class="metrics">+{{ b.backends|length - 3 }} more backend(s)</div>
+        {% endif %}
         {% if bot_tooling and bot_tooling.connection_backend_count %}
         <div class="metrics">{{ bot_tooling.connection_backend_count }} HTTP connection backend(s)</div>
         {% endif %}

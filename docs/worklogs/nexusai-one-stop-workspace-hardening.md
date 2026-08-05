@@ -289,3 +289,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_dashboard_phase4_pages.py::test_chat_page_renders_project_filter_metadata_on_conversations -q` passed for Batch 132 chat route-default status labels.
 - Batch 133: improved bot import failure messages so readiness preflight blockers returned by the backend are shown in the browser import summary instead of only the generic import error.
 - `pytest tests/test_bot_tooling_status.py -q` passed for Batch 133 bot import readiness-blocker messaging.
+- Batch 134: added concise backend route labels to the Bots page so provider/model/worker routing is visible from the main bot inventory instead of only backend counts.
+- `pytest tests/test_bot_tooling_status.py -q` passed for Batch 134 bot backend route visibility.

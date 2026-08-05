@@ -300,6 +300,8 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Browser Action Bots" in page.data
     assert b"Worker Assignments" in page.data
     assert b"Credential Ref Bots" in page.data
+    assert b"Route: browser on browser-worker" in page.data
+    assert b"Route: http_connection / attached-http" in page.data
     assert b"Disabled Needs Fix" in page.data
     assert b"setBotTableFilter('disabled-needs-fix')" in page.data
     assert b"Recommended action:" in page.data
