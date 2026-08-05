@@ -19,6 +19,7 @@ from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
 bp = Blueprint("platform_ai", __name__)
 _UPLOAD_COPY_CHUNK_BYTES = 1024 * 1024
 _UPLOAD_REQUEST_OVERHEAD_BYTES = 8 * 1024 * 1024
+_SESSION_MESSAGE_CONTENT_MAX_CHARS = 120000
 
 
 class _UploadLimitExceeded(ValueError):
@@ -584,6 +585,8 @@ def api_stream_platform_ai_session_messages(session_id: str):
 def api_post_platform_ai_session_message(session_id: str):
     cp = get_cp_client()
     body = request.get_json(silent=True) or {}
+    if len(str(body.get("content") or "")) > _SESSION_MESSAGE_CONTENT_MAX_CHARS:
+        return jsonify({"error": f"message content is limited to {_SESSION_MESSAGE_CONTENT_MAX_CHARS} characters"}), 400
     data = cp.post_platform_ai_message(session_id, body)
     if data is None:
         return _cp_error_response(cp, "failed to post platform ai message")

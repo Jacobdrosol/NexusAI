@@ -223,6 +223,29 @@ async def test_platform_ai_operator_message_does_not_auto_start_session(cp_clien
 
 
 @pytest.mark.anyio
+async def test_platform_ai_operator_message_blocks_oversized_content(cp_client):
+    create_resp = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "bot_creator",
+            "bot_name_seed": "Bounded Message Bot",
+            "operator_id": "owner@example.com",
+            "start_running": False,
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = str(create_resp.json().get("id") or "")
+
+    msg_resp = await cp_client.post(
+        f"/v1/platform-ai/sessions/{session_id}/messages",
+        json={"role": "operator", "content": "x" * 120001},
+    )
+
+    assert msg_resp.status_code == 422
+    assert "content" in msg_resp.text
+
+
+@pytest.mark.anyio
 async def test_platform_ai_rejects_invalid_vertex_project_id(cp_client):
     create_resp = await cp_client.post(
         "/v1/platform-ai/sessions",

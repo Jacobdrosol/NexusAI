@@ -22,6 +22,7 @@ _PIPELINE_SESSION_CLAIM_LOCK = asyncio.Lock()
 _QUALITY_FIELDS = {"summary", "quality_gates", "acceptance_criteria", "tests", "artifacts", "warnings", "errors"}
 _CANONICAL_MODES = {"bot_tuner", "bot_creator", "pipeline_tuner", "pipeline_creator"}
 _CANONICAL_STATUSES = {"ready", "running", "stopped"}
+_SESSION_MESSAGE_CONTENT_MAX_CHARS = 120000
 _TERMINAL_AUTONOMOUS_STATES = {
     "converged",
     "max_iterations_reached",
@@ -904,7 +905,7 @@ class UpdatePlatformAISessionRequest(BaseModel):
 
 class SessionMessageRequest(BaseModel):
     role: str = "operator"
-    content: str
+    content: str = Field(..., max_length=_SESSION_MESSAGE_CONTENT_MAX_CHARS)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

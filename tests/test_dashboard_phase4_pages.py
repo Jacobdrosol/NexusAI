@@ -6032,6 +6032,25 @@ def test_platform_ai_session_uses_server_upload_limits(dashboard_client, monkeyp
     assert b'"max_total_bytes": 123456' in resp.data
     assert b"SESSION_ATTACHMENT_MAX_FILES = Number(sessionUploadLimits?.max_files || 15)" in resp.data
     assert b"SESSION_ATTACHMENT_MAX_TOTAL_BYTES = Number(sessionUploadLimits?.max_total_bytes || 1024 * 1024 * 1024)" in resp.data
+    assert b"SESSION_MESSAGE_CONTENT_MAX_CHARS = 120000" in resp.data
+    assert b"function sessionMessageContentBlocker" in resp.data
+
+
+def test_platform_ai_message_api_blocks_oversized_content(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def post_platform_ai_message(self, session_id, body):
+            raise AssertionError("oversized platform ai message should not reach control plane")
+
+    with patch("dashboard.routes.platform_ai.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/platform-ai/sessions/session-1/messages",
+            json={"role": "operator", "content": "x" * 120001},
+        )
+
+    assert resp.status_code == 400
+    assert b"message content is limited to 120000 characters" in resp.data
 
 
 def test_vault_upload_api_validates_required_fields(dashboard_client):

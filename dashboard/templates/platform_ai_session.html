@@ -534,6 +534,7 @@ let pendingSessionAttachments = [];
 const sessionUploadLimits = {{ (upload_limits or {})|tojson }};
 const SESSION_ATTACHMENT_MAX_FILES = Number(sessionUploadLimits?.max_files || 15);
 const SESSION_ATTACHMENT_MAX_TOTAL_BYTES = Number(sessionUploadLimits?.max_total_bytes || 1024 * 1024 * 1024);
+const SESSION_MESSAGE_CONTENT_MAX_CHARS = 120000;
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -699,6 +700,13 @@ function validateIncomingSessionAttachmentBatch(files) {
   return true;
 }
 
+function sessionMessageContentBlocker(content) {
+  if (String(content || '').length > SESSION_MESSAGE_CONTENT_MAX_CHARS) {
+    return `Messages are limited to ${SESSION_MESSAGE_CONTENT_MAX_CHARS.toLocaleString()} characters. Attach large text as a file or split it into smaller messages.`;
+  }
+  return '';
+}
+
 async function addSessionComposerFiles(files) {
   const nextFiles = Array.from(files || []);
   if (!nextFiles.length) return;
@@ -851,6 +859,11 @@ async function sendOperatorMessage() {
   const content = String(input?.value || '').trim();
   if (!content && !pendingSessionAttachments.length) {
     setStatus('operator-chat-status', 'Message cannot be empty', true);
+    return;
+  }
+  const contentBlocker = sessionMessageContentBlocker(content);
+  if (contentBlocker) {
+    setStatus('operator-chat-status', contentBlocker, true);
     return;
   }
   setStatus('operator-chat-status', 'Sending...', false);
