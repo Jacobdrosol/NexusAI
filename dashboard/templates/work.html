@@ -634,6 +634,7 @@
               <td>
                 <span class="badge {% if row.latest_status == 'passed' %}badge-completed{% elif row.latest_status in ['failed', 'error'] %}badge-failed{% elif row.latest_status in ['running', 'queued'] %}badge-running{% else %}badge-unknown{% endif %}">{{ row.latest_status }}</span>
                 {% if row.latest_at %}<div class="mini-note">{{ row.latest_at[:19] | replace('T', ' ') }}</div>{% endif %}
+                {% if row.latest_detail %}<div class="mini-note">{{ row.latest_detail }}</div>{% endif %}
               </td>
               <td>{% if row.latest_score is not none %}{{ '%.2f'|format(row.latest_score|float) }}{% else %}—{% endif %}</td>
               <td>

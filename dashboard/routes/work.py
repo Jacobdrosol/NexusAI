@@ -656,6 +656,32 @@ def _quality_gate_overall_action(status_counts: dict[str, int], *, available: bo
     }
 
 
+def _quality_gate_run_detail(run: dict[str, Any]) -> str:
+    if not isinstance(run, dict):
+        return ""
+    error_summary = run.get("error_summary") if isinstance(run.get("error_summary"), dict) else {}
+    error = run.get("error") if isinstance(run.get("error"), dict) else {}
+    pieces: list[str] = []
+    for source in (error_summary, error, run):
+        code = str(source.get("code") or source.get("error_code") or "").strip()
+        message = str(source.get("message") or source.get("detail") or source.get("summary") or "").strip()
+        if code and message:
+            pieces.append(f"{code}: {message}")
+        elif code:
+            pieces.append(code)
+        elif message:
+            pieces.append(message)
+        if pieces:
+            break
+    failed_tests = run.get("failed_tests")
+    if isinstance(failed_tests, list) and failed_tests:
+        pieces.append(f"{len(failed_tests)} failed test{'s' if len(failed_tests) != 1 else ''}")
+    findings = run.get("findings")
+    if isinstance(findings, list) and findings:
+        pieces.append(f"{len(findings)} finding{'s' if len(findings) != 1 else ''}")
+    return "; ".join(piece for piece in pieces if piece)
+
+
 def _quality_gate_summary(cp: Any, suites_payload: Any, *, limit: int = 5) -> dict[str, Any]:
     suites = suites_payload.get("suites") if isinstance(suites_payload, dict) else []
     suites = [suite for suite in (suites or []) if isinstance(suite, dict)]
@@ -690,6 +716,7 @@ def _quality_gate_summary(cp: Any, suites_payload: Any, *, limit: int = 5) -> di
                 "latest_status": status,
                 "latest_score": latest.get("score"),
                 "latest_at": str(latest.get("completed_at") or latest.get("created_at") or "").strip(),
+                "latest_detail": _quality_gate_run_detail(latest),
                 "recommended_action": _quality_gate_recommended_action(status),
             }
         )

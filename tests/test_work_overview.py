@@ -618,6 +618,12 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                         "status": "failed",
                         "score": 0.74,
                         "completed_at": "2026-08-05T02:03:04+00:00",
+                        "error_summary": {
+                            "code": "lesson_repetition",
+                            "message": "Repeated prose detected in lesson body.",
+                        },
+                        "failed_tests": [{"name": "LLM content review"}],
+                        "findings": [{"severity": "high", "message": "Repeated phrasing"}],
                     }
                 ]
             }
@@ -750,6 +756,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"GlobeIQ Lesson Quality" in resp.data
     assert b"review failed gates" in resp.data
     assert b"hold dependent automation" in resp.data
+    assert b"lesson_repetition: Repeated prose detected in lesson body." in resp.data
+    assert b"1 failed test" in resp.data
+    assert b"1 finding" in resp.data
     assert b"Stale Work" in resp.data
     assert b"Latest Update" in resp.data
     assert b"Latest update" in resp.data
@@ -852,6 +861,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["chat_usage_pressure_lanes"][0]["recommended_action"]["label"] == "watch spend"
     assert brief_data["quality_gates"]["status_counts"]["failed"] == 1
     assert brief_data["quality_gates"]["rows"][0]["suite_id"] == "suite-globeiq-lessons"
+    assert brief_data["quality_gates"]["rows"][0]["latest_detail"] == (
+        "lesson_repetition: Repeated prose detected in lesson body.; 1 failed test; 1 finding"
+    )
     assert brief_data["quality_gates"]["rows"][0]["recommended_action"]["label"] == "review failed gates"
     assert brief_data["quality_gates"]["recommended_action"]["level"] == "critical"
     assert brief_data["quality_gates"]["recommended_action"]["label"] == "review failed gates"
