@@ -5048,25 +5048,25 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
     task_manager = request.app.state.task_manager
     pm_orchestrator = request.app.state.pm_orchestrator
     assignment_service = getattr(request.app.state, "assignment_service", None)
+    conversation = await chat_manager.get_conversation(conversation_id)
+    target_bot_id = body.bot_id or conversation.default_bot_id
+    preferred_model_id = _chat_turn_preferred_model_id(conversation, body.bot_id)
+    await _validate_chat_token_governor_admission(request, bot_id=target_bot_id, body=body)
+    attachments = _attachment_payload_dicts(body.attachments)
+    if any(str(item.get("kind") or "") == "image" for item in attachments):
+        if not target_bot_id:
+            raise HTTPException(status_code=400, detail="Image attachments require an explicit bot or conversation bot.")
+        if not await _target_supports_image_attachments(
+            request,
+            target_bot_id=target_bot_id,
+            preferred_model_id=preferred_model_id,
+        ):
+            raise HTTPException(status_code=400, detail="The selected bot model does not support image attachments.")
+    if not str(body.content or "").strip() and not attachments:
+        raise HTTPException(status_code=400, detail="content or attachments are required")
 
     async def event_gen() -> AsyncGenerator[str, None]:
         try:
-            conversation = await chat_manager.get_conversation(conversation_id)
-            target_bot_id = body.bot_id or conversation.default_bot_id
-            preferred_model_id = _chat_turn_preferred_model_id(conversation, body.bot_id)
-            await _validate_chat_token_governor_admission(request, bot_id=target_bot_id, body=body)
-            attachments = _attachment_payload_dicts(body.attachments)
-            if any(str(item.get("kind") or "") == "image" for item in attachments):
-                if not target_bot_id:
-                    raise HTTPException(status_code=400, detail="Image attachments require an explicit bot or conversation bot.")
-                if not await _target_supports_image_attachments(
-                    request,
-                    target_bot_id=target_bot_id,
-                    preferred_model_id=preferred_model_id,
-                ):
-                    raise HTTPException(status_code=400, detail="The selected bot model does not support image attachments.")
-            if not str(body.content or "").strip() and not attachments:
-                raise HTTPException(status_code=400, detail="content or attachments are required")
             assign_instruction = _extract_assign_instruction(body.content)
             user_message_metadata = None
             if assign_instruction is not None:

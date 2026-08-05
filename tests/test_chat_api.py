@@ -1099,6 +1099,60 @@ async def test_stream_message_blocks_oversized_content(cp_app):
 
 
 @pytest.mark.anyio
+async def test_stream_message_rejects_more_than_15_attachments(cp_app):
+    cp_app.state.scheduler.stream = AsyncMock()
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Stream Too Many Attachments"})
+        conversation_id = create_resp.json()["id"]
+
+        attachments = [
+            {
+                "name": f"note-{index}.md",
+                "mime_type": "text/markdown",
+                "kind": "text",
+                "text_content": "# Note",
+                "size_bytes": 6,
+            }
+            for index in range(16)
+        ]
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "too many", "attachments": attachments},
+        )
+
+    assert stream_resp.status_code == 400
+    assert "Maximum is 15 files" in str(stream_resp.json().get("detail") or "")
+    cp_app.state.scheduler.stream.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_stream_message_rejects_attachment_total_size_over_1gb(cp_app):
+    cp_app.state.scheduler.stream = AsyncMock()
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Stream Attachment Size Limit"})
+        conversation_id = create_resp.json()["id"]
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={
+                "content": "too big",
+                "attachments": [
+                    {
+                        "name": "archive.zip",
+                        "mime_type": "application/zip",
+                        "kind": "binary",
+                        "size_bytes": (1024 * 1024 * 1024) + 1,
+                    }
+                ],
+            },
+        )
+
+    assert stream_resp.status_code == 400
+    assert "Maximum total attachment size is 1 GB" in str(stream_resp.json().get("detail") or "")
+    cp_app.state.scheduler.stream.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_stream_default_model_id_is_attached_to_scheduled_task(cp_app):
     captured_tasks = []
 
