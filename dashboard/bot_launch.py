@@ -126,9 +126,18 @@ def normalize_launch_profile(bot: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def launchable_bots(bots: list[dict[str, Any]], *, surface: str) -> list[dict[str, Any]]:
+def launchable_bots(
+    bots: list[dict[str, Any]],
+    *,
+    surface: str,
+    blocked_bot_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    blocked = {str(bot_id).strip() for bot_id in (blocked_bot_ids or set()) if str(bot_id).strip()}
     rows: list[dict[str, Any]] = []
     for bot in bots:
+        bot_id = str(bot.get("id") or "").strip()
+        if bot_id in blocked:
+            continue
         if not bool(bot.get("enabled", True)):
             continue
         profile = normalize_launch_profile(bot)

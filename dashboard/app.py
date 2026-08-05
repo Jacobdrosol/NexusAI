@@ -201,6 +201,8 @@ def create_app() -> Flask:
     def index():
         """Overview / home page."""
         from dashboard.bot_launch import launchable_bots
+        from dashboard.bot_launch_visibility import blocked_launch_bot_ids
+        from dashboard.bot_tooling_status import build_bot_tooling_status
         from dashboard.cp_client import get_cp_client
         from dashboard.models import User
 
@@ -217,7 +219,7 @@ def create_app() -> Flask:
             cp_workers is not None and cp_bots is not None and cp_projects is not None
         )
         cp_available = cp_auth_ok or cp_tasks is not None
-        overview_launch_bots = launchable_bots(cp_bots or [], surface="overview")
+        overview_launch_bots = []
         enabled_bot_readiness = []
         bot_readiness_unavailable = False
         worker_probes_unavailable = False
@@ -235,6 +237,7 @@ def create_app() -> Flask:
             bots = cp_bots or []
             tasks = cp_tasks or []
             worker_rows = workers
+            probe_payload = None
             probe_getter = getattr(cp, "list_worker_probes", None)
             if callable(probe_getter):
                 probe_payload = probe_getter()
@@ -416,6 +419,21 @@ def create_app() -> Flask:
                     ]
                 else:
                     bot_readiness_unavailable = True
+                key_getter = getattr(cp, "list_keys", None)
+                tooling_status = build_bot_tooling_status(
+                    bots=bots,
+                    readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
+                    workers=workers,
+                    worker_probes_payload=probe_payload if isinstance(probe_payload, dict) else None,
+                    api_keys=key_getter() if callable(key_getter) else None,
+                )
+                overview_launch_bots = launchable_bots(
+                    bots,
+                    surface="overview",
+                    blocked_bot_ids=blocked_launch_bot_ids(tooling_status),
+                )
+            else:
+                overview_launch_bots = launchable_bots(bots, surface="overview")
 
             worker_health = []
             for w in worker_rows[:12]:

@@ -104,11 +104,25 @@ def _task_section(task: dict[str, Any], section: str) -> Any:
 def tasks_page() -> str:
     """Render the tasks table page."""
     from dashboard.bot_launch import launchable_bots
+    from dashboard.bot_launch_visibility import blocked_launch_bot_ids
+    from dashboard.bot_tooling_status import build_bot_tooling_status
 
     cp = get_cp_client()
     cp_data = _safe_cp_list_tasks(cp, limit=200, include_content=False, timeout=1.0)
     usage_summary = _safe_cp_task_usage(cp, hours=24, limit_bots=15, timeout=1.0)
     if cp_data is not None:
+        cp_bots = cp.list_bots() or []
+        list_readiness = getattr(cp, "list_bot_readiness", None)
+        list_workers = getattr(cp, "list_workers", None)
+        list_worker_probes = getattr(cp, "list_worker_probes", None)
+        list_keys = getattr(cp, "list_keys", None)
+        tooling_status = build_bot_tooling_status(
+            bots=cp_bots,
+            readiness_payload=list_readiness() if callable(list_readiness) else None,
+            workers=list_workers() if callable(list_workers) else [],
+            worker_probes_payload=list_worker_probes() if callable(list_worker_probes) else None,
+            api_keys=list_keys() if callable(list_keys) else None,
+        )
         now = datetime.now(timezone.utc)
         recent_cutoff = now - timedelta(hours=24)
         sorted_tasks = sorted(cp_data, key=_task_sort_key, reverse=True)
@@ -131,7 +145,11 @@ def tasks_page() -> str:
             queued_tasks=queued_tasks,
             recent_completed_tasks=recent_completed,
             recent_failed_tasks=recent_failed,
-            launchable_bots=launchable_bots(cp.list_bots() or [], surface="tasks"),
+            launchable_bots=launchable_bots(
+                cp_bots,
+                surface="tasks",
+                blocked_bot_ids=blocked_launch_bot_ids(tooling_status),
+            ),
             usage_summary=usage_summary,
             error=None,
         )

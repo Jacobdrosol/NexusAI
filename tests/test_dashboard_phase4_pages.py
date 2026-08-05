@@ -3243,6 +3243,18 @@ def test_tasks_page_shows_quick_launch_buttons(dashboard_client):
                 }
             ]
 
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "course-intake", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
     with patch("dashboard.routes.tasks.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/tasks")
 
@@ -3255,6 +3267,51 @@ def test_tasks_page_shows_quick_launch_buttons(dashboard_client):
     assert b"Task Detail" in resp.data
     assert b"Load only when needed" in resp.data
     assert b"Executed by" in resp.data
+
+
+def test_tasks_page_hides_tooling_blocked_quick_launch_buttons(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "raw-secret-launch",
+                    "name": "Raw Secret Launch",
+                    "enabled": True,
+                    "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-5", "api_key_ref": "sk-live-secret"}],
+                    "routing_rules": {
+                        "launch_profile": {
+                            "enabled": True,
+                            "label": "Unsafe Launch",
+                            "payload": {"task": "skip"},
+                            "show_on_tasks": True,
+                        }
+                    },
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "raw-secret-launch", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.routes.tasks.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/tasks")
+
+    assert resp.status_code == 200
+    assert b"Quick Launch" not in resp.data
+    assert b"Unsafe Launch" not in resp.data
 
 
 def test_tasks_api_summary_and_download(dashboard_client):
@@ -7850,6 +7907,15 @@ def test_overview_page_shows_saved_launch_profiles(dashboard_client):
                 }
             ]
 
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "course-intake", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
         def list_projects(self):
             return []
 
@@ -7864,6 +7930,60 @@ def test_overview_page_shows_saved_launch_profiles(dashboard_client):
 
     assert resp.status_code == 200
     assert b"Run Course Pipeline" in resp.data
+
+
+def test_overview_page_hides_tooling_blocked_saved_launch_profiles(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def health(self):
+            return True
+
+        def list_workers(self):
+            return []
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "unsafe-launch",
+                    "name": "Unsafe Launch",
+                    "role": "assistant",
+                    "enabled": True,
+                    "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-5", "api_key_ref": "sk-live-secret"}],
+                    "routing_rules": {
+                        "launch_profile": {
+                            "enabled": True,
+                            "label": "Unsafe Launch",
+                            "payload": {"topic": "AP World History"},
+                            "show_on_overview": True,
+                        }
+                    },
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "unsafe-launch", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_tasks(self):
+            return []
+
+        def probe_paths(self, paths):
+            return [{"path": p, "ok": True, "status_code": 200, "detail": "ok"} for p in paths]
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/")
+
+    assert resp.status_code == 200
+    assert b"Unsafe Launch" not in resp.data
 
 
 def test_pipelines_pages_render_grouped_pipeline_runs(dashboard_client):
