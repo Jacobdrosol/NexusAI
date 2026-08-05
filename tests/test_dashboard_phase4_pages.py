@@ -4466,6 +4466,13 @@ def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client
                                 "course_scope": ["101", "102"],
                             }
                         },
+                        "execution_policy": {
+                            "required_worker_tools": ["browser-ui"],
+                            "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
+                            "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                            "browser_action_allowlist": ["lesson_preview.read"],
+                            "browser_action_owner_approval_required": ["lesson_preview.read"],
+                        },
                     }
                 ],
                 "active_schedules": [],
@@ -4483,6 +4490,11 @@ def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client
     assert b"Site: GlobeIQ" in resp.data
     assert b"Courses: 101, 102" in resp.data
     assert b"read only" in resp.data
+    assert b"Action Policy" in resp.data
+    assert b"Tools: browser-ui" in resp.data
+    assert b"Site/API actions: globeiq-agent-api.updateLesson" in resp.data
+    assert b"Browser actions: lesson_preview.read" in resp.data
+    assert b"Owner approvals: 2" in resp.data
 
 
 def test_workers_page_surfaces_runtime_tool_evidence(dashboard_client):

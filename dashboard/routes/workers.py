@@ -133,12 +133,25 @@ def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     dependent_bots = []
+
+    def _policy_list(policy: dict[str, Any], key: str) -> list[str]:
+        values = policy.get(key)
+        if not isinstance(values, list):
+            return []
+        result = []
+        for value in values:
+            label = str(value or "").strip()
+            if label and label not in result:
+                result.append(label)
+        return result
+
     for item in payload.get("dependent_bots") or []:
         if not isinstance(item, dict):
             continue
         row = dict(item)
         routing = row.get("routing_rules") if isinstance(row.get("routing_rules"), dict) else {}
         worker_profile = routing.get("worker_profile") if isinstance(routing.get("worker_profile"), dict) else {}
+        policy = row.get("execution_policy") if isinstance(row.get("execution_policy"), dict) else {}
         raw_course_scope = worker_profile.get("course_scope")
         if isinstance(raw_course_scope, list):
             course_scope = [str(value).strip() for value in raw_course_scope if str(value).strip()]
@@ -150,6 +163,13 @@ def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:
             "task_scope": str(worker_profile.get("task_scope") or "").strip(),
             "site_scope": str(worker_profile.get("site_scope") or worker_profile.get("site") or "").strip(),
             "course_scope": course_scope,
+        }
+        row["action_policy_view"] = {
+            "required_tools": _policy_list(policy, "required_worker_tools"),
+            "connection_actions": _policy_list(policy, "connection_action_allowlist"),
+            "connection_owner_approvals": _policy_list(policy, "connection_action_owner_approval_required"),
+            "browser_actions": _policy_list(policy, "browser_action_allowlist"),
+            "browser_owner_approvals": _policy_list(policy, "browser_action_owner_approval_required"),
         }
         dependent_bots.append(row)
     active_schedules = [item for item in payload.get("active_schedules") or [] if isinstance(item, dict)]

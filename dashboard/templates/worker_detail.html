@@ -167,7 +167,7 @@
   </div>
   {% if worker_dependencies and worker_dependencies.dependent_bots %}
   <table>
-    <thead><tr><th>Dependent Bot</th><th>Project</th><th>Worker Scope</th><th>State</th></tr></thead>
+    <thead><tr><th>Dependent Bot</th><th>Project</th><th>Worker Scope</th><th>Action Policy</th><th>State</th></tr></thead>
     <tbody>
       {% for bot in worker_dependencies.dependent_bots %}
       <tr>
@@ -180,6 +180,15 @@
           {% if profile.course_scope %}<div>Courses: {{ profile.course_scope | join(', ') }}</div>{% endif %}
           {% if profile.can_edit is not none %}<div>{{ 'can edit' if profile.can_edit else 'read only' }}</div>{% endif %}
           {% if not profile.task_scope and not profile.site_scope and not profile.course_scope and profile.can_edit is none %}Not declared{% endif %}
+        </td>
+        <td class="metrics">
+          {% set action_policy = bot.action_policy_view or {} %}
+          {% if action_policy.required_tools %}<div>Tools: {{ action_policy.required_tools | join(', ') }}</div>{% endif %}
+          {% if action_policy.connection_actions %}<div>Site/API actions: {{ action_policy.connection_actions | join(', ') }}</div>{% endif %}
+          {% if action_policy.browser_actions %}<div>Browser actions: {{ action_policy.browser_actions | join(', ') }}</div>{% endif %}
+          {% set approval_count = (action_policy.connection_owner_approvals | length) + (action_policy.browser_owner_approvals | length) %}
+          {% if approval_count %}<div>Owner approvals: {{ approval_count }}</div>{% endif %}
+          {% if not action_policy.required_tools and not action_policy.connection_actions and not action_policy.browser_actions and not approval_count %}Not declared{% endif %}
         </td>
         <td><span class="badge badge-{{ 'enabled' if bot.enabled else 'disabled' }}">{{ 'enabled' if bot.enabled else 'disabled' }}</span></td>
       </tr>
