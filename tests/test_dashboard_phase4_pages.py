@@ -866,6 +866,9 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert b'title="Model ollama-cloud/gpt-oss-120b"' in resp.data
     assert b"Bot Personal Research Chat (personal-research-chat)" in resp.data
     assert b"Model ollama_cloud / kimi-k2" in resp.data
+    assert b'id="chat-usage-pressure-banner"' in resp.data
+    assert b"loadChatUsagePressureBanner" in resp.data
+    assert b"/api/work/brief" in resp.data
 
 
 def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_client):

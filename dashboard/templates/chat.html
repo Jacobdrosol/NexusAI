@@ -6,6 +6,7 @@
   <h1>Chat</h1>
   <button class="btn btn-primary" onclick="showCreateConversation()">+ New Conversation</button>
 </div>
+<div id="chat-usage-pressure-banner" class="chat-composer-status info" hidden></div>
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
@@ -4072,6 +4073,38 @@ async function openDagViewer(orchestrationId) {
   if (dagSvgBtn) dagSvgBtn.style.display = 'inline-block';
 }
 
+function chatPressureMessage(prefix, pressure) {
+  if (!pressure || !['critical', 'warning'].includes(String(pressure.level || ''))) return '';
+  const label = String(pressure.label || 'near cap');
+  const topLane = pressure.top_lane || {};
+  const botId = String(topLane.bot_id || '').trim();
+  const ratio = Number(pressure.usage_ratio || topLane.usage_ratio || 0);
+  const ratioText = ratio ? ` (${ratio})` : '';
+  return botId ? `${prefix}: ${label} for ${botId}${ratioText}` : `${prefix}: ${label}${ratioText}`;
+}
+
+async function loadChatUsagePressureBanner() {
+  const banner = document.getElementById('chat-usage-pressure-banner');
+  if (!banner) return;
+  try {
+    const res = await fetch('/api/work/brief', {headers: {'Accept': 'application/json'}});
+    if (!res.ok) return;
+    const data = await res.json();
+    const messages = [
+      chatPressureMessage('Chat global cap', data.chat_global_cap_pressure),
+      chatPressureMessage('Chat bot cap', data.chat_cap_pressure),
+    ].filter(Boolean);
+    if (!messages.length) return;
+    const critical = [data.chat_global_cap_pressure, data.chat_cap_pressure]
+      .some((pressure) => String(pressure?.level || '') === 'critical');
+    banner.className = `chat-composer-status ${critical ? 'error' : 'info'}`;
+    banner.textContent = messages.join(' / ');
+    banner.hidden = false;
+  } catch (err) {
+    return;
+  }
+}
+
 bindConversationActions();
 document.getElementById('chat-project-filter')?.addEventListener('change', function() {
   window.location = buildChatUrl({project_id: this.value});
@@ -4138,6 +4171,7 @@ refreshServerEffectiveContextSummary().catch(() => {});
 bindChatTextareaBehavior();
 renderComposerAttachments();
 setupChatComposerDragDrop();
+loadChatUsagePressureBanner();
 setTaskEventsVisible(false);
 startMessagePolling();
 document.querySelectorAll('#messages .message').forEach((messageEl) => {
