@@ -145,6 +145,18 @@ def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:
                 result.append(label)
         return result
 
+    def _profile_list(profile: dict[str, Any], key: str) -> list[str]:
+        values = profile.get(key)
+        if isinstance(values, list):
+            result = []
+            for value in values:
+                label = str(value or "").strip()
+                if label and label not in result:
+                    result.append(label)
+            return result
+        value = str(values or "").strip()
+        return [value] if value else []
+
     for item in payload.get("dependent_bots") or []:
         if not isinstance(item, dict):
             continue
@@ -167,17 +179,22 @@ def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:
                 route += f" on {worker_id}"
             if route and route not in backend_routes:
                 backend_routes.append(route)
-        raw_course_scope = worker_profile.get("course_scope")
-        if isinstance(raw_course_scope, list):
-            course_scope = [str(value).strip() for value in raw_course_scope if str(value).strip()]
-        else:
-            course_value = str(raw_course_scope or "").strip()
-            course_scope = [course_value] if course_value else []
+        site_account = str(
+            worker_profile.get("site_account")
+            or worker_profile.get("site_user")
+            or worker_profile.get("site_username")
+            or worker_profile.get("globeiq_user_email")
+            or ""
+        ).strip()
         row["worker_profile_view"] = {
             "can_edit": worker_profile.get("can_edit") if isinstance(worker_profile.get("can_edit"), bool) else None,
             "task_scope": str(worker_profile.get("task_scope") or "").strip(),
             "site_scope": str(worker_profile.get("site_scope") or worker_profile.get("site") or "").strip(),
-            "course_scope": course_scope,
+            "site_account": site_account,
+            "course_scope": _profile_list(worker_profile, "course_scope"),
+            "lesson_scope": _profile_list(worker_profile, "lesson_scope"),
+            "allowed_pages": _profile_list(worker_profile, "allowed_pages"),
+            "cli_tools": _profile_list(worker_profile, "cli_tools"),
             "backend_routes": backend_routes,
         }
         row["action_policy_view"] = {

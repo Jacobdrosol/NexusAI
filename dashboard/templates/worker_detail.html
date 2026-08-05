@@ -175,13 +175,17 @@
         <td>{{ bot.project_id or 'Global' }}</td>
         <td class="metrics">
           {% set profile = bot.worker_profile_view or {} %}
-          {% if profile.backend_routes %}<div>Routes: {{ profile.backend_routes | join(', ') }}</div>{% endif %}
-          {% if profile.task_scope %}<div>{{ profile.task_scope }}</div>{% endif %}
-          {% if profile.site_scope %}<div>Site: {{ profile.site_scope }}</div>{% endif %}
-          {% if profile.course_scope %}<div>Courses: {{ profile.course_scope | join(', ') }}</div>{% endif %}
-          {% if profile.can_edit is not none %}<div>{{ 'can edit' if profile.can_edit else 'read only' }}</div>{% endif %}
-          {% if not profile.backend_routes and not profile.task_scope and not profile.site_scope and not profile.course_scope and profile.can_edit is none %}Not declared{% endif %}
-        </td>
+            {% if profile.backend_routes %}<div>Routes: {{ profile.backend_routes | join(', ') }}</div>{% endif %}
+            {% if profile.task_scope %}<div>{{ profile.task_scope }}</div>{% endif %}
+            {% if profile.site_scope %}<div>Site: {{ profile.site_scope }}</div>{% endif %}
+            {% if profile.site_account %}<div>Site account: {{ profile.site_account }}</div>{% endif %}
+            {% if profile.course_scope %}<div>Courses: {{ profile.course_scope | join(', ') }}</div>{% endif %}
+            {% if profile.lesson_scope %}<div>Lessons: {{ profile.lesson_scope | join(', ') }}</div>{% endif %}
+            {% if profile.allowed_pages %}<div>Pages: {{ profile.allowed_pages | join(', ') }}</div>{% endif %}
+            {% if profile.cli_tools %}<div>CLI: {{ profile.cli_tools | join(', ') }}</div>{% endif %}
+            {% if profile.can_edit is not none %}<div>{{ 'can edit' if profile.can_edit else 'read only' }}</div>{% endif %}
+            {% if not profile.backend_routes and not profile.task_scope and not profile.site_scope and not profile.site_account and not profile.course_scope and not profile.lesson_scope and not profile.allowed_pages and not profile.cli_tools and profile.can_edit is none %}Not declared{% endif %}
+          </td>
         <td class="metrics">
           {% set action_policy = bot.action_policy_view or {} %}
           {% if action_policy.required_tools %}<div>Tools: {{ action_policy.required_tools | join(', ') }}</div>{% endif %}

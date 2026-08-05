@@ -7042,7 +7042,11 @@ def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client
                                 "can_edit": False,
                                 "task_scope": "published-lesson-quality-audit",
                                 "site_scope": "GlobeIQ",
+                                "site_account": "qc.quinn@globaliq.local",
                                 "course_scope": ["101", "102"],
+                                "lesson_scope": ["lesson-1001", "lesson-1002"],
+                                "allowed_pages": ["lesson_preview", "lesson_builder"],
+                                "cli_tools": ["browser-ui", "globeiq-agent-api"],
                             }
                         },
                         "execution_policy": {
@@ -7068,7 +7072,11 @@ def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client
     assert b"Routes: browser / browser-ui on globeiq-worker" in resp.data
     assert b"published-lesson-quality-audit" in resp.data
     assert b"Site: GlobeIQ" in resp.data
+    assert b"Site account: qc.quinn@globaliq.local" in resp.data
     assert b"Courses: 101, 102" in resp.data
+    assert b"Lessons: lesson-1001, lesson-1002" in resp.data
+    assert b"Pages: lesson_preview, lesson_builder" in resp.data
+    assert b"CLI: browser-ui, globeiq-agent-api" in resp.data
     assert b"read only" in resp.data
     assert b"Action Policy" in resp.data
     assert b"Tools: browser-ui" in resp.data
