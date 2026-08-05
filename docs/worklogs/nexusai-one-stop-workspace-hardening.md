@@ -56,6 +56,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 18 in progress: prevented new conversations from selecting blocked or disabled default chat bots by disabling unavailable default-bot options and reusing the readiness guard during create.
 - Batch 19 in progress: added readiness labels and create-time guarding to assignment PM bot selection while keeping non-chat scheduled workers out of serialized chat bot data.
 - Batch 20 in progress: added a selected-project work snapshot to scoped chats, showing active task counts, manager lanes, and newest task rows for the primary and bridged projects.
+- Batch 21 in progress: added dashboard API readiness guards so blocked default chat bots and blocked assignment PM bots are rejected even if the browser UI is bypassed.
 
 ## Validation
 
@@ -79,3 +80,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 18 default-bot create guard.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 19 PM assignment readiness guard.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_selected_project_work_snapshot tests/test_dashboard_phase4_pages.py::test_chat_page_project_filter_limits_conversation_list tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 20 selected-project work snapshot.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_create_conversation_api_blocks_unavailable_default_bot tests/test_dashboard_phase4_pages.py::test_chat_assignment_preview_api_blocks_unavailable_pm_bot tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_selected_project_work_snapshot tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 21 dashboard API readiness guards.

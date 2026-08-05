@@ -238,6 +238,24 @@ def _selected_project_work_summary(cp: Any, project_ids: list[str]) -> dict[str,
     }
 
 
+def _bot_readiness_blocker_from_cp(cp: Any, bot_id: str) -> str:
+    safe_bot_id = str(bot_id or "").strip()
+    if not safe_bot_id or not hasattr(cp, "list_bot_readiness"):
+        return ""
+    try:
+        readiness_payload = cp.list_bot_readiness()
+    except Exception:
+        return ""
+    readiness = _readiness_by_bot_id(readiness_payload).get(safe_bot_id)
+    if not readiness:
+        return ""
+    state = str(readiness.get("state") or "").strip().lower()
+    if state not in {"blocked", "disabled"}:
+        return ""
+    detail = str(readiness.get("detail") or "").strip()
+    return f"{safe_bot_id} is {state}: {detail}" if detail else f"{safe_bot_id} is {state}"
+
+
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
@@ -937,13 +955,17 @@ def api_create_conversation():
     if not title:
         return jsonify({"error": "title is required"}), 400
     cp = get_cp_client()
+    default_bot_id = str(data.get("default_bot_id") or "").strip()
+    readiness_blocker = _bot_readiness_blocker_from_cp(cp, default_bot_id)
+    if readiness_blocker:
+        return jsonify({"error": f"Default bot is unavailable: {readiness_blocker}"}), 409
     created = cp.create_conversation(
         {
             "title": title,
             "project_id": data.get("project_id"),
             "bridge_project_ids": data.get("bridge_project_ids") or [],
             "scope": data.get("scope", "global"),
-            "default_bot_id": data.get("default_bot_id"),
+            "default_bot_id": default_bot_id or None,
             "default_model_id": data.get("default_model_id"),
             "owner_user_id": _current_memory_user_id(),
             "memory_profiles_enabled": bool(data.get("memory_profiles_enabled", True)),
@@ -1063,6 +1085,9 @@ def api_assignment_preview():
     if not pm_bot_id:
         return jsonify({"error": "pm_bot_id is required"}), 400
     cp = get_cp_client()
+    readiness_blocker = _bot_readiness_blocker_from_cp(cp, pm_bot_id)
+    if readiness_blocker:
+        return jsonify({"error": f"Project manager bot is unavailable: {readiness_blocker}"}), 409
     preview = cp.preview_assignment(
         {
             "conversation_id": conversation_id,
@@ -1090,6 +1115,9 @@ def api_create_assignment():
     if not pm_bot_id:
         return jsonify({"error": "pm_bot_id is required"}), 400
     cp = get_cp_client()
+    readiness_blocker = _bot_readiness_blocker_from_cp(cp, pm_bot_id)
+    if readiness_blocker:
+        return jsonify({"error": f"Project manager bot is unavailable: {readiness_blocker}"}), 409
     created = cp.create_assignment(
         {
             "conversation_id": conversation_id,
