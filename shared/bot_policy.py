@@ -7,6 +7,10 @@ from shared.models import Bot, BotExecutionPolicy
 
 _AUTONOMOUSLY_RESTRICTED_BACKEND_TYPES = frozenset({"browser", "cli", "documentation"})
 _SUPERVISION_ACTION_TYPES = frozenset({"pause_schedule", "hold_bot", "configuration_review"})
+_REQUIRED_TOOL_BY_ACTION_POLICY = {
+    "browser_action_allowlist": "browser-ui",
+    "documentation_action_allowlist": "documentation-v1",
+}
 
 
 def bot_execution_policy(bot: Bot) -> BotExecutionPolicy:
@@ -190,6 +194,11 @@ def validate_reference_graph(bot: Bot) -> List[str]:
 def validate_bot_configuration(bot: Bot) -> List[str]:
     errors = validate_reference_graph(bot)
     execution_policy = bot_execution_policy(bot)
+    required_tools = {
+        str(tool or "").strip()
+        for tool in execution_policy.required_worker_tools
+        if str(tool or "").strip()
+    }
     approval_required = {
         str(action or "").strip()
         for action in execution_policy.browser_action_owner_approval_required
@@ -205,6 +214,11 @@ def validate_bot_configuration(bot: Bot) -> List[str]:
         errors.append(
             f"Bot '{bot.id}' requires owner approval for browser actions not present in its allowlist: "
             + ", ".join(unrecognized_approval_actions)
+        )
+    if authorized_browser_actions and _REQUIRED_TOOL_BY_ACTION_POLICY["browser_action_allowlist"] not in required_tools:
+        errors.append(
+            f"Bot '{bot.id}' authorizes browser actions but does not require worker tool "
+            f"'{_REQUIRED_TOOL_BY_ACTION_POLICY['browser_action_allowlist']}'."
         )
     connection_approval_required = {
         str(action or "").strip()
@@ -236,6 +250,14 @@ def validate_bot_configuration(bot: Bot) -> List[str]:
         errors.append(
             f"Bot '{bot.id}' has unsupported documentation actions: "
             + ", ".join(unsupported_documentation_actions)
+        )
+    if (
+        authorized_documentation_actions
+        and _REQUIRED_TOOL_BY_ACTION_POLICY["documentation_action_allowlist"] not in required_tools
+    ):
+        errors.append(
+            f"Bot '{bot.id}' authorizes documentation actions but does not require worker tool "
+            f"'{_REQUIRED_TOOL_BY_ACTION_POLICY['documentation_action_allowlist']}'."
         )
     if bot_is_project_manager(bot) and not bot_has_explicit_workflow(bot):
         errors.append(f"Bot '{bot.id}' is marked as a project manager but has no explicit workflow triggers.")

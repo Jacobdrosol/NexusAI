@@ -279,9 +279,14 @@ error strings (empty means valid). Checks:
 
 ### `validate_bot_configuration(bot: Bot) → List[str]`
 
-Runs `validate_reference_graph` and additionally checks that a PM bot
-(`bot_is_project_manager`) has at least one explicit workflow trigger. Returns
-a combined list of error strings.
+Runs `validate_reference_graph` and additionally checks high-risk bot policy
+contracts. It rejects project managers without explicit workflow triggers,
+owner-approval actions that are not present in their allowlists, unsupported
+documentation actions, browser action policies that do not require the
+`browser-ui` worker tool, and documentation action policies that do not require
+the `documentation-v1` worker tool. Connection action allowlists are validated
+against their owner-approval list but do not require worker tools because they
+execute through attached HTTP connections.
 
 ### `derive_allowed_bot_ids(root_bot_id: str, bots: Sequence[Bot]) → List[str]`
 

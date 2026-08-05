@@ -138,6 +138,7 @@ async def test_owner_approval_api_only_issues_for_a_policy_required_action(cp_cl
         "name": "Question Patcher",
         "role": "question-patcher",
         "execution_policy": {
+            "required_worker_tools": ["browser-ui"],
             "browser_action_allowlist": ["question_bank.patch_existing"],
             "browser_action_owner_approval_required": ["question_bank.patch_existing"],
         },
@@ -177,5 +178,24 @@ def test_bot_rejects_owner_approval_for_actions_outside_its_allowlist():
 
     assert validate_bot_configuration(bot) == [
         "Bot 'unsafe-browser-policy' requires owner approval for browser actions not present in its "
-        "allowlist: question_bank.create_one"
+        "allowlist: question_bank.create_one",
+        "Bot 'unsafe-browser-policy' authorizes browser actions but does not require worker tool "
+        "'browser-ui'.",
+    ]
+
+
+def test_bot_rejects_browser_actions_without_required_worker_tool():
+    from shared.bot_policy import validate_bot_configuration
+
+    bot = Bot(
+        id="browser-policy-without-tool",
+        name="Browser Policy Without Tool",
+        role="test",
+        execution_policy={"browser_action_allowlist": ["question_bank.patch_existing"]},
+        backends=[],
+    )
+
+    assert validate_bot_configuration(bot) == [
+        "Bot 'browser-policy-without-tool' authorizes browser actions but does not require worker "
+        "tool 'browser-ui'."
     ]
