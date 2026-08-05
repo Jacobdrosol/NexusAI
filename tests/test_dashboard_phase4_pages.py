@@ -91,10 +91,22 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
                 ]
             }
 
+        def get_project_chat_tool_access(self, project_id):
+            assert project_id == "globeiq"
+            return {
+                "enabled": True,
+                "filesystem": True,
+                "repo_search": True,
+                "workspace_root": "/srv/repos/globeiq",
+            }
+
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/projects")
 
     assert resp.status_code == 200
+    assert b"Chat Tools" in resp.data
+    assert b"filesystem / repo search" in resp.data
+    assert b"/srv/repos/globeiq" in resp.data
     assert b"Configured Bots" in resp.data
     assert b"2 enabled" in resp.data
     assert b"3 configured" in resp.data

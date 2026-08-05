@@ -12,7 +12,7 @@
 <table>
   <thead>
     <tr>
-      <th>ID</th><th>Name</th><th>Mode</th><th>Enabled</th><th>Memory</th><th>Bridges</th><th>Configured Bots</th><th>Autonomy</th>
+      <th>ID</th><th>Name</th><th>Mode</th><th>Enabled</th><th>Memory</th><th>Chat Tools</th><th>Bridges</th><th>Configured Bots</th><th>Autonomy</th>
     </tr>
   </thead>
   <tbody>
@@ -23,6 +23,27 @@
       <td>{{ p.mode }}</td>
       <td><span class="badge badge-{{ 'enabled' if p.enabled else 'disabled' }}">{{ 'enabled' if p.enabled else 'disabled' }}</span></td>
       <td><span class="badge badge-{{ 'enabled' if p.memory_profiles_enabled else 'disabled' }}">{{ 'enabled' if p.memory_profiles_enabled else 'off' }}</span></td>
+      <td>
+        {% set chat_tools = p.chat_tool_access or {} %}
+        {% if chat_tools.enabled %}
+        <span class="badge badge-enabled">enabled</span>
+        <div class="mini-note">
+          {% if chat_tools.filesystem and chat_tools.repo_search %}
+          filesystem / repo search
+          {% elif chat_tools.filesystem %}
+          filesystem
+          {% elif chat_tools.repo_search %}
+          repo search
+          {% else %}
+          no modes selected
+          {% endif %}
+        </div>
+        {% if chat_tools.workspace_root %}<div class="mini-note">{{ chat_tools.workspace_root }}</div>{% endif %}
+        {% else %}
+        <span class="badge badge-disabled">off</span>
+        <div class="mini-note">Workspace tools blocked at project gate</div>
+        {% endif %}
+      </td>
       <td>{{ p.bridge_project_ids | length }}</td>
       <td>
         {% if p.autonomy_coverage.available %}
@@ -67,7 +88,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="8" style="text-align:center;color:#7b879a;">No projects configured</td></tr>
+    <tr><td colspan="9" style="text-align:center;color:#7b879a;">No projects configured</td></tr>
     {% endfor %}
   </tbody>
 </table>

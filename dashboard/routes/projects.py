@@ -129,6 +129,20 @@ def _normalize_project_chat_tool_access(raw: Any) -> dict[str, Any]:
     }
 
 
+def _attach_project_chat_tool_access(projects: list[dict[str, Any]], cp: Any) -> list[dict[str, Any]]:
+    getter = getattr(cp, "get_project_chat_tool_access", None)
+    enriched: list[dict[str, Any]] = []
+    for project in projects:
+        row = dict(project)
+        project_id = str(row.get("id") or "").strip()
+        raw_access = None
+        if project_id and callable(getter):
+            raw_access = getter(project_id)
+        row["chat_tool_access"] = _normalize_project_chat_tool_access(raw_access)
+        enriched.append(row)
+    return enriched
+
+
 def _normalize_project_repo_workspace(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
@@ -558,6 +572,7 @@ def projects_page() -> str:
             cp.list_schedules() if hasattr(cp, "list_schedules") else None,
             cp.list_bot_readiness() if hasattr(cp, "list_bot_readiness") else None,
         )
+        projects = _attach_project_chat_tool_access(projects, cp)
     return render_template("projects.html", projects=projects, error=error)
 
 
