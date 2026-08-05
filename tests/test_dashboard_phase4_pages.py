@@ -1877,6 +1877,8 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                     "inline_coding_default": True,
                     "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
                     "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                    "browser_action_allowlist": ["lesson_preview.read"],
+                    "browser_action_owner_approval_required": ["lesson_preview.read"],
                 },
             }
 
@@ -1938,11 +1940,15 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"repo_search" in resp.data
     assert b"Action Scope" in resp.data
     assert b"site/API actions" in resp.data
+    assert b"browser actions" in resp.data
     assert b"repo edits" in resp.data
     assert b"owner approval gates" in resp.data
     assert b"Connection Actions" in resp.data
     assert b"Owner Approval Actions" in resp.data
     assert b"globeiq-agent-api.updateLesson" in resp.data
+    assert b"Browser Actions" in resp.data
+    assert b"Browser Owner Approval Actions" in resp.data
+    assert b"lesson_preview.read" in resp.data
     assert b"repo search" in resp.data
     assert b"filesystem" in resp.data
     assert b'id="bot-chat-profile-mode"' in resp.data

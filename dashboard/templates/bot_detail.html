@@ -212,19 +212,24 @@
   {% set repo_mode = (policy.repo_output_mode if policy else 'deny') or 'deny' %}
   {% set connection_actions = policy.connection_action_allowlist if policy and policy.connection_action_allowlist else [] %}
   {% set approval_actions = policy.connection_action_owner_approval_required if policy and policy.connection_action_owner_approval_required else [] %}
+  {% set browser_actions = policy.browser_action_allowlist if policy and policy.browser_action_allowlist else [] %}
+  {% set browser_approval_actions = policy.browser_action_owner_approval_required if policy and policy.browser_action_owner_approval_required else [] %}
   <div class="split-grid" style="grid-template-columns:1fr 1fr;">
     <div>
       <div><strong>Action Scope:</strong>
         {% if connection_actions %}<span class="badge badge-info">site/API actions</span>{% endif %}
+        {% if browser_actions %}<span class="badge badge-info">browser actions</span>{% endif %}
         {% if repo_mode == 'allow' %}<span class="badge badge-warning">repo edits</span>{% endif %}
         {% if policy and policy.can_apply_db_actions %}<span class="badge badge-warning">database actions</span>{% endif %}
-        {% if approval_actions %}<span class="badge badge-warning">owner approval gates</span>{% endif %}
-        {% if not connection_actions and repo_mode != 'allow' and not (policy and policy.can_apply_db_actions) %}<span class="badge badge-disabled">chat/planning only</span>{% endif %}
+        {% if approval_actions or browser_approval_actions %}<span class="badge badge-warning">owner approval gates</span>{% endif %}
+        {% if not connection_actions and not browser_actions and repo_mode != 'allow' and not (policy and policy.can_apply_db_actions) %}<span class="badge badge-disabled">chat/planning only</span>{% endif %}
       </div>
       <div><strong>Repo Output Mode:</strong> {{ repo_mode }}</div>
       <div><strong>Required Worker Tools:</strong> {{ policy.required_worker_tools | join(', ') if policy and policy.required_worker_tools else 'none' }}</div>
       <div><strong>Connection Actions:</strong> {{ connection_actions | join(', ') if connection_actions else 'none' }}</div>
       <div><strong>Owner Approval Actions:</strong> {{ approval_actions | join(', ') if approval_actions else 'none' }}</div>
+      <div><strong>Browser Actions:</strong> {{ browser_actions | join(', ') if browser_actions else 'none' }}</div>
+      <div><strong>Browser Owner Approval Actions:</strong> {{ browser_approval_actions | join(', ') if browser_approval_actions else 'none' }}</div>
       <div><strong>Can Apply DB Actions:</strong> {{ 'yes' if policy and policy.can_apply_db_actions else 'no' }}</div>
       <div><strong>Allow Run Result Ingest:</strong> {{ 'yes' if not policy or policy.allow_run_result_ingest else 'no' }}</div>
     </div>

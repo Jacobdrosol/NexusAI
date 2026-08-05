@@ -34,7 +34,11 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 "role": "browser-inspector",
                 "enabled": True,
                 "backends": [{"worker_id": "browser-worker", "type": "browser"}],
-                "execution_policy": {"required_worker_tools": ["browser-ui"]},
+                "execution_policy": {
+                    "required_worker_tools": ["browser-ui"],
+                    "browser_action_allowlist": ["question_bank.patch_existing"],
+                    "browser_action_owner_approval_required": ["question_bank.patch_existing"],
+                },
             },
             {
                 "id": "ready-bot",
@@ -97,10 +101,16 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert status["summary"]["disabled"] == 1
     assert status["summary"]["tooling_bot_count"] == 1
     assert status["summary"]["connection_action_bot_count"] == 1
+    assert status["summary"]["browser_action_bot_count"] == 1
     assert status["summary"]["owner_approval_action_count"] == 1
+    assert status["summary"]["browser_owner_approval_action_count"] == 1
     assert status["summary"]["http_connection_backend_count"] == 1
     assert status["required_tools"] == [{"tool": "browser-ui", "bot_count": 1}]
     assert status["connection_actions"] == [{"action": "globeiq-agent-api.updateLesson", "bot_count": 1}]
+    assert status["browser_actions"] == [{"action": "question_bank.patch_existing", "bot_count": 1}]
+    browser_row = next(row for row in status["rows"] if row["bot_id"] == "browser-bot")
+    assert browser_row["browser_actions"] == ["question_bank.patch_existing"]
+    assert browser_row["browser_owner_approval_actions"] == ["question_bank.patch_existing"]
     connection_row = next(row for row in status["rows"] if row["bot_id"] == "connection-bot")
     assert connection_row["connection_actions"] == ["globeiq-agent-api.updateLesson"]
     assert connection_row["owner_approval_actions"] == ["globeiq-agent-api.updateLesson"]
@@ -127,7 +137,11 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
                     "role": "browser-inspector",
                     "enabled": True,
                     "backends": [{"worker_id": "browser-worker", "type": "browser"}],
-                    "execution_policy": {"required_worker_tools": ["browser-ui"]},
+                    "execution_policy": {
+                        "required_worker_tools": ["browser-ui"],
+                        "browser_action_allowlist": ["question_bank.patch_existing"],
+                        "browser_action_owner_approval_required": ["question_bank.patch_existing"],
+                    },
                 },
                 {
                     "id": "connection-bot",
@@ -189,14 +203,19 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"site account can exist" in page.data
     assert b"browser-ui" in page.data
     assert b"Connection Action Bots" in page.data
+    assert b"Browser Action Bots" in page.data
     assert b"Connection actions" in page.data
+    assert b"Browser actions" in page.data
     assert b"globeiq-agent-api.updateLesson" in page.data
+    assert b"question_bank.patch_existing" in page.data
     assert b"Owner approval: 1" in page.data
+    assert b"Browser owner approval: 1" in page.data
     assert b"Context: globeiq-agent-api" in page.data
     assert api.status_code == 200
     payload = api.get_json()
     assert payload["summary"]["blocked"] == 1
     assert payload["summary"]["connection_action_bot_count"] == 1
+    assert payload["summary"]["browser_action_bot_count"] == 1
     assert payload["blocked_groups"][0]["category"] == "browser_session"
     assert payload["blocked_groups"][0]["label"] == "Authenticated browser session"
 

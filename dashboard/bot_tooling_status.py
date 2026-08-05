@@ -61,7 +61,7 @@ def _worker_ids(bot: dict[str, Any]) -> list[str]:
     return ids
 
 
-def _connection_actions(bot: dict[str, Any], key: str) -> list[str]:
+def _policy_actions(bot: dict[str, Any], key: str) -> list[str]:
     policy = _as_dict(bot.get("execution_policy"))
     actions = []
     for action in _as_list(policy.get(key)):
@@ -174,6 +174,7 @@ def build_bot_tooling_status(
     state_counts: Counter[str] = Counter()
     tool_counts: Counter[str] = Counter()
     connection_action_counts: Counter[str] = Counter()
+    browser_action_counts: Counter[str] = Counter()
     blocker_counts: Counter[str] = Counter()
     blocked_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     rows: list[dict[str, Any]] = []
@@ -192,10 +193,14 @@ def build_bot_tooling_status(
         tools = _required_tools(bot)
         for tool in tools:
             tool_counts[tool] += 1
-        connection_actions = _connection_actions(bot, "connection_action_allowlist")
-        owner_approval_actions = _connection_actions(bot, "connection_action_owner_approval_required")
+        connection_actions = _policy_actions(bot, "connection_action_allowlist")
+        owner_approval_actions = _policy_actions(bot, "connection_action_owner_approval_required")
+        browser_actions = _policy_actions(bot, "browser_action_allowlist")
+        browser_owner_approval_actions = _policy_actions(bot, "browser_action_owner_approval_required")
         for action in connection_actions:
             connection_action_counts[action] += 1
+        for action in browser_actions:
+            browser_action_counts[action] += 1
         connection_backend_count = _connection_backend_count(bot)
         connection_context = _connection_context_label(bot)
         worker_ids = _worker_ids(bot)
@@ -226,6 +231,8 @@ def build_bot_tooling_status(
             "required_tools": tools,
             "connection_actions": connection_actions,
             "owner_approval_actions": owner_approval_actions,
+            "browser_actions": browser_actions,
+            "browser_owner_approval_actions": browser_owner_approval_actions,
             "connection_backend_count": connection_backend_count,
             "connection_context": connection_context,
             "worker_ids": worker_ids,
@@ -255,6 +262,8 @@ def build_bot_tooling_status(
             "tooling_bot_count": sum(1 for row in rows if row["required_tools"]),
             "connection_action_bot_count": sum(1 for row in rows if row["connection_actions"]),
             "owner_approval_action_count": sum(len(row["owner_approval_actions"]) for row in rows),
+            "browser_action_bot_count": sum(1 for row in rows if row["browser_actions"]),
+            "browser_owner_approval_action_count": sum(len(row["browser_owner_approval_actions"]) for row in rows),
             "http_connection_backend_count": sum(row["connection_backend_count"] for row in rows),
         },
         "state_counts": dict(state_counts),
@@ -265,6 +274,10 @@ def build_bot_tooling_status(
         "connection_actions": [
             {"action": action, "bot_count": int(count)}
             for action, count in sorted(connection_action_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "browser_actions": [
+            {"action": action, "bot_count": int(count)}
+            for action, count in sorted(browser_action_counts.items(), key=lambda item: (-item[1], item[0]))
         ],
         "blocked_groups": [
             {

@@ -58,6 +58,10 @@
       <div class="card-label">Connection Action Bots</div>
       <div class="card-value card-blue">{{ tooling_summary.connection_action_bot_count or 0 }}</div>
     </div>
+    <div class="card">
+      <div class="card-label">Browser Action Bots</div>
+      <div class="card-value card-blue">{{ tooling_summary.browser_action_bot_count or 0 }}</div>
+    </div>
   </div>
   <div class="split-grid bot-tooling-grid">
     <div>
@@ -111,6 +115,21 @@
             <tr><td><code>{{ row.action }}</code></td><td>{{ row.bot_count }}</td></tr>
             {% else %}
             <tr><td colspan="2" class="empty">No bot-scoped connection mutations are currently allowlisted.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <h3 class="panel-title">Browser Actions</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Action</th><th>Bots</th></tr></thead>
+          <tbody>
+            {% for row in tooling.browser_actions or [] %}
+            <tr><td><code>{{ row.action }}</code></td><td>{{ row.bot_count }}</td></tr>
+            {% else %}
+            <tr><td colspan="2" class="empty">No bot-scoped browser mutations are currently allowlisted.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -173,8 +192,14 @@
         {% if bot_tooling and bot_tooling.connection_actions %}
         <div class="metrics">Connection actions: {{ bot_tooling.connection_actions | length }}</div>
         {% endif %}
+        {% if bot_tooling and bot_tooling.browser_actions %}
+        <div class="metrics">Browser actions: {{ bot_tooling.browser_actions | length }}</div>
+        {% endif %}
         {% if bot_tooling and bot_tooling.owner_approval_actions %}
         <div class="metrics">Owner approval: {{ bot_tooling.owner_approval_actions | length }}</div>
+        {% endif %}
+        {% if bot_tooling and bot_tooling.browser_owner_approval_actions %}
+        <div class="metrics">Browser owner approval: {{ bot_tooling.browser_owner_approval_actions | length }}</div>
         {% endif %}
         {% if bot_tooling and bot_tooling.connection_context %}
         <div class="metrics">Context: {{ bot_tooling.connection_context }}</div>
