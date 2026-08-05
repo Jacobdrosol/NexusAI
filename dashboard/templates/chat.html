@@ -812,6 +812,7 @@
           <input type="checkbox" id="create-convo-tool-repo-search" name="tool_access_repo_search">
           <span>Allow repo semantic search</span>
         </label>
+        <p class="mini-note" id="create-convo-tool-summary">Workspace tools require a project-scoped chat.</p>
       </div>
       <div class="modal-actions">
         <button type="submit" class="btn btn-primary">Create</button>
@@ -1294,7 +1295,14 @@ function syncCreateConversationToolFields() {
   const enabled = document.getElementById('create-convo-tool-enabled');
   const filesystem = document.getElementById('create-convo-tool-filesystem');
   const repo = document.getElementById('create-convo-tool-repo-search');
-  const isEnabled = !!enabled?.checked;
+  const summary = document.getElementById('create-convo-tool-summary');
+  const scope = document.getElementById('create-convo-scope')?.value || 'global';
+  const scopedToProject = scope === 'project' || scope === 'bridged';
+  if (enabled) {
+    enabled.disabled = !scopedToProject;
+    if (!scopedToProject) enabled.checked = false;
+  }
+  const isEnabled = scopedToProject && !!enabled?.checked;
   if (filesystem) {
     filesystem.disabled = !isEnabled;
     if (!isEnabled) filesystem.checked = false;
@@ -1302,6 +1310,15 @@ function syncCreateConversationToolFields() {
   if (repo) {
     repo.disabled = !isEnabled;
     if (!isEnabled) repo.checked = false;
+  }
+  if (summary) {
+    if (!scopedToProject) {
+      summary.textContent = 'Workspace tools require a project-scoped chat.';
+    } else if (!isEnabled) {
+      summary.textContent = 'Tool access is off for this chat. Enable it only when the selected bot and project policy allow tools.';
+    } else {
+      summary.textContent = 'Tool access is requested for this chat and still must pass bot and project policy gates at send time.';
+    }
   }
 }
 
@@ -3049,6 +3066,7 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
       .map((opt) => opt.value)
       .filter((value) => value && value !== projectId);
   }
+  const scopedToolAccessAllowed = scope === 'project' || scope === 'bridged';
   const res = await fetch('/api/chat/conversations', {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
@@ -3061,9 +3079,9 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
       default_model_id: requestedDefaultModelId || null,
       memory_profiles_enabled: !!document.getElementById('create-convo-memory-enabled')?.checked,
       memory_profile_id: fd.get('memory_profile_id') || 'default',
-      tool_access_enabled: !!document.getElementById('create-convo-tool-enabled')?.checked,
-      tool_access_filesystem: !!document.getElementById('create-convo-tool-filesystem')?.checked,
-      tool_access_repo_search: !!document.getElementById('create-convo-tool-repo-search')?.checked
+      tool_access_enabled: scopedToolAccessAllowed && !!document.getElementById('create-convo-tool-enabled')?.checked,
+      tool_access_filesystem: scopedToolAccessAllowed && !!document.getElementById('create-convo-tool-filesystem')?.checked,
+      tool_access_repo_search: scopedToolAccessAllowed && !!document.getElementById('create-convo-tool-repo-search')?.checked
     }),
   });
   if (!res.ok) {
@@ -3960,7 +3978,10 @@ bindConversationActions();
 document.getElementById('chat-project-filter')?.addEventListener('change', function() {
   window.location = buildChatUrl({project_id: this.value});
 });
-document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
+document.getElementById('create-convo-scope')?.addEventListener('change', () => {
+  syncConversationScopeFields();
+  syncCreateConversationToolFields();
+});
 document.getElementById('create-convo-project-id')?.addEventListener('change', syncConversationScopeFields);
 document.getElementById('create-convo-bridged-primary')?.addEventListener('change', syncConversationScopeFields);
 document.getElementById('create-convo-default-bot-id')?.addEventListener('change', updateCreateConversationBotSummary);
