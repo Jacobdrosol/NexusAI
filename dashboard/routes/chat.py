@@ -2364,7 +2364,7 @@ def api_list_messages(conversation_id: str):
     messages = _cp_list_messages_safe(cp, conversation_id, limit=limit)
     if messages is None:
         return _cp_error_response(cp, "chat messages unavailable")
-    return jsonify(messages)
+    return jsonify(_normalize_message_rows(messages))
 
 
 @bp.post("/api/chat/stream")

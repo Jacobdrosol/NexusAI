@@ -3771,6 +3771,49 @@ def test_chat_message_api_proxies_attachments(dashboard_client):
     assert seen["body"]["attachments"][0]["name"] == "notes.md"
 
 
+def test_chat_messages_api_sanitizes_attachment_preview_urls(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_messages(self, conversation_id, limit=None):
+            assert conversation_id == "c1"
+            return [
+                {
+                    "id": "m1",
+                    "role": "user",
+                    "content": "see attachment",
+                    "metadata": {
+                        "attachments": [
+                            {
+                                "name": "unsafe.svg",
+                                "mime_type": "image/svg+xml",
+                                "kind": "image",
+                                "data_url": "javascript:alert(1)",
+                                "size_bytes": 512,
+                            },
+                            {
+                                "name": "screen.png",
+                                "mime_type": "image/png",
+                                "kind": "image",
+                                "data_url": "data:image/png;base64,aGVsbG8=",
+                                "size_bytes": 1024,
+                            },
+                        ]
+                    },
+                }
+            ]
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/chat/conversations/c1/messages")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    attachments = body[0]["metadata"]["attachments"]
+    assert attachments[0]["name"] == "unsafe.svg"
+    assert "data_url" not in attachments[0]
+    assert attachments[1]["data_url"] == "data:image/png;base64,aGVsbG8="
+
+
 def test_chat_message_api_blocks_invalid_attachment_payload(dashboard_client):
     _login_admin(dashboard_client)
 
