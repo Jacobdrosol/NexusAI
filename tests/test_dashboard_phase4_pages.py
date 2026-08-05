@@ -3182,6 +3182,55 @@ def test_chat_stream_api_blocks_oversized_context_item_id(dashboard_client):
     assert b"context_item_ids entries are limited to 256 characters" in resp.data
 
 
+def test_chat_stream_api_proxies_string_context_and_vault_ids(dashboard_client):
+    _login_admin(dashboard_client)
+    captured: dict[str, object] = {}
+
+    class FakeStreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield "event: done"
+            yield 'data: {"ok":true}'
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+    def _fake_post(url, json=None, headers=None, stream=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        return FakeStreamResponse()
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={
+                "conversation_id": "c1",
+                "content": "hello",
+                "context_items": ["Chat: prior notes"],
+                "context_item_ids": ["vault-1"],
+                "include_project_context": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert captured["url"].endswith("/v1/chat/conversations/c1/stream")
+    assert captured["json"]["context_items"] == ["Chat: prior notes"]
+    assert captured["json"]["context_item_ids"] == ["vault-1"]
+    assert captured["json"]["include_project_context"] is True
+
+
 def test_chat_message_api_blocks_image_attachment_for_text_only_effective_model(dashboard_client):
     _login_admin(dashboard_client)
 

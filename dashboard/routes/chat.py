@@ -1752,58 +1752,82 @@ def api_update_conversation_route_defaults(conversation_id: str):
     return jsonify(updated)
 
 
-@bp.post("/api/chat/messages")
-@login_required
-def api_send_message():
-    data: dict[str, Any] = request.get_json(force=True) or {}
+def _base_chat_send_request(data: dict[str, Any]) -> tuple[Any | None, str, str, list[Any]]:
     conversation_id = (data.get("conversation_id") or "").strip()
     content = (data.get("content") or "").strip()
     attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
     if not conversation_id or (not content and not attachments):
-        return jsonify({"error": "conversation_id and either content or attachments are required"}), 400
+        return jsonify({"error": "conversation_id and either content or attachments are required"}), "", "", []
     content_blocker = _message_content_blocker(content)
     if content_blocker:
-        return jsonify({"error": f"Invalid message content: {content_blocker}"}), 400
+        return jsonify({"error": f"Invalid message content: {content_blocker}"}), "", "", []
     attachment_blocker = _attachment_payload_blocker(data.get("attachments"))
     if attachment_blocker:
-        return jsonify({"error": f"Invalid attachments: {attachment_blocker}"}), 400
+        return jsonify({"error": f"Invalid attachments: {attachment_blocker}"}), "", "", []
     context_blocker = _context_payload_blocker(data.get("context_items"), data.get("context_item_ids"))
     if context_blocker:
-        return jsonify({"error": f"Invalid context payload: {context_blocker}"}), 400
-    cp = get_cp_client()
+        return jsonify({"error": f"Invalid context payload: {context_blocker}"}), "", "", []
+    return None, conversation_id, content, attachments
+
+
+def _validated_chat_send_payload(
+    cp: Any,
+    data: dict[str, Any],
+    *,
+    conversation_id: str,
+    content: str,
+    attachments: list[Any],
+) -> tuple[Any | None, dict[str, Any]]:
     bot_id = str(data.get("bot_id") or "").strip()
     readiness_bot_id = bot_id or _conversation_default_bot_id_from_cp(cp, conversation_id)
     readiness_blocker = _bot_readiness_blocker_from_cp(cp, readiness_bot_id)
     if readiness_blocker:
-        return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), 409
+        return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), {}
     image_model_blocker = _image_attachment_model_blocker_from_cp(cp, conversation_id, bot_id, attachments)
     if image_model_blocker:
-        return jsonify({"error": f"Image attachments are not available: {image_model_blocker}"}), 409
+        return jsonify({"error": f"Image attachments are not available: {image_model_blocker}"}), {}
     use_workspace_tools = _request_bool(data.get("use_workspace_tools", False))
     if use_workspace_tools:
         tool_blocker = _workspace_tool_request_blocker_from_cp(cp, conversation_id, bot_id)
         if tool_blocker:
-            return jsonify({"error": f"Workspace tools are not available: {tool_blocker}"}), 409
+            return jsonify({"error": f"Workspace tools are not available: {tool_blocker}"}), {}
     inline_coding_enabled = _request_bool(data.get("inline_coding_enabled", False))
     if inline_coding_enabled:
         coding_blocker = _inline_coding_request_blocker_from_cp(cp, conversation_id, bot_id)
         if coding_blocker:
-            return jsonify({"error": f"Inline coding is not available: {coding_blocker}"}), 409
+            return jsonify({"error": f"Inline coding is not available: {coding_blocker}"}), {}
 
-    resp = cp.post_message(
-        conversation_id,
-        {
-            "content": content,
-            "bot_id": bot_id or data.get("bot_id"),
-            "user_id": _current_memory_user_id(),
-            "attachments": attachments,
-            "context_items": data.get("context_items"),
-            "context_item_ids": data.get("context_item_ids"),
-            "include_project_context": data.get("include_project_context", False),
-            "use_workspace_tools": use_workspace_tools,
-            "inline_coding_enabled": inline_coding_enabled,
-        },
+    return None, {
+        "content": content,
+        "bot_id": bot_id or data.get("bot_id"),
+        "user_id": _current_memory_user_id(),
+        "attachments": attachments,
+        "context_items": data.get("context_items"),
+        "context_item_ids": data.get("context_item_ids"),
+        "include_project_context": data.get("include_project_context", False),
+        "use_workspace_tools": use_workspace_tools,
+        "inline_coding_enabled": inline_coding_enabled,
+    }
+
+
+@bp.post("/api/chat/messages")
+@login_required
+def api_send_message():
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    base_error, conversation_id, content, attachments = _base_chat_send_request(data)
+    if base_error is not None:
+        return base_error, 400
+    cp = get_cp_client()
+    payload_error, payload = _validated_chat_send_payload(
+        cp,
+        data,
+        conversation_id=conversation_id,
+        content=content,
+        attachments=attachments,
     )
+    if payload_error is not None:
+        return payload_error, 409
+    resp = cp.post_message(conversation_id, payload)
     if resp is None:
         return _cp_error_response(cp, "chat message failed")
     return jsonify(resp)
@@ -2006,57 +2030,25 @@ def api_list_messages(conversation_id: str):
 @login_required
 def api_send_message_stream():
     data: dict[str, Any] = request.get_json(force=True) or {}
-    conversation_id = (data.get("conversation_id") or "").strip()
-    content = (data.get("content") or "").strip()
-    attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
-    if not conversation_id or (not content and not attachments):
-        return jsonify({"error": "conversation_id and either content or attachments are required"}), 400
-    content_blocker = _message_content_blocker(content)
-    if content_blocker:
-        return jsonify({"error": f"Invalid message content: {content_blocker}"}), 400
-    attachment_blocker = _attachment_payload_blocker(data.get("attachments"))
-    if attachment_blocker:
-        return jsonify({"error": f"Invalid attachments: {attachment_blocker}"}), 400
-    context_blocker = _context_payload_blocker(data.get("context_items"), data.get("context_item_ids"))
-    if context_blocker:
-        return jsonify({"error": f"Invalid context payload: {context_blocker}"}), 400
-
+    base_error, conversation_id, content, attachments = _base_chat_send_request(data)
+    if base_error is not None:
+        return base_error, 400
     cp = get_cp_client()
-    bot_id = str(data.get("bot_id") or "").strip()
-    readiness_bot_id = bot_id or _conversation_default_bot_id_from_cp(cp, conversation_id)
-    readiness_blocker = _bot_readiness_blocker_from_cp(cp, readiness_bot_id)
-    if readiness_blocker:
-        return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), 409
-    image_model_blocker = _image_attachment_model_blocker_from_cp(cp, conversation_id, bot_id, attachments)
-    if image_model_blocker:
-        return jsonify({"error": f"Image attachments are not available: {image_model_blocker}"}), 409
-    use_workspace_tools = _request_bool(data.get("use_workspace_tools", False))
-    if use_workspace_tools:
-        tool_blocker = _workspace_tool_request_blocker_from_cp(cp, conversation_id, bot_id)
-        if tool_blocker:
-            return jsonify({"error": f"Workspace tools are not available: {tool_blocker}"}), 409
-    inline_coding_enabled = _request_bool(data.get("inline_coding_enabled", False))
-    if inline_coding_enabled:
-        coding_blocker = _inline_coding_request_blocker_from_cp(cp, conversation_id, bot_id)
-        if coding_blocker:
-            return jsonify({"error": f"Inline coding is not available: {coding_blocker}"}), 409
+    payload_error, payload = _validated_chat_send_payload(
+        cp,
+        data,
+        conversation_id=conversation_id,
+        content=content,
+        attachments=attachments,
+    )
+    if payload_error is not None:
+        return payload_error, 409
     cp_base = (
         cp.base_url
         if hasattr(cp, "base_url")
         else os.environ.get("CONTROL_PLANE_URL", "http://localhost:8000")
     )
     stream_url = f"{cp_base.rstrip('/')}/v1/chat/conversations/{conversation_id}/stream"
-    payload = {
-        "content": content,
-        "bot_id": bot_id or data.get("bot_id"),
-        "user_id": _current_memory_user_id(),
-        "attachments": attachments,
-        "context_items": data.get("context_items"),
-        "context_item_ids": data.get("context_item_ids"),
-        "include_project_context": data.get("include_project_context", False),
-        "use_workspace_tools": use_workspace_tools,
-        "inline_coding_enabled": inline_coding_enabled,
-    }
 
     heartbeat_seconds = os.environ.get("CHAT_STREAM_HEARTBEAT_SECONDS", "15")
 
