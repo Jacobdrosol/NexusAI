@@ -219,6 +219,13 @@
               {% if lane.lane_health %}
               <div><span class="badge {% if lane.lane_health.level == 'critical' %}badge-failed{% elif lane.lane_health.level == 'warning' %}badge-yellow{% elif lane.lane_health.level == 'paused' %}badge-queued{% elif lane.lane_health.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">{{ lane.lane_health.label }}</span></div>
               {% endif %}
+              {% set action = lane.recommended_action or {} %}
+              {% if action %}
+              <div class="mini-note">
+                Action:
+                <span class="badge {% if action.level == 'critical' %}badge-failed{% elif action.level == 'warning' %}badge-yellow{% elif action.level == 'paused' %}badge-queued{% elif action.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">{{ action.label }}</span>
+              </div>
+              {% endif %}
             </td>
             <td>{{ lane.active }}</td>
             <td>{{ lane.oldest_active_label }}</td>
@@ -240,6 +247,13 @@
               <div class="mini-note"><code>{{ lane.manager_id }}</code></div>
               {% if lane.lane_health %}
               <div><span class="badge {% if lane.lane_health.level == 'critical' %}badge-failed{% elif lane.lane_health.level == 'warning' %}badge-yellow{% elif lane.lane_health.level == 'paused' %}badge-queued{% elif lane.lane_health.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">{{ lane.lane_health.label }}</span></div>
+              {% endif %}
+              {% set action = lane.recommended_action or {} %}
+              {% if action %}
+              <div class="mini-note">
+                Action:
+                <span class="badge {% if action.level == 'critical' %}badge-failed{% elif action.level == 'warning' %}badge-yellow{% elif action.level == 'paused' %}badge-queued{% elif action.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">{{ action.label }}</span>
+              </div>
               {% endif %}
             </td>
             <td>
@@ -265,6 +279,13 @@
               <div class="mini-note"><code>{{ lane.manager_id }}</code></div>
               {% if lane.lane_health %}
               <div><span class="badge {% if lane.lane_health.level == 'critical' %}badge-failed{% elif lane.lane_health.level == 'warning' %}badge-yellow{% elif lane.lane_health.level == 'paused' %}badge-queued{% elif lane.lane_health.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">{{ lane.lane_health.label }}</span></div>
+              {% endif %}
+              {% set action = lane.recommended_action or {} %}
+              {% if action %}
+              <div class="mini-note">
+                Action:
+                <span class="badge {% if action.level == 'critical' %}badge-failed{% elif action.level == 'warning' %}badge-yellow{% elif action.level == 'paused' %}badge-queued{% elif action.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">{{ action.label }}</span>
+              </div>
               {% endif %}
             </td>
             <td><span class="badge badge-failed">{{ lane.problem }}</span></td>

@@ -283,3 +283,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance tests/test_dashboard_phase4_pages.py::test_chat_page_resolves_id_only_message_provenance_labels tests/test_dashboard_phase4_pages.py::test_chat_page_renders_project_filter_metadata_on_conversations -q` passed for Batch 129 message provenance label resolution.
 - Batch 130: made disabled-bot activation blockers actionable on the Bots page by adding a Disabled Needs Fix table filter and row-level enable-blocker details.
 - `pytest tests/test_bot_tooling_status.py -q` passed for Batch 130 disabled activation-blocker row visibility.
+- Batch 131: added recommended operator actions to the Work page top active, waiting, and problem lane rows and included those actions in the operations brief payload.
+- `pytest tests/test_work_overview.py::test_work_overview_groups_tasks_by_project_and_manager tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 131 Work brief lane actions.

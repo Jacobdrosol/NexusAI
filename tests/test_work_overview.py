@@ -625,6 +625,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Top Active Lanes" in resp.data
     assert b"Top Waiting Lanes" in resp.data
     assert b"Top Problem Lanes" in resp.data
+    assert b"Action:" in resp.data
     assert b"capacity ready" in resp.data
     assert b"Attention Breakdown" in resp.data
     assert b"Attention Lanes" in resp.data
@@ -762,7 +763,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert data["operations_brief"]["top_active_lanes"][0]["project_id"] == "globeiq"
     assert data["operations_brief"]["lane_health_counts"]["critical"] == 1
     assert data["operations_brief"]["top_active_lanes"][0]["lane_health"]["level"] == "critical"
+    assert data["operations_brief"]["top_active_lanes"][0]["recommended_action"]["label"] == "review failed output"
+    assert data["operations_brief"]["top_waiting_lanes"][0]["recommended_action"]["label"] == "review failed output"
     assert data["operations_brief"]["top_problem_lanes"][0]["manager_id"] == "globeiq-pm"
+    assert data["operations_brief"]["top_problem_lanes"][0]["recommended_action"]["level"] == "critical"
     assert data["attention_lanes"][0]["recommended_action"]["label"] == "review failed output"
     assert data["queue_pressure_lanes"][0]["recommended_action"]["label"] == "unblock before adding work"
     assert data["attention"]["problem_tasks"] == 1

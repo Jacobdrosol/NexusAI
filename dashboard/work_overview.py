@@ -764,6 +764,7 @@ def _operations_brief(
             manager_totals = manager.get("totals") if isinstance(manager.get("totals"), dict) else {}
             manager_freshness = manager.get("freshness") if isinstance(manager.get("freshness"), dict) else {}
             lane_health = manager.get("lane_health") if isinstance(manager.get("lane_health"), dict) else {}
+            route_evidence = manager.get("route_evidence") if isinstance(manager.get("route_evidence"), dict) else {}
             row = {
                 "project_id": project_id,
                 "project_name": project_name,
@@ -781,6 +782,14 @@ def _operations_brief(
                 "held": bool(manager.get("held")),
                 "lane_health": lane_health,
             }
+            row["recommended_action"] = _attention_lane_action(
+                problem=row["problem"],
+                stale=row["stale"],
+                route_gaps=_safe_int(route_evidence.get("missing_active_problem_count")),
+                held=row["held"],
+                active=row["active"],
+                waiting=row["waiting"],
+            )
             if row["active"]:
                 active_lanes.append(row)
             if row["waiting"]:
