@@ -1936,6 +1936,10 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"Personal Memory" in resp.data
     assert b"enabled" in resp.data
     assert b"repo_search" in resp.data
+    assert b"Action Scope" in resp.data
+    assert b"site/API actions" in resp.data
+    assert b"repo edits" in resp.data
+    assert b"owner approval gates" in resp.data
     assert b"Connection Actions" in resp.data
     assert b"Owner Approval Actions" in resp.data
     assert b"globeiq-agent-api.updateLesson" in resp.data
