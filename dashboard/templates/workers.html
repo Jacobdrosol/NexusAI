@@ -25,6 +25,42 @@
         {% if w.probe %}
         <span class="badge badge-{{ w.probe.status }}" title="{{ w.probe.detail }}">{{ w.probe.status }}</span>
         <div class="metrics">{{ w.probe.checked_at or 'not yet checked' }}</div>
+        {% set evidence = w.probe.runtime_evidence if w.probe.runtime_evidence else {} %}
+        {% if evidence %}
+        {% set browser = evidence.browser or {} %}
+        <div class="metrics">
+          Browser:
+          {% if browser.configured and browser.ready %}
+          {{ browser.name or 'ready' }}
+          {% elif browser.configured %}
+          blocked{% if browser.reason %} ({{ browser.reason }}){% endif %}
+          {% else %}
+          not configured
+          {% endif %}
+        </div>
+        <div class="metrics">
+          CLI:
+          {% if evidence.unauthenticated_cli_tools %}
+          auth needed for {{ evidence.unauthenticated_cli_tools | join(', ') }}
+          {% elif evidence.unavailable_cli_tools %}
+          unavailable {{ evidence.unavailable_cli_tools | join(', ') }}
+          {% elif evidence.enabled_cli_tools %}
+          {{ evidence.enabled_cli_tools | join(', ') }}
+          {% elif evidence.installed_cli_tools %}
+          installed {{ evidence.installed_cli_tools | join(', ') }}
+          {% else %}
+          none attested
+          {% endif %}
+        </div>
+        {% if evidence.provider_status %}
+        <div class="metrics">
+          Providers:
+          {% for provider in evidence.provider_status %}
+          {{ provider.provider }} {{ 'ok' if provider.configured else 'missing' }}{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% endif %}
         {% else %}
         <span class="badge badge-unknown">unknown</span>
         <div class="metrics">not yet checked</div>

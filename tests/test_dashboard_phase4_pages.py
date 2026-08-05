@@ -2748,6 +2748,62 @@ def test_worker_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Last Heartbeat" in resp.data
 
 
+def test_workers_page_surfaces_runtime_tool_evidence(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_workers(self):
+            return [
+                {
+                    "id": "nexus-browser-worker",
+                    "name": "Nexus Browser Worker",
+                    "host": "100.81.64.82",
+                    "port": 8080,
+                    "status": "online",
+                    "enabled": True,
+                    "runtime_limits": {"cpus": 4, "memory_limit": "8g", "pids_limit": 512},
+                    "last_heartbeat_at": "2026-08-04T21:10:00+00:00",
+                    "capabilities": [],
+                }
+            ]
+
+        def list_worker_probes(self):
+            return {
+                "probes": [
+                    {
+                        "worker_id": "nexus-browser-worker",
+                        "probe_status": "ready",
+                        "checked_at": "2026-08-04T21:11:00+00:00",
+                        "capability_attestation": {
+                            "provider_credentials": {
+                                "brave_search": False,
+                                "ollama_cloud": True,
+                            },
+                            "installed_cli_tools": ["git", "node"],
+                            "enabled_cli_tools": ["git"],
+                            "unauthenticated_cli_tools": ["claude"],
+                            "browser": {
+                                "configured": True,
+                                "ready": False,
+                                "reason": "browser_session_check_failed",
+                            },
+                        },
+                    }
+                ]
+            }
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/workers")
+
+    assert resp.status_code == 200
+    assert b"Nexus Browser Worker" in resp.data
+    assert b"browser_session_check_failed" in resp.data
+    assert b"auth needed for claude" in resp.data
+    assert b"brave_search missing" in resp.data
+    assert b"ollama_cloud ok" in resp.data
+    assert b"secret" not in resp.data.lower()
+
+
 def test_worker_probe_view_exposes_nonsecret_cli_authentication_blockers():
     from dashboard.routes.workers import _worker_probe_view
 
