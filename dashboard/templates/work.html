@@ -329,6 +329,25 @@
       </div>
       <div class="table-wrap" style="margin-top:0.75rem;">
         <table>
+          <thead><tr><th>Project</th><th>Manager</th><th>Bot</th><th>Tokens</th><th>Measured</th><th>Missing</th></tr></thead>
+          <tbody>
+            {% for row in usage.by_project_manager_bot[:10] %}
+            <tr>
+              <td><code>{{ row.project_id }}</code></td>
+              <td><code>{{ row.manager_id }}</code></td>
+              <td><code>{{ row.bot_id }}</code></td>
+              <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
+              <td>{{ row.tasks_with_usage }}</td>
+              <td>{{ row.tasks_without_usage }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="empty">No project/manager/bot token usage in the selected window</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap" style="margin-top:0.75rem;">
+        <table>
           <thead><tr><th>Provider</th><th>Model</th><th>Tokens</th><th>Measured</th><th>Missing</th></tr></thead>
           <tbody>
             {% for row in usage.by_provider_model[:10] %}

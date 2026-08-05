@@ -43,6 +43,7 @@ def _empty_usage_summary() -> dict[str, Any]:
         },
         "by_project": [],
         "by_manager": [],
+        "by_project_manager_bot": [],
         "by_bot": [],
         "by_provider_model": [],
     }
@@ -58,7 +59,7 @@ def _normalize_usage_summary(summary: Any) -> dict[str, Any]:
     totals = summary.get("totals")
     if isinstance(totals, dict):
         normalized["totals"] = {**normalized["totals"], **totals}
-    for key in ("by_project", "by_manager", "by_bot", "by_provider_model"):
+    for key in ("by_project", "by_manager", "by_project_manager_bot", "by_bot", "by_provider_model"):
         value = summary.get(key)
         normalized[key] = value if isinstance(value, list) else []
     return normalized
@@ -160,6 +161,7 @@ def _usage_brief(usage: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
         "top_provider_models": _top_rows("by_provider_model"),
         "top_projects": _top_rows("by_project"),
         "top_managers": _top_rows("by_manager"),
+        "top_project_manager_bots": _top_rows("by_project_manager_bot"),
     }
 
 

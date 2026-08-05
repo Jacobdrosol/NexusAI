@@ -5408,6 +5408,7 @@ class TaskManager:
         by_status: Dict[str, Dict[str, Any]] = {}
         by_project: Dict[str, Dict[str, Any]] = {}
         by_manager: Dict[str, Dict[str, Any]] = {}
+        by_project_manager_bot: Dict[str, Dict[str, Any]] = {}
         by_provider_model: Dict[str, Dict[str, Any]] = {}
 
         def _new_usage_bucket(**identity: Any) -> Dict[str, Any]:
@@ -5496,7 +5497,12 @@ class TaskManager:
                 manager_key,
                 _new_usage_bucket(project_id=project_id, manager_id=manager_id),
             )
-            for bucket in (bot_bucket, status_bucket, project_bucket, manager_bucket):
+            lane_key = f"{project_id}::{manager_id}::{bot_id}"
+            lane_bucket = by_project_manager_bot.setdefault(
+                lane_key,
+                _new_usage_bucket(project_id=project_id, manager_id=manager_id, bot_id=bot_id),
+            )
+            for bucket in (bot_bucket, status_bucket, project_bucket, manager_bucket, lane_bucket):
                 bucket["tasks"] += 1
             if updated_at > str(bot_bucket.get("last_task_at") or ""):
                 bot_bucket["last_task_at"] = updated_at
@@ -5508,7 +5514,7 @@ class TaskManager:
             usage = _extract_result_usage(result)
             if not usage:
                 totals["tasks_without_usage"] += 1
-                for bucket in (bot_bucket, status_bucket, project_bucket, manager_bucket):
+                for bucket in (bot_bucket, status_bucket, project_bucket, manager_bucket, lane_bucket):
                     bucket["tasks_without_usage"] += 1
                 continue
 
@@ -5527,10 +5533,10 @@ class TaskManager:
                 total_tokens = prompt_tokens + completion_tokens if prompt_tokens or completion_tokens else 0
             if total_tokens == 0 and not (prompt_tokens or completion_tokens):
                 totals["unknown_total_tasks"] += 1
-                for bucket in (bot_bucket, status_bucket, project_bucket, manager_bucket, provider_model_bucket):
+                for bucket in (bot_bucket, status_bucket, project_bucket, manager_bucket, lane_bucket, provider_model_bucket):
                     bucket["unknown_total_tasks"] += 1
 
-            for bucket in (totals, bot_bucket, status_bucket, project_bucket, manager_bucket, provider_model_bucket):
+            for bucket in (totals, bot_bucket, status_bucket, project_bucket, manager_bucket, lane_bucket, provider_model_bucket):
                 _add_usage(bucket, prompt_tokens, completion_tokens, total_tokens)
 
         bot_rows = sorted(
@@ -5546,6 +5552,11 @@ class TaskManager:
         )
         manager_rows = sorted(
             by_manager.values(),
+            key=lambda item: int(item.get("total_tokens") or 0),
+            reverse=True,
+        )
+        project_manager_bot_rows = sorted(
+            by_project_manager_bot.values(),
             key=lambda item: int(item.get("total_tokens") or 0),
             reverse=True,
         )
@@ -5566,6 +5577,7 @@ class TaskManager:
             "by_status": status_rows,
             "by_project": project_rows,
             "by_manager": manager_rows,
+            "by_project_manager_bot": project_manager_bot_rows[:safe_limit_bots],
             "by_provider_model": provider_model_rows,
             "token_governor": await self.token_governor_status(),
         }

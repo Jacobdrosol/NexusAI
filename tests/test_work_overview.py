@@ -506,6 +506,16 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                 },
                 "by_project": [{"project_id": "globeiq", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 2}],
                 "by_manager": [{"project_id": "globeiq", "manager_id": "globeiq-pm", "total_tokens": 140, "tasks_with_usage": 1}],
+                "by_project_manager_bot": [
+                    {
+                        "project_id": "globeiq",
+                        "manager_id": "globeiq-pm",
+                        "bot_id": "lesson-writer",
+                        "total_tokens": 140,
+                        "tasks_with_usage": 1,
+                        "tasks_without_usage": 0,
+                    }
+                ],
                 "by_bot": [{"bot_id": "lesson-writer", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 0}],
                 "by_provider_model": [{"provider": "ollama_cloud", "model": "qwen3.5:cloud", "total_tokens": 140, "tasks_with_usage": 1}],
                 "token_governor": {
@@ -593,6 +603,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"review failed output" in resp.data
     assert b"unblock before adding work" in resp.data
     assert b"<th>Bot</th><th>Tokens</th><th>Measured</th><th>Missing</th>" in resp.data
+    assert b"<th>Project</th><th>Manager</th><th>Bot</th><th>Tokens</th><th>Measured</th><th>Missing</th>" in resp.data
+    assert b"No project/manager/bot token usage" not in resp.data
     assert b"Bot Usage Pressure" in resp.data
     assert b"override cap" in resp.data
     assert b"warning 0.93" in resp.data
@@ -681,6 +693,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["usage_brief"]["totals"]["prompt_tokens"] == 60
     assert brief_data["usage_brief"]["totals"]["completion_tokens"] == 80
     assert brief_data["usage_brief"]["top_bots"][0]["bot_id"] == "lesson-writer"
+    assert brief_data["usage_brief"]["top_project_manager_bots"][0]["project_id"] == "globeiq"
+    assert brief_data["usage_brief"]["top_project_manager_bots"][0]["manager_id"] == "globeiq-pm"
+    assert brief_data["usage_brief"]["top_project_manager_bots"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_brief"]["top_provider_models"][0]["provider"] == "ollama_cloud"
     assert brief_data["usage_pressure_lanes"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_pressure_lanes"][0]["usage_ratio"] == 0.93
@@ -1010,6 +1025,7 @@ def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
     assert data["usage"]["totals"]["tasks_without_usage"] == 0
     assert data["usage"]["by_project"] == []
     assert data["usage"]["by_manager"] == []
+    assert data["usage"]["by_project_manager_bot"] == []
     assert data["usage"]["by_bot"] == []
     assert data["usage"]["by_provider_model"] == []
     assert data["usage_pressure_lanes"] == []
