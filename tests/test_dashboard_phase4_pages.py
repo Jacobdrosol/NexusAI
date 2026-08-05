@@ -2266,6 +2266,66 @@ def test_chat_assignment_preview_api_blocks_unavailable_pm_bot(dashboard_client)
     assert b"PM schedule disabled" in resp.data
 
 
+def test_chat_message_api_blocks_unavailable_explicit_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {
+                        "bot_id": "blocked-chat",
+                        "state": "blocked",
+                        "ready": False,
+                        "checks": [{"status": "failed", "message": "chat model credential missing"}],
+                    }
+                ]
+            }
+
+        def post_message(self, conversation_id, body):
+            raise AssertionError("blocked explicit chat bot should not reach control plane post")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello", "bot_id": "blocked-chat"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Selected bot is unavailable" in resp.data
+    assert b"chat model credential missing" in resp.data
+
+
+def test_chat_assignment_create_api_blocks_unavailable_pm_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {
+                        "bot_id": "blocked-pm",
+                        "state": "blocked",
+                        "ready": False,
+                        "checks": [{"status": "failed", "message": "PM browser session expired"}],
+                    }
+                ]
+            }
+
+        def create_assignment(self, body):
+            raise AssertionError("blocked PM should not reach control plane assignment create")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/assignments",
+            json={"conversation_id": "c1", "instruction": "Do work", "pm_bot_id": "blocked-pm"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Project manager bot is unavailable" in resp.data
+    assert b"PM browser session expired" in resp.data
+
+
 def test_chat_delete_conversation_api_surfaces_success(dashboard_client):
     _login_admin(dashboard_client)
 
