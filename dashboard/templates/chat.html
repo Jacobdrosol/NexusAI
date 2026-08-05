@@ -1478,9 +1478,14 @@ function activeChatBotId() {
   return String((selector && selector.value) || (hidden && hidden.value) || '').trim();
 }
 
+function chatBotById(botId) {
+  const safeBotId = String(botId || '').trim();
+  if (!safeBotId || !Array.isArray(availableBots)) return null;
+  return availableBots.find((bot) => String(bot?.id || '') === safeBotId) || null;
+}
+
 function activeChatBot() {
-  const botId = activeChatBotId();
-  return Array.isArray(availableBots) ? availableBots.find((bot) => String(bot?.id || '') === botId) : null;
+  return chatBotById(activeChatBotId());
 }
 
 function modelCatalogCapabilities(entry) {
@@ -1535,6 +1540,31 @@ function routeUsesConversationDefaultModel() {
   if (!requestedBotId) return true;
   if (!defaultBotId) return true;
   return requestedBotId === defaultBotId;
+}
+
+function chatBotHasProviderBackend(bot, provider) {
+  const expectedProvider = String(provider || '').trim();
+  if (!expectedProvider || !Array.isArray(bot?.backends)) return false;
+  return bot.backends.some((backend) => {
+    if (!backend || typeof backend !== 'object') return false;
+    const backendType = String(backend.type || '').trim();
+    if (backendType && !['cloud_api', 'local_llm', 'remote_llm'].includes(backendType)) return false;
+    return String(backend.provider || '').trim() === expectedProvider;
+  });
+}
+
+function routeDefaultCompatibilityBlocker(botId, modelId) {
+  const safeBotId = String(botId || '').trim();
+  const safeModelId = String(modelId || '').trim();
+  if (!safeBotId || !safeModelId) return '';
+  const model = modelCatalogEntryById(safeModelId);
+  if (!model) return '';
+  const expectedProvider = String(model.provider || '').trim();
+  if (!expectedProvider) return '';
+  const bot = chatBotById(safeBotId);
+  if (!bot) return '';
+  if (chatBotHasProviderBackend(bot, expectedProvider)) return '';
+  return `Default model provider ${expectedProvider} is not available on default bot ${safeBotId}.`;
 }
 
 function effectiveChatModelInfo() {
@@ -2478,6 +2508,11 @@ async function saveConversationRouteDefaults() {
     showChatComposerStatus(readinessBlocker);
     return;
   }
+  const routeBlocker = routeDefaultCompatibilityBlocker(botId, modelId);
+  if (routeBlocker) {
+    showChatComposerStatus(routeBlocker);
+    return;
+  }
   const res = await fetch('/api/chat/conversations/' + encodeURIComponent(selectedConversationId) + '/route-defaults', {
     method: 'PUT',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
@@ -2778,13 +2813,17 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
   e.preventDefault();
   const fd = new FormData(this);
   const requestedDefaultBotId = String(fd.get('default_bot_id') || '').trim();
+  const requestedDefaultModelId = String(fd.get('default_model_id') || '').trim();
   if (requestedDefaultBotId) {
-    const requestedDefaultBot = Array.isArray(availableBots)
-      ? availableBots.find((bot) => String(bot?.id || '') === requestedDefaultBotId)
-      : null;
+    const requestedDefaultBot = chatBotById(requestedDefaultBotId);
     const readinessBlocker = chatBotReadinessBlocker(requestedDefaultBot);
     if (readinessBlocker) {
       alert(`Default bot is unavailable: ${readinessBlocker}`);
+      return;
+    }
+    const routeBlocker = routeDefaultCompatibilityBlocker(requestedDefaultBotId, requestedDefaultModelId);
+    if (routeBlocker) {
+      alert(`Default route is unavailable: ${routeBlocker}`);
       return;
     }
   }
@@ -2808,7 +2847,7 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
       bridge_project_ids: bridgeProjectIds,
       scope,
       default_bot_id: requestedDefaultBotId || null,
-      default_model_id: fd.get('default_model_id') || null,
+      default_model_id: requestedDefaultModelId || null,
       memory_profiles_enabled: !!document.getElementById('create-convo-memory-enabled')?.checked,
       memory_profile_id: fd.get('memory_profile_id') || 'default',
       tool_access_enabled: !!document.getElementById('create-convo-tool-enabled')?.checked,

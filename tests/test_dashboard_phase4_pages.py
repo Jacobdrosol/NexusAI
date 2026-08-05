@@ -1095,6 +1095,9 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b'id="chat-default-model-selector"' in resp.data
     assert b"Save Defaults" in resp.data
     assert b"function saveConversationRouteDefaults" in resp.data
+    assert b"function routeDefaultCompatibilityBlocker" in resp.data
+    assert b"function chatBotHasProviderBackend" in resp.data
+    assert b"Default route is unavailable: ${routeBlocker}" in resp.data
 
 
 def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
