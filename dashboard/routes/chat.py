@@ -1691,13 +1691,22 @@ def api_update_conversation_tool_access(conversation_id: str):
 def api_update_conversation_memory_profile(conversation_id: str):
     data: dict[str, Any] = request.get_json(force=True) or {}
     cp = get_cp_client()
+    enabled = bool(data.get("enabled", True))
     updated = cp.update_conversation_memory_profile(
         conversation_id=conversation_id,
-        enabled=bool(data.get("enabled", True)),
+        enabled=enabled,
         profile_id=str(data.get("profile_id") or "default").strip() or "default",
     )
     if updated is None:
         return _cp_error_response(cp, "conversation memory profile update failed")
+    if enabled and isinstance(updated, dict):
+        conversation = _conversation_from_cp(cp, conversation_id)
+        project_id = str((conversation or updated).get("project_id") or "").strip()
+        if project_id and not _project_memory_profiles_enabled_from_cp(cp, project_id):
+            updated = dict(updated)
+            updated["memory_effective_warning"] = (
+                "Chat memory is enabled, but the project memory gate is off; memory will remain inactive for this project chat until the project allows memory."
+            )
     return jsonify(updated)
 
 

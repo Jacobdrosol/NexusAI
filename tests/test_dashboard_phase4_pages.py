@@ -4246,6 +4246,58 @@ def test_chat_conversation_tool_access_api_allows_unscoped_disablement(dashboard
     assert resp.get_json()["tool_access_enabled"] is False
 
 
+def test_chat_conversation_memory_profile_api_warns_when_project_gate_blocks_memory(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def update_conversation_memory_profile(self, conversation_id, enabled, profile_id):
+            return {
+                "id": conversation_id,
+                "project_id": "globeiq",
+                "memory_profiles_enabled": enabled,
+                "memory_profile_id": profile_id,
+            }
+
+        def list_conversations(self, archived="all"):
+            return [{"id": "c-project", "scope": "project", "project_id": "globeiq"}]
+
+        def list_projects(self):
+            return [{"id": "globeiq", "memory_profiles_enabled": False}]
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c-project/memory-profile",
+            json={"enabled": True, "profile_id": "default"},
+        )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["memory_profiles_enabled"] is True
+    assert "project memory gate is off" in payload["memory_effective_warning"]
+
+
+def test_chat_conversation_memory_profile_api_allows_unscoped_memory_without_project_warning(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def update_conversation_memory_profile(self, conversation_id, enabled, profile_id):
+            return {
+                "id": conversation_id,
+                "project_id": None,
+                "memory_profiles_enabled": enabled,
+                "memory_profile_id": profile_id,
+            }
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c-global/memory-profile",
+            json={"enabled": True, "profile_id": "default"},
+        )
+
+    assert resp.status_code == 200
+    assert "memory_effective_warning" not in resp.get_json()
+
+
 def test_chat_conversation_route_defaults_api_proxies_control_plane(dashboard_client):
     _login_admin(dashboard_client)
     captured = {}
