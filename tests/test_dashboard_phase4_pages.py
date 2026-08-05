@@ -2607,6 +2607,43 @@ def test_chat_create_conversation_api_blocks_disabled_default_model(dashboard_cl
     assert b"disabled-model is disabled" in resp.data
 
 
+def test_chat_create_conversation_api_blocks_default_route_provider_mismatch(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_models(self):
+            return [{"id": "openai-chat-model", "name": "gpt-4o-mini", "provider": "openai", "enabled": True}]
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "ollama-chat",
+                    "name": "Ollama Chat",
+                    "backends": [{"provider": "ollama_cloud", "model": "gpt-oss:120b"}],
+                }
+            ]
+
+        def create_conversation(self, body):
+            raise AssertionError("incompatible default route should not reach control plane create")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/conversations",
+            json={
+                "title": "Provider Mismatch",
+                "default_bot_id": "ollama-chat",
+                "default_model_id": "openai-chat-model",
+            },
+        )
+
+    assert resp.status_code == 409
+    assert b"Default route is unavailable" in resp.data
+    assert b"default_model_id provider 'openai' is not available on default_bot_id 'ollama-chat'" in resp.data
+
+
 def test_chat_assignment_preview_api_blocks_unavailable_pm_bot(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -3001,6 +3038,39 @@ def test_chat_conversation_route_defaults_api_blocks_unknown_default_model(dashb
     assert resp.status_code == 409
     assert b"Default model is unavailable" in resp.data
     assert b"missing-chat-model is not in the enabled model catalog" in resp.data
+
+
+def test_chat_conversation_route_defaults_api_blocks_default_route_provider_mismatch(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_models(self):
+            return [{"id": "openai-chat-model", "name": "gpt-4o-mini", "provider": "openai", "enabled": True}]
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "ollama-chat",
+                    "name": "Ollama Chat",
+                    "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "gpt-oss:120b"}],
+                }
+            ]
+
+        def update_conversation_route_defaults(self, *args, **kwargs):
+            raise AssertionError("incompatible default route should not reach control plane route defaults update")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/route-defaults",
+            json={"default_bot_id": "ollama-chat", "default_model_id": "openai-chat-model"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Default route is unavailable" in resp.data
+    assert b"default_model_id provider 'openai' is not available on default_bot_id 'ollama-chat'" in resp.data
 
 
 def test_chat_stream_api_blocks_unavailable_explicit_bot(dashboard_client):

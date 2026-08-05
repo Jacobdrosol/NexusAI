@@ -257,15 +257,20 @@ def _bot_readiness_blocker_from_cp(cp: Any, bot_id: str) -> str:
 
 
 def _model_catalog_blocker_from_cp(cp: Any, model_id: str) -> str:
+    _, blocker = _model_catalog_entry_from_cp(cp, model_id)
+    return blocker
+
+
+def _model_catalog_entry_from_cp(cp: Any, model_id: str) -> tuple[dict[str, Any] | None, str]:
     safe_model_id = str(model_id or "").strip()
     if not safe_model_id or not hasattr(cp, "list_models"):
-        return ""
+        return None, ""
     try:
         models = cp.list_models()
     except Exception:
-        return ""
+        return None, ""
     if not isinstance(models, list) or not models:
-        return ""
+        return None, ""
     for model in models:
         if not isinstance(model, dict):
             continue
@@ -274,9 +279,43 @@ def _model_catalog_blocker_from_cp(cp: Any, model_id: str) -> str:
             continue
         if model.get("enabled", True) is False:
             label = str(model.get("name") or candidate_id).strip() or candidate_id
-            return f"{label} is disabled"
+            return None, f"{label} is disabled"
+        return model, ""
+    return None, f"{safe_model_id} is not in the enabled model catalog"
+
+
+def _default_route_model_compatibility_blocker_from_cp(cp: Any, default_bot_id: str, default_model_id: str) -> str:
+    safe_bot_id = str(default_bot_id or "").strip()
+    safe_model_id = str(default_model_id or "").strip()
+    if not safe_bot_id or not safe_model_id or not hasattr(cp, "list_bots"):
         return ""
-    return f"{safe_model_id} is not in the enabled model catalog"
+    model, model_blocker = _model_catalog_entry_from_cp(cp, safe_model_id)
+    if model_blocker or not model:
+        return ""
+    expected_provider = str(model.get("provider") or "").strip()
+    if not expected_provider:
+        return ""
+    try:
+        bots = cp.list_bots()
+    except Exception:
+        return ""
+    if not isinstance(bots, list):
+        return ""
+    for bot in bots:
+        if not isinstance(bot, dict):
+            continue
+        if str(bot.get("id") or "").strip() != safe_bot_id:
+            continue
+        for backend in bot.get("backends") or []:
+            if not isinstance(backend, dict):
+                continue
+            backend_type = str(backend.get("type") or "").strip()
+            if backend_type and backend_type not in {"cloud_api", "local_llm", "remote_llm"}:
+                continue
+            if str(backend.get("provider") or "").strip() == expected_provider:
+                return ""
+        return f"default_model_id provider '{expected_provider}' is not available on default_bot_id '{safe_bot_id}'"
+    return ""
 
 
 def _conversation_from_cp(cp: Any, conversation_id: str) -> dict[str, Any] | None:
@@ -1129,6 +1168,9 @@ def api_create_conversation():
     model_blocker = _model_catalog_blocker_from_cp(cp, default_model_id)
     if model_blocker:
         return jsonify({"error": f"Default model is unavailable: {model_blocker}"}), 409
+    route_blocker = _default_route_model_compatibility_blocker_from_cp(cp, default_bot_id, default_model_id)
+    if route_blocker:
+        return jsonify({"error": f"Default route is unavailable: {route_blocker}"}), 409
     created = cp.create_conversation(
         {
             "title": title,
@@ -1224,6 +1266,9 @@ def api_update_conversation_route_defaults(conversation_id: str):
     model_blocker = _model_catalog_blocker_from_cp(cp, default_model_id)
     if model_blocker:
         return jsonify({"error": f"Default model is unavailable: {model_blocker}"}), 409
+    route_blocker = _default_route_model_compatibility_blocker_from_cp(cp, default_bot_id, default_model_id)
+    if route_blocker:
+        return jsonify({"error": f"Default route is unavailable: {route_blocker}"}), 409
     updated = cp.update_conversation_route_defaults(
         conversation_id=conversation_id,
         default_bot_id=default_bot_id or None,
