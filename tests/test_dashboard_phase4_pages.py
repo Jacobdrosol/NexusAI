@@ -806,6 +806,70 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"function updateChatBotCapabilitySummary" in resp.data
 
 
+def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-project-chat",
+                    "title": "Project Chat",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "default_bot_id": "personal-research-chat",
+                    "memory_profiles_enabled": True,
+                    "memory_profile_id": "default",
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": True,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "personal-research-chat",
+                    "name": "Personal Research Chat",
+                    "role": "assistant",
+                    "memory_profiles_enabled": True,
+                    "routing_rules": {
+                        "operator_profile": {"autonomy": "manual_chat_only"},
+                        "chat_profile": {"mode": "research", "label": "Research Chat"},
+                        "chat_tool_access": {"enabled": True, "filesystem": True, "repo_search": True},
+                    },
+                    "backends": [{"provider": "ollama_cloud", "model": "gpt-oss:120b"}],
+                }
+            ]
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ", "enabled": True, "memory_profiles_enabled": True}]
+
+        def list_models(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+        def get_project_chat_tool_access(self, project_id):
+            return {"enabled": True, "filesystem": True, "repo_search": True}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-project-chat")
+
+    assert resp.status_code == 200
+    assert b"chat-effective-context-summary" in resp.data
+    assert b"function renderChatEffectiveContextSummary" in resp.data
+    assert b"const selectedConversationProjectId = \"globeiq\";" in resp.data
+    assert b"const selectedProjectMemoryProfilesEnabled = true;" in resp.data
+    assert b"\"repo_search\": true" in resp.data
+
+
 def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     _login_admin(dashboard_client)
 

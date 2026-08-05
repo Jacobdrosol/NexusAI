@@ -223,6 +223,15 @@
   color: rgba(226, 232, 240, 0.72);
   font-size: 0.78rem;
 }
+.chat-effective-context-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+.chat-effective-context-summary .badge {
+  white-space: normal;
+}
 </style>
 
 <div class="split-grid chat-split-grid">
@@ -411,6 +420,7 @@
         </details>
       </div>
       <div id="chat-bot-capability-summary" class="mini-note chat-bot-capability-summary"></div>
+      <div id="chat-effective-context-summary" class="chat-effective-context-summary"></div>
       {% endif %}
     </div>
     {% if selected_conversation %}
@@ -764,6 +774,9 @@
 <script>
 const selectedConversationId = {{ (selected_conversation.id if selected_conversation else "")|tojson }};
 const selectedConversationProjectId = {{ (selected_conversation.project_id if selected_conversation and selected_conversation.project_id else "")|tojson }};
+const selectedConversation = {{ (selected_conversation if selected_conversation else {})|tojson }};
+const selectedProjectMemoryProfilesEnabled = {{ selected_project_memory_profiles_enabled|tojson }};
+const selectedProjectChatToolAccess = {{ selected_project_chat_tool_access|tojson }};
 const activeProjectFilter = {{ (active_project_filter or "")|tojson }};
 const unscopedProjectFilter = {{ unscoped_project_filter|tojson }};
 const availableProjects = {{ projects|tojson }};
@@ -1380,6 +1393,92 @@ function updateChatBotCapabilitySummary() {
   const modelLabel = [backend.provider, backend.model].filter(Boolean).join(' / ') || 'model unknown';
   const profileLabel = String(profile.label || profile.mode || bot.role || 'chat').trim();
   summary.textContent = `${bot.name || bot.id}: ${profileLabel}; ${modelLabel}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}.`;
+}
+
+function _chatGateCheckboxValue(id, fallback) {
+  const el = document.getElementById(id);
+  return el ? !!el.checked : !!fallback;
+}
+
+function _toolModesFromAccess(access) {
+  const modes = [];
+  if (access?.filesystem === true) modes.push('filesystem');
+  if (access?.repo_search === true) modes.push('repo search');
+  return modes;
+}
+
+function _intersectionModes(modeSets) {
+  const normalizedSets = modeSets
+    .map((items) => new Set((items || []).map((item) => String(item || '').trim()).filter(Boolean)))
+    .filter((set) => set.size > 0);
+  if (!normalizedSets.length) return [];
+  return Array.from(normalizedSets[0]).filter((item) => normalizedSets.every((set) => set.has(item)));
+}
+
+function renderChatEffectiveContextSummary() {
+  const summary = document.getElementById('chat-effective-context-summary');
+  if (!summary) return;
+  const bot = activeChatBot();
+  const botTools = chatBotToolAccess(bot);
+  const chatTools = {
+    enabled: _chatGateCheckboxValue('chat-tool-enabled', selectedConversation.tool_access_enabled),
+    filesystem: _chatGateCheckboxValue('chat-tool-filesystem', selectedConversation.tool_access_filesystem),
+    repo_search: _chatGateCheckboxValue('chat-tool-repo-search', selectedConversation.tool_access_repo_search),
+  };
+  const projectTools = selectedProjectChatToolAccess && typeof selectedProjectChatToolAccess === 'object'
+    ? selectedProjectChatToolAccess
+    : {enabled: false, filesystem: false, repo_search: false};
+  const messageRequestsWorkspaceTools = _chatGateCheckboxValue('use-workspace-tools-message', false);
+  const hasScopedProject = !!selectedConversationProjectId;
+
+  const chatMemoryEnabled = _chatGateCheckboxValue('chat-memory-enabled', selectedConversation.memory_profiles_enabled !== false);
+  const botMemoryEnabled = !!(bot && bot.memory_profiles_enabled === true);
+  const projectMemoryAllows = !hasScopedProject || selectedProjectMemoryProfilesEnabled === true;
+  const effectiveMemory = chatMemoryEnabled && botMemoryEnabled && projectMemoryAllows;
+
+  const projectToolAllows = hasScopedProject && projectTools.enabled === true;
+  const effectiveToolModes = _intersectionModes([
+    _toolModesFromAccess(botTools),
+    _toolModesFromAccess(chatTools),
+    _toolModesFromAccess(projectTools),
+  ]);
+  const effectiveTools = !!(
+    bot
+    && botTools.enabled
+    && chatTools.enabled
+    && projectToolAllows
+    && messageRequestsWorkspaceTools
+    && effectiveToolModes.length
+  );
+
+  const memoryReasons = [];
+  if (!bot) memoryReasons.push('no bot selected');
+  if (!chatMemoryEnabled) memoryReasons.push('chat off');
+  if (bot && !botMemoryEnabled) memoryReasons.push('bot off');
+  if (hasScopedProject && !projectMemoryAllows) memoryReasons.push('project off');
+  const toolReasons = [];
+  if (!bot) toolReasons.push('no bot selected');
+  if (!messageRequestsWorkspaceTools) toolReasons.push('message toggle off');
+  if (bot && !botTools.enabled) toolReasons.push('bot off');
+  if (!chatTools.enabled) toolReasons.push('chat off');
+  if (!hasScopedProject) toolReasons.push('no scoped project');
+  if (hasScopedProject && !projectToolAllows) toolReasons.push('project off');
+  if (botTools.enabled && chatTools.enabled && projectToolAllows && !effectiveToolModes.length) {
+    toolReasons.push('no shared tool mode');
+  }
+
+  const memoryClass = effectiveMemory ? 'ready' : (memoryReasons.length ? 'disabled' : 'attention');
+  const toolsClass = effectiveTools ? 'ready' : (toolReasons.includes('message toggle off') ? 'disabled' : 'attention');
+  const memoryText = effectiveMemory
+    ? `memory active (${selectedConversation.memory_profile_id || 'default'})`
+    : `memory inactive: ${memoryReasons.join(', ') || 'gate off'}`;
+  const toolText = effectiveTools
+    ? `workspace tools active: ${effectiveToolModes.join(', ')}`
+    : `workspace tools inactive: ${toolReasons.join(', ') || 'gate off'}`;
+  summary.innerHTML = `
+    <span class="badge badge-${memoryClass}">${esc(memoryText)}</span>
+    <span class="badge badge-${toolsClass}">${esc(toolText)}</span>
+  `;
 }
 
 function formatAttachmentBytes(value) {
@@ -2107,6 +2206,7 @@ function syncConversationToolAccessEditor() {
     repo.disabled = !enabled;
     if (!enabled) repo.checked = false;
   }
+  renderChatEffectiveContextSummary();
 }
 
 function syncSendBotSelection() {
@@ -3273,9 +3373,14 @@ document.getElementById('chat-project-filter')?.addEventListener('change', funct
 document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
 document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
 document.getElementById('chat-tool-enabled')?.addEventListener('change', syncConversationToolAccessEditor);
+document.getElementById('chat-tool-filesystem')?.addEventListener('change', renderChatEffectiveContextSummary);
+document.getElementById('chat-tool-repo-search')?.addEventListener('change', renderChatEffectiveContextSummary);
+document.getElementById('chat-memory-enabled')?.addEventListener('change', renderChatEffectiveContextSummary);
+document.getElementById('use-workspace-tools-message')?.addEventListener('change', renderChatEffectiveContextSummary);
 document.getElementById('chat-bot-selector')?.addEventListener('change', () => {
   syncSendBotSelection();
   updateChatBotCapabilitySummary();
+  renderChatEffectiveContextSummary();
   if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
     alert('The newly selected chat bot model does not support image attachments. Remove the screenshots or switch back to a vision-capable bot.');
   }
@@ -3285,6 +3390,7 @@ syncCreateConversationToolFields();
 syncConversationToolAccessEditor();
 syncSendBotSelection();
 updateChatBotCapabilitySummary();
+renderChatEffectiveContextSummary();
 bindChatTextareaBehavior();
 renderComposerAttachments();
 setupChatComposerDragDrop();

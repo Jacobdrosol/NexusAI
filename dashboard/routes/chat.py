@@ -444,6 +444,28 @@ def _normalize_conversation_rows(rows: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _normalize_project_chat_tool_access(raw: Any) -> dict[str, bool]:
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "filesystem": bool(raw.get("filesystem", False)),
+        "repo_search": bool(raw.get("repo_search", False)),
+    }
+
+
+def _project_memory_profiles_enabled(projects: list[Any], project_id: str) -> bool:
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_project_id:
+        return False
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        if str(project.get("id") or "").strip() == normalized_project_id:
+            return bool(project.get("memory_profiles_enabled", False))
+    return False
+
+
 def _conversation_matches_project(row: dict[str, Any], project_id: str) -> bool:
     pid = str(project_id or "").strip()
     if not pid:
@@ -662,6 +684,14 @@ def chat_page() -> str:
                         if item_id and item_id not in repo_context_item_ids:
                             repo_context_item_ids.append(item_id)
 
+        selected_project_id = str((selected or {}).get("project_id") or "").strip()
+        selected_project_memory_profiles_enabled = _project_memory_profiles_enabled(projects, selected_project_id)
+        selected_project_chat_tool_access = _normalize_project_chat_tool_access(
+            cp.get_project_chat_tool_access(selected_project_id)
+            if selected_project_id and hasattr(cp, "get_project_chat_tool_access")
+            else None
+        )
+
         try:
             vault_items_raw = _cp_list_vault_items_safe(cp, limit=30, include_content=False) or []
         except Exception:
@@ -683,6 +713,8 @@ def chat_page() -> str:
             repo_context_items=repo_context_items,
             repo_context_sections=repo_context_sections,
             repo_context_item_ids=repo_context_item_ids,
+            selected_project_memory_profiles_enabled=selected_project_memory_profiles_enabled,
+            selected_project_chat_tool_access=selected_project_chat_tool_access,
             model_catalog=model_catalog,
             chat_attachment_limits={
                 "max_files": CHAT_ATTACHMENT_MAX_FILES,
@@ -710,6 +742,8 @@ def chat_page() -> str:
             repo_context_items=[],
             repo_context_sections=[],
             repo_context_item_ids=[],
+            selected_project_memory_profiles_enabled=False,
+            selected_project_chat_tool_access=_normalize_project_chat_tool_access(None),
             model_catalog=[],
             chat_attachment_limits={
                 "max_files": CHAT_ATTACHMENT_MAX_FILES,
