@@ -5966,9 +5966,10 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             result = None
             streamed_chunks: list[str] = []
             assistant_message: Optional[ChatMessage] = None
-            stream_provider: Optional[str] = None
-            stream_model: Optional[str] = None
-            stream_worker_id: Optional[str] = None
+            stream_model, stream_provider = _assistant_model_provider(bot)
+            backend_snapshot = _first_backend_snapshot(bot)
+            stream_worker_id: Optional[str] = str(backend_snapshot.get("worker_id") or "").strip() or None
+            stream_backend_selected = False
             token_counter = 0
             async for event in scheduler.stream(task):
                 event_name = str(event.get("event") or "")
@@ -5979,6 +5980,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     stream_model = model
                     worker_id = str(event.get("worker_id") or "").strip()
                     stream_worker_id = worker_id or None
+                    stream_backend_selected = True
                     label = f"Using {provider}/{model}"
                     if worker_id:
                         label += f" on {worker_id}"
@@ -6010,7 +6012,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 "model": stream_model,
                                 "worker_id": stream_worker_id,
                             }
-                            if stream_provider or stream_model or stream_worker_id
+                            if stream_backend_selected
                             else None
                         )
                         partial_metadata = _assistant_bot_metadata(
@@ -6071,7 +6073,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     "model": stream_model,
                     "worker_id": stream_worker_id,
                 }
-                if stream_provider or stream_model or stream_worker_id
+                if stream_backend_selected
                 else None
             )
             metadata = _assistant_bot_metadata(

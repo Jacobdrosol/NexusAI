@@ -1054,6 +1054,54 @@ async def test_stream_message_endpoint(cp_app):
 
 
 @pytest.mark.anyio
+async def test_stream_message_uses_bot_config_provider_model_when_backend_event_missing(cp_app):
+    async def _stream(_task):
+        yield {"event": "token", "text": "config "}
+        yield {"event": "token", "text": "fallback"}
+        yield {"event": "final", "output": "config fallback", "usage": {"prompt_tokens": 3, "completion_tokens": 4}}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Stream Config Fallback"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-stream-config",
+                "name": "Stream Config Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "gpt-oss:120b"}],
+                "enabled": True,
+            },
+        )
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "hello", "bot_id": "bot-stream-config"},
+        )
+        assert stream_resp.status_code == 200
+        assert "event: assistant_message" in stream_resp.text
+
+        messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+        messages = messages_resp.json()
+        assistant = messages[-1]
+        assert assistant["content"] == "config fallback"
+        assert assistant["model"] == "gpt-oss:120b"
+        assert assistant["provider"] == "ollama_cloud"
+        assert assistant["metadata"]["model"]["provider"] == "ollama_cloud"
+        assert assistant["metadata"]["model"]["model"] == "gpt-oss:120b"
+        assert assistant["metadata"]["model"]["source"] == "bot_config"
+        assert assistant["metadata"]["usage"] == {"prompt_tokens": 3, "completion_tokens": 4}
+
+        usage_resp = await client.get("/v1/chat/usage?hours=24&limit_conversations=5")
+        usage = usage_resp.json()
+        assert usage["totals"]["total_tokens"] == 7
+        assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"
+        assert usage["by_provider_model"][0]["model"] == "gpt-oss:120b"
+
+
+@pytest.mark.anyio
 async def test_stream_message_blocks_oversized_context_item_ids(cp_app):
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Stream Context Limit"})
