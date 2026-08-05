@@ -323,8 +323,8 @@ class PostMessageRequest(BaseModel):
     content: str
     bot_id: Optional[str] = None
     user_id: Optional[str] = None
-    context_items: Optional[List[str]] = None
-    context_item_ids: Optional[List[str]] = None
+    context_items: Optional[List[str]] = Field(default=None, max_length=50)
+    context_item_ids: Optional[List[str]] = Field(default=None, max_length=200)
     include_project_context: bool = False
     use_workspace_tools: bool = False
     inline_coding_enabled: bool = False
