@@ -466,6 +466,26 @@ def _attachment_payload_blocker(raw_attachments: Any) -> str:
     return ""
 
 
+def _context_payload_blocker(raw_context_items: Any, raw_context_item_ids: Any) -> str:
+    if raw_context_items is not None:
+        if not isinstance(raw_context_items, list):
+            return "context_items must be a list"
+        if len(raw_context_items) > 50:
+            return "context_items is limited to 50 items"
+        for item in raw_context_items:
+            if not isinstance(item, dict):
+                return "context_items must contain objects"
+    if raw_context_item_ids is not None:
+        if not isinstance(raw_context_item_ids, list):
+            return "context_item_ids must be a list"
+        if len(raw_context_item_ids) > 200:
+            return "context_item_ids is limited to 200 ids"
+        for item_id in raw_context_item_ids:
+            if not isinstance(item_id, str):
+                return "context_item_ids must contain strings"
+    return ""
+
+
 def _attachments_include_image(attachments: Any) -> bool:
     if not isinstance(attachments, list):
         return False
@@ -1669,6 +1689,9 @@ def api_send_message():
     attachment_blocker = _attachment_payload_blocker(data.get("attachments"))
     if attachment_blocker:
         return jsonify({"error": f"Invalid attachments: {attachment_blocker}"}), 400
+    context_blocker = _context_payload_blocker(data.get("context_items"), data.get("context_item_ids"))
+    if context_blocker:
+        return jsonify({"error": f"Invalid context payload: {context_blocker}"}), 400
     cp = get_cp_client()
     bot_id = str(data.get("bot_id") or "").strip()
     readiness_bot_id = bot_id or _conversation_default_bot_id_from_cp(cp, conversation_id)
@@ -1900,6 +1923,9 @@ def api_send_message_stream():
     attachment_blocker = _attachment_payload_blocker(data.get("attachments"))
     if attachment_blocker:
         return jsonify({"error": f"Invalid attachments: {attachment_blocker}"}), 400
+    context_blocker = _context_payload_blocker(data.get("context_items"), data.get("context_item_ids"))
+    if context_blocker:
+        return jsonify({"error": f"Invalid context payload: {context_blocker}"}), 400
 
     cp = get_cp_client()
     bot_id = str(data.get("bot_id") or "").strip()
