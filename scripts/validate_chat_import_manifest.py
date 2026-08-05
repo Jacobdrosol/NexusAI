@@ -15,6 +15,7 @@ from typing import Any, Iterable
 
 ALLOWED_SCOPES = {"global", "project", "bridged"}
 ALLOWED_ROLES = {"user", "assistant", "system", "tool"}
+ALLOWED_IMPORT_ACTIONS = {"import", "metadata_only", "review", "skip"}
 UNSUPPORTED_ATTACHMENT_EXTENSIONS = {
     ".bat",
     ".cmd",
@@ -204,19 +205,60 @@ def _load_project_ids(path: Path | None) -> set[str]:
 def validate_manifest(manifest_dir: Path, *, projects_file: Path | None = None) -> ValidationResult:
     result = ValidationResult()
     project_ids = _load_project_ids(projects_file)
-    file_specs = [
-        ("conversations.jsonl", _validate_conversation),
-        ("messages.jsonl", _validate_message),
-        ("attachments.jsonl", _validate_attachment),
-    ]
-    for filename, validator in file_specs:
-        path = manifest_dir / filename
-        for line_no, record in _load_jsonl(path, result):
-            _scan_for_secrets(path, line_no, record, result)
-            if validator is _validate_conversation:
-                validator(path, line_no, record, result, project_ids)
-            else:
-                validator(path, line_no, record, result)
+    conversation_keys: set[tuple[str, str]] = set()
+    message_keys: set[tuple[str, str, str]] = set()
+
+    conversations_path = manifest_dir / "conversations.jsonl"
+    for line_no, record in _load_jsonl(conversations_path, result):
+        _scan_for_secrets(conversations_path, line_no, record, result)
+        _validate_conversation(conversations_path, line_no, record, result, project_ids)
+        key = (_string(record, "source_platform"), _string(record, "source_conversation_id"))
+        if not all(key):
+            continue
+        if key in conversation_keys:
+            result.add("blocker", conversations_path, line_no, "duplicate_conversation", "conversation source key is duplicated")
+        else:
+            conversation_keys.add(key)
+        for project_id in record.get("bridge_project_ids") or []:
+            label = str(project_id or "").strip()
+            if label and project_ids and label not in project_ids:
+                result.add("blocker", conversations_path, line_no, "unknown_bridge_project", f"bridge_project_ids contains an unknown project: {label}")
+
+    messages_path = manifest_dir / "messages.jsonl"
+    for line_no, record in _load_jsonl(messages_path, result):
+        _scan_for_secrets(messages_path, line_no, record, result)
+        _validate_message(messages_path, line_no, record, result)
+        conversation_key = (_string(record, "source_platform"), _string(record, "source_conversation_id"))
+        if all(conversation_key) and conversation_key not in conversation_keys:
+            result.add("blocker", messages_path, line_no, "unknown_conversation", "message references a conversation that is not in conversations.jsonl")
+        message_key = (*conversation_key, _string(record, "source_message_id"))
+        if not all(message_key):
+            continue
+        if message_key in message_keys:
+            result.add("blocker", messages_path, line_no, "duplicate_message", "message source key is duplicated")
+        else:
+            message_keys.add(message_key)
+
+    attachments_path = manifest_dir / "attachments.jsonl"
+    for line_no, record in _load_jsonl(attachments_path, result):
+        _scan_for_secrets(attachments_path, line_no, record, result)
+        _validate_attachment(attachments_path, line_no, record, result)
+        message_key = (
+            _string(record, "source_platform"),
+            _string(record, "source_conversation_id"),
+            _string(record, "source_message_id"),
+        )
+        if all(message_key) and message_key not in message_keys:
+            result.add("blocker", attachments_path, line_no, "unknown_message", "attachment references a message that is not in messages.jsonl")
+        import_action = _string(record, "import_action") or "review"
+        if import_action not in ALLOWED_IMPORT_ACTIONS:
+            result.add(
+                "blocker",
+                attachments_path,
+                line_no,
+                "invalid_import_action",
+                f"import_action must be one of: {', '.join(sorted(ALLOWED_IMPORT_ACTIONS))}",
+            )
     return result
 
 

@@ -457,3 +457,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_worker_fleet_renderer.py -q` passed for Batch 214 worker-profile account propagation.
 - Batch 215: surfaced dependent-bot worker-profile site accounts plus lesson, page, and CLI scope on Worker Detail so operators can verify GlobeIQ-style worker logins and scoped tooling from the worker view.
 - `pytest tests/test_dashboard_phase4_pages.py::test_worker_detail_page_surfaces_dependent_bot_worker_scope tests/test_dashboard_phase4_pages.py::test_project_detail_page_surfaces_ai_workspace_readiness tests/test_bot_tooling_status.py -q` passed for Batch 215 worker dependency scope visibility.
+- Batch 216: tightened chat-history dry-run validation so imports block duplicate source conversation/message keys, missing conversation/message links, unknown bridge project IDs, and unsupported attachment import actions before any database write.
+- `pytest tests/test_chat_import_manifest_validator.py -q` passed for Batch 216 migration manifest validation.

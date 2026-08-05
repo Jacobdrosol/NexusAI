@@ -124,6 +124,8 @@ Every import run must produce a report with:
 - Project routing confidence summary.
 - Errors and retryable failures.
 
+The dry-run validator must block imports with duplicate source conversation IDs, duplicate source message IDs, message records that do not reference a staged conversation, attachment records that do not reference a staged message, unknown bridged project IDs, or unsupported attachment import actions. Supported attachment actions are `import`, `metadata_only`, `review`, and `skip`.
+
 ## Safety Invariants
 
 - Imports must be idempotent by source system, source conversation ID, and import run ID.

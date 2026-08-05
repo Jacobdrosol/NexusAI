@@ -119,6 +119,15 @@ python scripts/validate_chat_import_manifest.py <operator-staging-root>/normaliz
 
 The optional projects file may be a JSON list such as `["globeiq", "nexusai"]` or an object with `project_ids`/`projects`. The validator exits non-zero when import blockers are present.
 
+Dry-run validation also enforces source-link integrity before import:
+
+- Duplicate `source_platform` plus `source_conversation_id` conversation keys are blockers.
+- Duplicate `source_platform` plus `source_conversation_id` plus `source_message_id` message keys are blockers.
+- Messages must reference a conversation present in `conversations.jsonl`.
+- Attachments must reference a message present in `messages.jsonl`.
+- Bridged project IDs must exist in the approved project list when one is supplied.
+- Attachment `import_action` must be `import`, `metadata_only`, `review`, or `skip`.
+
 Conversation record:
 
 ```json
