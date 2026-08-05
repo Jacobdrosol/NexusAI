@@ -1343,6 +1343,8 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"const assignmentContext = selectedContextItems();" in resp.data
     assert b"context_items: assignmentContext.contexts" in resp.data
     assert b"Context items: " in resp.data
+    assert b"Assignments include selected conversation context." in resp.data
+    assert b"Selected vault items are not included in assignments yet." in resp.data
 
 
 def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashboard_client):
