@@ -160,6 +160,17 @@
 .chat-project-filter {
   width: 100%;
 }
+.chat-conversation-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+.chat-scope-badge {
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.22rem 0.38rem;
+}
 .chat-attachment-trigger-label {
   position: absolute;
   width: 1px;
@@ -256,7 +267,16 @@
         data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
       >
         <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}{% if active_project_filter %}&project_id={{ active_project_filter }}{% endif %}" class="chat-conversation-link">
-          <div>{{ c.title }}</div>
+          <div class="chat-conversation-title-row">
+            <span>{{ c.title }}</span>
+            {% if c.scope == 'bridged' %}
+            <span class="badge badge-attention chat-scope-badge">Bridged</span>
+            {% elif c.project_id %}
+            <span class="badge badge-ready chat-scope-badge">Project {{ c.project_id }}</span>
+            {% else %}
+            <span class="badge badge-disabled chat-scope-badge">Unscoped</span>
+            {% endif %}
+          </div>
           <small>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T', ' ') }}</small>
         </a>
         <button
@@ -284,7 +304,16 @@
           data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
         >
           <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}{% if active_project_filter %}&project_id={{ active_project_filter }}{% endif %}" class="chat-conversation-link">
-            <div>{{ c.title }}</div>
+            <div class="chat-conversation-title-row">
+              <span>{{ c.title }}</span>
+              {% if c.scope == 'bridged' %}
+              <span class="badge badge-attention chat-scope-badge">Bridged</span>
+              {% elif c.project_id %}
+              <span class="badge badge-ready chat-scope-badge">Project {{ c.project_id }}</span>
+              {% else %}
+              <span class="badge badge-disabled chat-scope-badge">Unscoped</span>
+              {% endif %}
+            </div>
             <small>Archived {{ (c.archived_at[:19] if c.archived_at else '') | replace('T', ' ') }}</small>
           </a>
           <div class="chat-row-actions">
@@ -657,7 +686,7 @@
       <div class="form-group">
         <label>Scope</label>
         <select class="form-control" name="scope" id="create-convo-scope">
-          <option value="global" {% if not active_project_filter or active_project_filter == unscoped_project_filter %}selected{% endif %}>global</option>
+          <option value="global" {% if not active_project_filter or active_project_filter == unscoped_project_filter %}selected{% endif %}>Unscoped chat</option>
           <option value="project" {% if active_project_filter and active_project_filter != unscoped_project_filter %}selected{% endif %}>project</option>
           <option value="bridged">bridged</option>
         </select>

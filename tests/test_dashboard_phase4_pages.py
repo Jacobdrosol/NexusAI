@@ -657,6 +657,7 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert b"bridgeProjectIds.includes(projectFilter)" in resp.data
     assert b"row.hidden = !matches" in resp.data
     assert b"All projects" in resp.data
+    assert b"Project globeiq" in resp.data
 
 
 def test_chat_page_project_filter_limits_conversation_list(dashboard_client):
@@ -1096,6 +1097,8 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     assert b'option value="__unscoped__" selected' in resp.data
     assert b"Unscoped chats" in resp.data
     assert b'option value="global" selected' in resp.data
+    assert b"Unscoped chat" in resp.data
+    assert b"Unscoped" in resp.data
     assert b"project_id=__unscoped__" in resp.data
 
 
