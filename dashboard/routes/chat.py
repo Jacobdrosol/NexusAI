@@ -1204,6 +1204,14 @@ def _workspace_tool_access_allowed_for_create(data: dict[str, Any]) -> bool:
     return scope in {"project", "bridged"} and bool(project_id)
 
 
+def _workspace_tool_access_allowed_for_conversation(conversation: dict[str, Any]) -> bool:
+    scope = str(conversation.get("scope") or "").strip()
+    project_id = str(conversation.get("project_id") or "").strip()
+    if not scope:
+        scope = "project" if project_id else "global"
+    return scope in {"project", "bridged"} and bool(project_id)
+
+
 def _normalize_create_conversation_scope(data: dict[str, Any]) -> str:
     scope = str(data.get("scope") or "global").strip() or "global"
     if scope not in _ALLOWED_CONVERSATION_SCOPES:
@@ -1655,6 +1663,18 @@ def api_restore_conversation(conversation_id: str):
 def api_update_conversation_tool_access(conversation_id: str):
     data: dict[str, Any] = request.get_json(force=True) or {}
     cp = get_cp_client()
+    if _workspace_tool_access_requested(
+        {
+            "tool_access_enabled": bool(data.get("enabled", False)),
+            "tool_access_filesystem": bool(data.get("filesystem", False)),
+            "tool_access_repo_search": bool(data.get("repo_search", False)),
+        }
+    ):
+        conversation = _conversation_from_cp(cp, conversation_id)
+        if conversation is None:
+            return jsonify({"error": "conversation unavailable"}), 404
+        if not _workspace_tool_access_allowed_for_conversation(conversation):
+            return jsonify({"error": "workspace tools require a project-scoped or bridged conversation"}), 400
     updated = cp.update_conversation_tool_access(
         conversation_id=conversation_id,
         enabled=bool(data.get("enabled", False)),

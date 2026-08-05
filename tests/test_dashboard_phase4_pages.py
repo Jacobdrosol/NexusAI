@@ -4184,6 +4184,9 @@ def test_chat_conversation_tool_access_api_surfaces_control_plane_error(dashboar
     _login_admin(dashboard_client)
 
     class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "scope": "project", "project_id": "globeiq"}]
+
         def update_conversation_tool_access(self, conversation_id, enabled, filesystem, repo_search):
             return None
 
@@ -4198,6 +4201,49 @@ def test_chat_conversation_tool_access_api_surfaces_control_plane_error(dashboar
 
     assert resp.status_code == 400
     assert b"tool access update blocked" in resp.data
+
+
+def test_chat_conversation_tool_access_api_blocks_unscoped_enablement(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c-global", "scope": "global", "project_id": None}]
+
+        def update_conversation_tool_access(self, conversation_id, enabled, filesystem, repo_search):
+            raise AssertionError("unscoped tool enablement should not reach control plane")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c-global/tool-access",
+            json={"enabled": True, "filesystem": True, "repo_search": False},
+        )
+
+    assert resp.status_code == 400
+    assert b"workspace tools require a project-scoped or bridged conversation" in resp.data
+
+
+def test_chat_conversation_tool_access_api_allows_unscoped_disablement(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def update_conversation_tool_access(self, conversation_id, enabled, filesystem, repo_search):
+            return {
+                "id": conversation_id,
+                "scope": "global",
+                "tool_access_enabled": enabled,
+                "tool_access_filesystem": filesystem,
+                "tool_access_repo_search": repo_search,
+            }
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c-global/tool-access",
+            json={"enabled": False, "filesystem": False, "repo_search": False},
+        )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["tool_access_enabled"] is False
 
 
 def test_chat_conversation_route_defaults_api_proxies_control_plane(dashboard_client):
