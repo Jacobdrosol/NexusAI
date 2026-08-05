@@ -4,7 +4,7 @@ import json
 import math
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -900,6 +900,170 @@ class ChatManager:
                         data["metadata"] = json.loads(data["metadata"])
                     result.append(ChatMessage.model_validate(data))
                 return result
+
+    async def summarize_message_usage(self, *, hours: int = 24, limit_conversations: int = 25) -> Dict[str, Any]:
+        await self._ensure_db()
+        safe_hours = max(1, min(int(hours or 24), 2160))
+        safe_limit = max(1, min(int(limit_conversations or 25), 250))
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(hours=safe_hours)
+        totals: Dict[str, Any] = {
+            "messages": 0,
+            "messages_with_usage": 0,
+            "messages_without_usage": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "unknown_total_messages": 0,
+        }
+        by_conversation: Dict[str, Dict[str, Any]] = {}
+        by_bot: Dict[str, Dict[str, Any]] = {}
+        by_provider_model: Dict[str, Dict[str, Any]] = {}
+
+        def _new_bucket(**identity: Any) -> Dict[str, Any]:
+            return {
+                **identity,
+                "messages": 0,
+                "messages_with_usage": 0,
+                "messages_without_usage": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "unknown_total_messages": 0,
+            }
+
+        def _metadata_dict(raw: Any) -> Dict[str, Any]:
+            if isinstance(raw, dict):
+                return raw
+            if not isinstance(raw, str) or not raw.strip():
+                return {}
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+
+        def _usage_int(value: Any) -> Optional[int]:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _usage_summary(metadata: Dict[str, Any]) -> Dict[str, Any]:
+            usage = metadata.get("usage")
+            if not isinstance(usage, dict):
+                return {}
+            prompt_tokens = _usage_int(
+                usage.get("prompt_tokens")
+                or usage.get("input_tokens")
+                or usage.get("promptTokenCount")
+            )
+            completion_tokens = _usage_int(
+                usage.get("completion_tokens")
+                or usage.get("output_tokens")
+                or usage.get("eval_count")
+                or usage.get("candidatesTokenCount")
+            )
+            total_tokens = _usage_int(usage.get("total_tokens") or usage.get("totalTokenCount"))
+            if total_tokens is None and (prompt_tokens or completion_tokens):
+                total_tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
+            result: Dict[str, Any] = {}
+            if prompt_tokens is not None:
+                result["prompt_tokens"] = prompt_tokens
+            if completion_tokens is not None:
+                result["completion_tokens"] = completion_tokens
+            if total_tokens is not None:
+                result["total_tokens"] = total_tokens
+            return result
+
+        def _add_usage(bucket: Dict[str, Any], prompt_tokens: int, completion_tokens: int, total_tokens: int) -> None:
+            bucket["messages_with_usage"] += 1
+            bucket["prompt_tokens"] += prompt_tokens
+            bucket["completion_tokens"] += completion_tokens
+            bucket["total_tokens"] += total_tokens
+
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT
+                    msg.id,
+                    msg.conversation_id,
+                    msg.bot_id,
+                    msg.model,
+                    msg.provider,
+                    msg.metadata,
+                    msg.created_at,
+                    conv.title AS conversation_title,
+                    conv.project_id,
+                    conv.scope
+                FROM messages msg
+                JOIN conversations conv ON conv.id = msg.conversation_id
+                WHERE msg.role = 'assistant' AND msg.created_at >= ?
+                ORDER BY msg.created_at DESC
+                """,
+                (since.isoformat(),),
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+        for row in rows:
+            totals["messages"] += 1
+            conversation_id = str(row["conversation_id"] or "unknown").strip() or "unknown"
+            bot_id = str(row["bot_id"] or "unknown").strip() or "unknown"
+            provider = str(row["provider"] or "unknown").strip().lower() or "unknown"
+            model = str(row["model"] or "unknown").strip() or "unknown"
+            conv_bucket = by_conversation.setdefault(
+                conversation_id,
+                _new_bucket(
+                    conversation_id=conversation_id,
+                    conversation_title=str(row["conversation_title"] or conversation_id),
+                    project_id=str(row["project_id"] or "").strip() or None,
+                    scope=str(row["scope"] or "global").strip() or "global",
+                ),
+            )
+            bot_bucket = by_bot.setdefault(bot_id, _new_bucket(bot_id=bot_id))
+            provider_model_key = f"{provider}::{model}"
+            provider_model_bucket = by_provider_model.setdefault(
+                provider_model_key,
+                _new_bucket(provider=provider, model=model),
+            )
+            for bucket in (conv_bucket, bot_bucket, provider_model_bucket):
+                bucket["messages"] += 1
+
+            metadata = _metadata_dict(row["metadata"])
+            usage = _usage_summary(metadata)
+            if not usage:
+                totals["messages_without_usage"] += 1
+                for bucket in (conv_bucket, bot_bucket, provider_model_bucket):
+                    bucket["messages_without_usage"] += 1
+                continue
+            prompt_tokens = _usage_int(usage.get("prompt_tokens")) or 0
+            completion_tokens = _usage_int(usage.get("completion_tokens")) or 0
+            total_tokens = _usage_int(usage.get("total_tokens"))
+            if total_tokens is None:
+                total_tokens = prompt_tokens + completion_tokens if prompt_tokens or completion_tokens else 0
+            if total_tokens == 0 and not (prompt_tokens or completion_tokens):
+                totals["unknown_total_messages"] += 1
+                for bucket in (conv_bucket, bot_bucket, provider_model_bucket):
+                    bucket["unknown_total_messages"] += 1
+            for bucket in (totals, conv_bucket, bot_bucket, provider_model_bucket):
+                _add_usage(bucket, prompt_tokens, completion_tokens, total_tokens)
+
+        def _sort(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            return sorted(rows, key=lambda item: int(item.get("total_tokens") or 0), reverse=True)
+
+        return {
+            "window": {
+                "hours": safe_hours,
+                "since": since.isoformat(),
+                "until": now.isoformat(),
+            },
+            "totals": totals,
+            "by_conversation": _sort(list(by_conversation.values()))[:safe_limit],
+            "conversation_count": len(by_conversation),
+            "by_bot": _sort(list(by_bot.values())),
+            "by_provider_model": _sort(list(by_provider_model.values())),
+        }
 
     async def list_message_slice(
         self,

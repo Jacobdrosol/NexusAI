@@ -207,3 +207,6 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 86: added project/manager/bot token usage lanes to the control-plane usage summary, Work page, and Work brief API so operators can identify which bot is spending tokens under which manager and project.
 - `pytest tests/test_task_manager.py::test_token_usage_summary_groups_by_project_manager_and_model -q` passed for Batch 86 control-plane usage lane aggregation.
 - `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load tests/test_work_overview.py::test_work_overview_usage_fallback_has_stable_shape -q` passed for Batch 86 Work usage lane visibility.
+- Batch 87: persisted non-stream chat response usage in assistant-message metadata and added a control-plane chat usage summary endpoint grouped by conversation, bot, and provider/model.
+- `pytest tests/test_chat_manager.py::test_summarize_message_usage_groups_by_conversation_bot_and_model -q` passed for Batch 87 chat usage aggregation.
+- `pytest tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 87 chat usage metadata and API summary.

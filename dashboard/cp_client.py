@@ -302,6 +302,17 @@ class CPClient:
             timeout=timeout,
         )
 
+    def chat_usage(
+        self,
+        hours: int = 24,
+        limit_conversations: int = 25,
+        timeout: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        return self._get(
+            f"/v1/chat/usage?hours={max(1, int(hours))}&limit_conversations={max(1, int(limit_conversations))}",
+            timeout=timeout,
+        )
+
     def list_work_dispatch_holds(self, *, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
         return self._get("/v1/tasks/work-dispatch-holds", timeout=timeout)
 

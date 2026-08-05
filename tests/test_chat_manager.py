@@ -66,6 +66,47 @@ async def test_update_conversation_route_defaults(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_summarize_message_usage_groups_by_conversation_bot_and_model(tmp_path):
+    from control_plane.chat.chat_manager import ChatManager
+
+    mgr = ChatManager(db_path=str(tmp_path / "chat-usage.db"))
+    convo = await mgr.create_conversation(title="Usage Chat", project_id="nexusai", scope="project")
+    await mgr.add_message(convo.id, role="user", content="hello")
+    await mgr.add_message(
+        convo.id,
+        role="assistant",
+        content="reply",
+        bot_id="general-chat",
+        provider="ollama_cloud",
+        model="qwen3.5:397b",
+        metadata={"usage": {"prompt_tokens": 20, "completion_tokens": 10}},
+    )
+    await mgr.add_message(
+        convo.id,
+        role="assistant",
+        content="unmetered reply",
+        bot_id="general-chat",
+        provider="ollama_cloud",
+        model="qwen3.5:397b",
+        metadata={},
+    )
+
+    usage = await mgr.summarize_message_usage(hours=24)
+
+    assert usage["totals"]["messages"] == 2
+    assert usage["totals"]["messages_with_usage"] == 1
+    assert usage["totals"]["messages_without_usage"] == 1
+    assert usage["totals"]["total_tokens"] == 30
+    assert usage["by_conversation"][0]["conversation_id"] == convo.id
+    assert usage["by_conversation"][0]["conversation_title"] == "Usage Chat"
+    assert usage["by_conversation"][0]["project_id"] == "nexusai"
+    assert usage["by_conversation"][0]["total_tokens"] == 30
+    assert usage["by_bot"][0]["bot_id"] == "general-chat"
+    assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"
+    assert usage["by_provider_model"][0]["model"] == "qwen3.5:397b"
+
+
+@pytest.mark.anyio
 async def test_list_conversations_project_filter_includes_bridged_membership(tmp_path):
     from control_plane.chat.chat_manager import ChatManager
 

@@ -10,7 +10,9 @@ from httpx import ASGITransport, AsyncClient
 
 @pytest.mark.anyio
 async def test_create_conversation_and_post_message(cp_app):
-    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={"output": "assistant reply", "usage": {"prompt_tokens": 12, "completion_tokens": 8}}
+    )
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat 1"})
         assert create_resp.status_code == 200
@@ -46,6 +48,17 @@ async def test_create_conversation_and_post_message(cp_app):
         assert metadata["model"]["provider"] == "ollama_cloud"
         assert metadata["model"]["model"] == "qwen3.5:397b"
         assert metadata["model"]["source"] == "bot_config"
+        assert metadata["usage"] == {"prompt_tokens": 12, "completion_tokens": 8}
+
+        usage_resp = await client.get("/v1/chat/usage?hours=24&limit_conversations=5")
+        assert usage_resp.status_code == 200
+        usage = usage_resp.json()
+        assert usage["totals"]["total_tokens"] == 20
+        assert usage["totals"]["messages_with_usage"] == 1
+        assert usage["by_conversation"][0]["conversation_id"] == conversation_id
+        assert usage["by_bot"][0]["bot_id"] == "bot-chat"
+        assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"
+        assert usage["by_provider_model"][0]["model"] == "qwen3.5:397b"
 
 
 @pytest.mark.anyio

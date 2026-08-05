@@ -3792,6 +3792,16 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
     )
 
 
+@router.get("/usage")
+async def chat_usage_summary(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=2160),
+    limit_conversations: int = Query(default=25, ge=1, le=250),
+) -> Dict[str, Any]:
+    chat_manager = request.app.state.chat_manager
+    return await chat_manager.summarize_message_usage(hours=hours, limit_conversations=limit_conversations)
+
+
 @router.get("/conversations", response_model=List[ChatConversation])
 async def list_conversations(
     request: Request,
@@ -4872,7 +4882,10 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 ns_bot,
                 bot_id=target_bot_id,
                 execution_provenance=execution_provenance,
-                extra=_memory_profile_metadata(memory_decision, hit_count=len(memory_hits)),
+                extra={
+                    **({"usage": result.get("usage", {})} if isinstance(result, dict) else {}),
+                    **_memory_profile_metadata(memory_decision, hit_count=len(memory_hits)),
+                },
             ),
         )
         await _index_memory_profile_turn(
