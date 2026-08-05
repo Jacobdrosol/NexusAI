@@ -1248,9 +1248,13 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
         resp = dashboard_client.get("/chat?conversation_id=c-chat")
 
     assert resp.status_code == 200
+    page_html = resp.data.decode("utf-8")
+    selector_start = page_html.index('id="chat-bot-selector"')
+    chat_selector = page_html[selector_start:page_html.index("</select>", selector_start)]
     assert b"Personal General Chat" in resp.data
     assert b"Personal General Chat - General Chat" in resp.data
-    assert b"GlobeIQ Live Audit QC 02" not in resp.data
+    assert "GlobeIQ Live Audit QC 02" not in chat_selector
+    assert 'value="personal-blocked-chat"  disabled title="model credential missing"' in chat_selector
     assert b"PM Orchestrator" in resp.data
     assert b"Select a project manager bot" in resp.data
     assert b"PM Orchestrator (pm) - blocked: PM worker route missing" in resp.data

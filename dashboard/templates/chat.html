@@ -528,7 +528,8 @@
         <select id="chat-bot-selector" class="form-control chat-bot-selector" aria-label="Message bot">
           <option value="">Conversation Bot</option>
           {% for b in chat_bots %}
-          <option value="{{ b.id }}" {% if selected_conversation.default_bot_id and selected_conversation.default_bot_id == b.id %}selected{% endif %}>
+          {% set blocked_chat_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
+          <option value="{{ b.id }}" {% if selected_conversation.default_bot_id and selected_conversation.default_bot_id == b.id %}selected{% endif %} {% if blocked_chat_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>
             {{ b.name }}{% if b.chat_profile and b.chat_profile.label %} - {{ b.chat_profile.label }}{% endif %}{% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% endif %}
           </option>
           {% endfor %}
