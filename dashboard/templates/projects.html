@@ -28,6 +28,14 @@
         {% if p.autonomy_coverage.available %}
         <div>{{ p.autonomy_coverage.enabled_configured_bot_count }} enabled</div>
         <div class="mini-note">{{ p.autonomy_coverage.configured_bot_count }} configured{% if p.autonomy_coverage.registered_bot_count %} / {{ p.autonomy_coverage.registered_bot_count }} legacy{% endif %}</div>
+        {% if p.autonomy_coverage.tooling_bot_count or p.autonomy_coverage.connection_action_bot_count or p.autonomy_coverage.browser_action_bot_count or p.autonomy_coverage.repo_edit_bot_count %}
+        <div class="mini-note">
+          {% if p.autonomy_coverage.tooling_bot_count %}{{ p.autonomy_coverage.tooling_bot_count }} tool-backed{% endif %}
+          {% if p.autonomy_coverage.connection_action_bot_count %}{% if p.autonomy_coverage.tooling_bot_count %} / {% endif %}{{ p.autonomy_coverage.connection_action_bot_count }} site/API{% endif %}
+          {% if p.autonomy_coverage.browser_action_bot_count %}{% if p.autonomy_coverage.tooling_bot_count or p.autonomy_coverage.connection_action_bot_count %} / {% endif %}{{ p.autonomy_coverage.browser_action_bot_count }} browser{% endif %}
+          {% if p.autonomy_coverage.repo_edit_bot_count %}{% if p.autonomy_coverage.tooling_bot_count or p.autonomy_coverage.connection_action_bot_count or p.autonomy_coverage.browser_action_bot_count %} / {% endif %}{{ p.autonomy_coverage.repo_edit_bot_count }} repo-edit{% endif %}
+        </div>
+        {% endif %}
         {% else %}
         <span class="empty">Unavailable</span>
         {% endif %}

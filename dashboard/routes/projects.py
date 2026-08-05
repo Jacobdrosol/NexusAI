@@ -386,12 +386,36 @@ def _attach_project_autonomy_coverage(
             if str(bot.get("id") or "").strip() in readiness_by_bot_id
             and not bool((readiness_by_bot_id.get(str(bot.get("id") or "").strip()) or {}).get("ready"))
         )
+
+        def _policy(bot: dict[str, Any]) -> dict[str, Any]:
+            return bot.get("execution_policy") if isinstance(bot.get("execution_policy"), dict) else {}
+
+        def _has_policy_list(bot: dict[str, Any], key: str) -> bool:
+            values = _policy(bot).get(key)
+            return isinstance(values, list) and any(str(value or "").strip() for value in values)
+
+        tooling_bot_count = sum(1 for bot in enabled_configured_bots if _has_policy_list(bot, "required_worker_tools"))
+        connection_action_bot_count = sum(
+            1 for bot in enabled_configured_bots if _has_policy_list(bot, "connection_action_allowlist")
+        )
+        browser_action_bot_count = sum(
+            1 for bot in enabled_configured_bots if _has_policy_list(bot, "browser_action_allowlist")
+        )
+        repo_edit_bot_count = sum(
+            1
+            for bot in enabled_configured_bots
+            if str(_policy(bot).get("repo_output_mode") or "").strip().lower() == "allow"
+        )
         row["autonomy_coverage"] = {
             "available": coverage_available,
             "readiness_available": readiness_rows is not None,
             "registered_bot_count": len(registered_bot_ids),
             "configured_bot_count": len(configured_bots),
             "enabled_configured_bot_count": len(enabled_configured_bots),
+            "tooling_bot_count": tooling_bot_count,
+            "connection_action_bot_count": connection_action_bot_count,
+            "browser_action_bot_count": browser_action_bot_count,
+            "repo_edit_bot_count": repo_edit_bot_count,
             "active_schedule_count": len(active_schedules),
             "scheduled_bot_count": len(scheduled_bot_ids),
             "completed_schedule_count": completed_schedule_count,
