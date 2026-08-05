@@ -401,6 +401,43 @@ def test_bot_import_keeps_existing_bot_when_enabled_candidate_is_unready(dashboa
     assert fake_cp.bots["guarded-bot"]["name"] == "Existing Bot"
 
 
+def test_bot_import_blocks_raw_secret_values_inside_bot_config(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            raise AssertionError("raw secret bot import should not query control plane")
+
+    secret_value = "sk-" + "1234567890abcdef1234567890"
+    bundle = {
+        "schema_version": "nexusai.bot-export.v1",
+        "bot": {
+            "id": "raw-secret-import",
+            "name": "Raw Secret Import",
+            "role": "assistant",
+            "enabled": False,
+            "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-5", "api_key_ref": secret_value}],
+        },
+        "connections": [
+            {
+                "name": "Allowed Connection Secret",
+                "kind": "http",
+                "config": {"base_url": "https://api.example.com"},
+                "auth": {"type": "api_key", "name": "X-API-Key", "api_key": "connection-secret-is-stored-separately"},
+            }
+        ],
+    }
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        response = dashboard_client.post("/api/bots/import", json={"bundle": bundle, "overwrite": True})
+
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["reason_code"] == "raw_secret_import_blocked"
+    assert body["blocked_path_count"] == 1
+    assert body["blocked_paths"] == ["bot.backends[0].api_key_ref"]
+
+
 def test_project_database_connection_create_test_and_schema_ingest(dashboard_client):
     _login_admin(dashboard_client)
 

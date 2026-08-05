@@ -128,6 +128,58 @@ def _safe_backend_ref_label(value: Any) -> tuple[str, bool]:
     return label, False
 
 
+def _walk_import_values(value: Any, path: str = "") -> list[tuple[str, Any]]:
+    rows: list[tuple[str, Any]] = [(path, value)]
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            rows.extend(_walk_import_values(nested, child_path))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            rows.extend(_walk_import_values(nested, f"{path}[{index}]"))
+    return rows
+
+
+def _import_secret_field_name(value: Any) -> bool:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    return (
+        normalized in {"api_key", "apikey", "authorization", "client_secret", "cookie", "password", "private_key", "secret", "session", "token"}
+        or normalized.endswith("_token")
+        or normalized.endswith("_secret")
+    )
+
+
+def _safe_credential_reference(value: str) -> bool:
+    label = str(value or "").strip()
+    if not label:
+        return False
+    if label.startswith(("env:", "vault:", "secret:", "key_ref:", "credential:")):
+        return True
+    return label.isupper() and all(char.isalnum() or char == "_" for char in label)
+
+
+def _raw_secret_import_paths(bundle: dict[str, Any]) -> list[str]:
+    secret_patterns = (
+        re.compile(r"sk-[A-Za-z0-9_\-]{16,}"),
+        re.compile(r"ghp_[A-Za-z0-9_]{16,}"),
+        re.compile(r"github_pat_[A-Za-z0-9_]{16,}"),
+        re.compile(r"xox[baprs]-[A-Za-z0-9\-]{16,}"),
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    )
+    paths: list[str] = []
+    for path, value in _walk_import_values(bundle):
+        leaf = path.rsplit(".", 1)[-1].split("[", 1)[0]
+        if isinstance(value, str):
+            if any(pattern.search(value) for pattern in secret_patterns):
+                paths.append(path)
+                continue
+            if _import_secret_field_name(leaf) and value and not _safe_credential_reference(value):
+                paths.append(path)
+        elif _import_secret_field_name(leaf) and value is not None:
+            paths.append(path)
+    return paths
+
+
 def _sanitize_bot_for_detail(bot: dict[str, Any]) -> dict[str, Any]:
     payload = dict(bot or {})
     sanitized_backends = []
@@ -996,6 +1048,17 @@ def api_import_bot():
     bot_name = str(bot_payload.get("name") or "").strip()
     if not bot_id or not bot_name:
         return jsonify({"error": "imported bot must include id and name"}), 400
+
+    raw_secret_paths = _raw_secret_import_paths({"bot": bot_payload})
+    if raw_secret_paths:
+        return jsonify(
+            {
+                "error": "import bundle contains raw secret-like values; replace them with vault/env credential references before importing",
+                "reason_code": "raw_secret_import_blocked",
+                "blocked_paths": raw_secret_paths[:10],
+                "blocked_path_count": len(raw_secret_paths),
+            }
+        ), 400
 
     overwrite = bool(body.get("overwrite", False))
     cp = get_cp_client()
