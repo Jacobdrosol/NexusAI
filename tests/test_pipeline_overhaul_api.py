@@ -99,6 +99,8 @@ async def test_assignment_preview_create_and_lineage(cp_client):
             "instruction": "Implement feature x with deterministic checks.",
             "pm_bot_id": pm_bot_id,
             "run_id": preview["run_id"],
+            "context_items": ["Chat: existing architecture constraints"],
+            "context_item_ids": [vault_item_id],
             "node_overrides": {
                 pm_bot_id: {
                     "skip": False,
@@ -114,6 +116,11 @@ async def test_assignment_preview_create_and_lineage(cp_client):
     assignment_id = str(assignment.get("assignment_id") or "")
     assert assignment_id
     assert assignment.get("orchestration_id")
+    user_meta = (created.get("user_message") or {}).get("metadata") or {}
+    assistant_meta = (created.get("assistant_message") or {}).get("metadata") or {}
+    assert user_meta["assignment_explicit_context_item_count"] == 2
+    assert assistant_meta["assignment_explicit_context_item_count"] == 2
+    assert any(str(source).startswith("vault:") for source in user_meta["assignment_explicit_context_sources"])
 
     graph_resp = await cp_client.get(f"/v1/assignments/{assignment_id}/graph")
     assert graph_resp.status_code == 200
@@ -201,12 +208,13 @@ async def test_assignment_splice_posts_messages_to_origin_chat(cp_client):
 
     splice_resp = await cp_client.post(
         f"/v1/assignments/{assignment_id}/splice",
-        json={"from_node_id": pm_bot_id, "node_overrides": {}},
+        json={"from_node_id": pm_bot_id, "node_overrides": {}, "context_items": ["Manual splice context"]},
     )
     assert splice_resp.status_code == 200
     splice_body = splice_resp.json()
     assert isinstance(splice_body.get("assignment"), dict)
     assert isinstance(splice_body.get("assistant_message"), dict)
+    assert (splice_body.get("assistant_message") or {}).get("metadata", {}).get("assignment_explicit_context_item_count") == 1
 
     messages_resp = await cp_client.get(f"/v1/chat/conversations/{conversation_id}/messages")
     assert messages_resp.status_code == 200

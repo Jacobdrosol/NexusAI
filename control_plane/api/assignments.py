@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from control_plane.api.chat import (
     _build_assignment_context_snapshot,
     _assignment_context_message_metadata,
+    _context_source_labels,
 )
 
 
@@ -92,6 +93,13 @@ async def _resolve_assignment_context_items(
     return resolved[:_ASSIGNMENT_CONTEXT_ITEM_MAX_COUNT]
 
 
+def _assignment_explicit_context_metadata(context_items: List[str]) -> Dict[str, Any]:
+    return {
+        "assignment_explicit_context_item_count": len(context_items or []),
+        "assignment_explicit_context_sources": _context_source_labels(context_items, limit=12),
+    }
+
+
 async def _resolve_run(request: Request, assignment_id: str) -> Dict[str, Any]:
     run_store = request.app.state.orchestration_run_store
     run = await run_store.get_run(assignment_id)
@@ -153,6 +161,7 @@ async def create_assignment(request: Request, body: CreateAssignmentRequest) -> 
             context_meta = _assignment_context_message_metadata(context_snapshot)
         except Exception:
             context_meta = {}
+        explicit_context_meta = _assignment_explicit_context_metadata(context_items)
         user_message = await chat_manager.add_message(
             conversation_id=body.conversation_id,
             role="user",
@@ -166,6 +175,7 @@ async def create_assignment(request: Request, body: CreateAssignmentRequest) -> 
                 "run_id": queued.get("run_id"),
                 "node_overrides": _dump_overrides(body.node_overrides),
                 **context_meta,
+                **explicit_context_meta,
             },
         )
         assistant_message = await chat_manager.add_message(
@@ -187,6 +197,7 @@ async def create_assignment(request: Request, body: CreateAssignmentRequest) -> 
                 "task_count": len(queued.get("tasks") or []),
                 "assigned_pm_bot_id": str(queued.get("pm_bot_id") or ""),
                 **context_meta,
+                **explicit_context_meta,
             },
         )
 
@@ -275,6 +286,7 @@ async def splice_assignment(assignment_id: str, request: Request, body: SpliceAs
         conversation_id = str(run.get("conversation_id") or "").strip()
         pm_bot_id = str(assignment.get("pm_bot_id") or run.get("pm_bot_id") or "").strip()
         if conversation_id and assignment:
+            explicit_context_meta = _assignment_explicit_context_metadata(context_items)
             user_message = await chat_manager.add_message(
                 conversation_id=conversation_id,
                 role="user",
@@ -290,6 +302,7 @@ async def splice_assignment(assignment_id: str, request: Request, body: SpliceAs
                     "spliced_from_node_id": body.from_node_id,
                     "lineage_parent_run_id": str(run.get("id") or ""),
                     "node_overrides": _dump_overrides(body.node_overrides),
+                    **explicit_context_meta,
                 },
             )
             assistant_message = await chat_manager.add_message(
@@ -313,6 +326,7 @@ async def splice_assignment(assignment_id: str, request: Request, body: SpliceAs
                     "assigned_pm_bot_id": pm_bot_id,
                     "spliced_from_node_id": body.from_node_id,
                     "lineage_parent_run_id": str(run.get("id") or ""),
+                    **explicit_context_meta,
                 },
             )
 
