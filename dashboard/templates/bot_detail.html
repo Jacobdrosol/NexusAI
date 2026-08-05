@@ -2599,7 +2599,12 @@ function submitTestRun() {
   })
   .then(async (r) => {
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || 'Test run failed');
+    if (!r.ok) {
+      const action = data.tooling && data.tooling.recommended_action ? data.tooling.recommended_action.label : '';
+      const blockers = Array.isArray(data.blocking_messages) ? data.blocking_messages.filter(Boolean).slice(0, 3).join(' ') : '';
+      const detail = [data.error || 'Test run failed', action ? 'Action: ' + action : '', blockers].filter(Boolean).join('\n');
+      throw new Error(detail);
+    }
     alert('Test run queued: ' + data.id);
     location.reload();
   })

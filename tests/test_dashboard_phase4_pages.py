@@ -2374,6 +2374,26 @@ def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
     _login_admin(dashboard_client)
 
     class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Ready Bot",
+                "enabled": True,
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5", "api_key_ref": "OLLAMA_CLOUD_KEY"}],
+            }
+
+        def get_bot_readiness(self, bot_id):
+            return {"bot_id": bot_id, "state": "ready", "ready": True, "checks": []}
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return [{"name": "OLLAMA_CLOUD_KEY"}]
+
         def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
             return {"id": "task-123", "bot_id": bot_id, "payload": payload, "metadata": metadata}
 
@@ -2386,6 +2406,51 @@ def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
     assert resp.status_code == 201
     assert resp.get_json()["id"] == "task-123"
     assert resp.get_json()["metadata"]["execution_mode"] == "test"
+    assert resp.get_json()["metadata"]["tooling_preflight"]["tooling_state"] == "ready"
+    assert resp.get_json()["metadata"]["tooling_preflight"]["credential_refs"] == ["OLLAMA_CLOUD_KEY"]
+
+
+def test_bot_test_run_api_blocks_tooling_preflight_failures(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Blocked Bot",
+                "enabled": True,
+                "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http", "api_key_ref": "MISSING_SITE_TOKEN"}],
+                "execution_policy": {"connection_action_allowlist": ["site.update"]},
+            }
+
+        def get_bot_readiness(self, bot_id):
+            return {"bot_id": bot_id, "state": "ready", "ready": True, "checks": []}
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return [{"name": "OTHER_TOKEN"}]
+
+        def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
+            raise AssertionError("blocked bot test runs must not create tasks")
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/bots/blocked-bot/test-run",
+            json={"payload": {"instruction": "hello"}},
+        )
+
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["error"] == "bot test run blocked by tooling readiness"
+    assert body["tooling"]["tooling_state"] == "blocked"
+    assert body["tooling"]["blocking_category"] == "credential"
+    assert body["tooling"]["missing_credential_refs"] == ["MISSING_SITE_TOKEN"]
+    assert body["tooling"]["recommended_action"]["label"] == "configure vault key"
 
 
 def test_bot_launch_api_uses_saved_launch_profile(dashboard_client):

@@ -137,6 +137,60 @@ def _cp_error_payload(cp, fallback: str) -> tuple[dict[str, Any], int]:
     return payload, status
 
 
+def _bot_test_preflight_summary(row: dict[str, Any]) -> dict[str, Any]:
+    """Return safe audit metadata for a one-off bot test run."""
+    return {
+        "tooling_state": row.get("state"),
+        "blocking_category": row.get("blocking_category") or None,
+        "recommended_action": row.get("recommended_action") or None,
+        "required_tools": row.get("required_tools") or [],
+        "connection_actions": row.get("connection_actions") or [],
+        "browser_actions": row.get("browser_actions") or [],
+        "credential_refs": row.get("credential_refs") or [],
+        "missing_credential_refs": row.get("missing_credential_refs") or [],
+        "worker_ids": row.get("worker_ids") or [],
+    }
+
+
+def _bot_test_preflight(cp, bot_id: str) -> tuple[dict[str, Any] | None, tuple[dict[str, Any], int] | None]:
+    """Check whether a bot can safely run a proof task before queueing one."""
+    get_bot = getattr(cp, "get_bot", None)
+    if not callable(get_bot):
+        return None, None
+    bot = get_bot(bot_id)
+    if bot is None:
+        return None, ({"error": "bot not found"}, 404)
+
+    readiness_getter = getattr(cp, "get_bot_readiness", None)
+    workers_getter = getattr(cp, "list_workers", None)
+    probes_getter = getattr(cp, "list_worker_probes", None)
+    keys_getter = getattr(cp, "list_keys", None)
+    readiness = readiness_getter(bot_id) if callable(readiness_getter) else None
+    workers = workers_getter() if callable(workers_getter) else []
+    probes = probes_getter() if callable(probes_getter) else None
+    api_keys = keys_getter() if callable(keys_getter) else None
+    tooling_status = build_bot_tooling_status(
+        bots=[bot],
+        readiness_payload={"readiness": [readiness]} if isinstance(readiness, dict) else None,
+        workers=workers if isinstance(workers, list) else [],
+        worker_probes_payload=probes if isinstance(probes, dict) else None,
+        api_keys=api_keys if isinstance(api_keys, list) else None,
+    )
+    row = (tooling_status.get("rows") or [{}])[0]
+    summary = _bot_test_preflight_summary(row)
+    state = str(row.get("state") or "").strip().lower()
+    if state in {"blocked", "disabled"}:
+        return summary, (
+            {
+                "error": "bot test run blocked by tooling readiness",
+                "tooling": summary,
+                "blocking_messages": row.get("blocking_messages") or row.get("disabled_activation_messages") or [],
+            },
+            409,
+        )
+    return summary, None
+
+
 def _bot_connections_payload(db, bot_ref: str) -> list[dict[str, Any]]:
     links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_ref)).all()
     ids = [link.connection_id for link in links]
@@ -1074,16 +1128,23 @@ def api_test_run_bot(bot_id: str):
         return jsonify({"error": "payload object is required"}), 400
 
     cp = get_cp_client()
+    preflight, preflight_error = _bot_test_preflight(cp, bot_id)
+    if preflight_error:
+        body, status = preflight_error
+        return jsonify(body), status
+    metadata = {
+        "source": "bot_test",
+        "execution_mode": "test",
+        "project_id": data.get("project_id"),
+        "conversation_id": data.get("conversation_id"),
+        "priority": data.get("priority"),
+    }
+    if preflight:
+        metadata["tooling_preflight"] = preflight
     task = cp.create_task_full(
         bot_id=bot_id,
         payload=payload,
-        metadata={
-            "source": "bot_test",
-            "execution_mode": "test",
-            "project_id": data.get("project_id"),
-            "conversation_id": data.get("conversation_id"),
-            "priority": data.get("priority"),
-        },
+        metadata=metadata,
     )
     if task is None:
         err = cp.last_error()
