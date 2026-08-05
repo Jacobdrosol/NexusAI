@@ -3607,6 +3607,37 @@ def test_chat_ingest_api_excludes_failed_pm_reports_with_json_metadata(dashboard
     assert "failed implementation output" not in body["content"]
 
 
+def test_chat_ingest_api_preserves_messages_without_ids(dashboard_client):
+    _login_admin(dashboard_client)
+    seen: dict[str, object] = {}
+
+    class FakeCP:
+        def list_conversations(self):
+            return [{"id": "c1", "title": "Imported Chat"}]
+
+        def list_messages(self, conversation_id):
+            assert conversation_id == "c1"
+            return [
+                {"role": "user", "content": "imported question without id"},
+                {"role": "assistant", "content": "imported answer without id"},
+            ]
+
+        def ingest_vault_item(self, body):
+            seen["body"] = body
+            return {"id": "vault-1", **body}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/ingest",
+            json={"conversation_id": "c1", "namespace": "project:imports"},
+        )
+
+    assert resp.status_code == 201
+    body = seen["body"]
+    assert "imported question without id" in body["content"]
+    assert "imported answer without id" in body["content"]
+
+
 def test_chat_stream_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/chat/stream", json={})

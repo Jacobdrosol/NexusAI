@@ -2442,13 +2442,12 @@ def api_ingest_chat():
     raw_messages = cp.list_messages(conversation_id)
     if not conversation or raw_messages is None:
         return jsonify({"error": "conversation or messages unavailable"}), 502
-    messages = _normalize_message_rows(raw_messages)
-
     lines = []
-    for m in messages:
+    for m in raw_messages:
         if isinstance(m, dict) and _is_failed_pm_run_message(m):
             continue
-        lines.append(f"[{m.get('role', 'unknown')}] {m.get('content', '')}")
+        if isinstance(m, dict):
+            lines.append(f"[{m.get('role', 'unknown')}] {m.get('content', '')}")
     content = "\n\n".join(lines)
     title = f"Chat: {conversation.get('title', conversation_id)}"
     ingested = cp.ingest_vault_item(
