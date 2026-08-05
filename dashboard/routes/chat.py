@@ -75,6 +75,61 @@ def _chat_selectable_bots(bots: Iterable[Any]) -> list[Any]:
     return with_bot_chat_profiles(selectable)
 
 
+def _readiness_by_bot_id(payload: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return {}
+    rows = payload.get("readiness")
+    if not isinstance(rows, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        bot_id = str(row.get("bot_id") or "").strip()
+        if not bot_id:
+            continue
+        checks = row.get("checks") if isinstance(row.get("checks"), list) else []
+        messages = [
+            str(check.get("message") or check.get("component") or "").strip()
+            for check in checks
+            if isinstance(check, dict)
+            and str(check.get("message") or check.get("component") or "").strip()
+        ]
+        failed = [
+            str(check.get("message") or check.get("component") or "").strip()
+            for check in checks
+            if isinstance(check, dict)
+            and str(check.get("status") or "").strip().lower() in {"failed", "blocking"}
+            and str(check.get("message") or check.get("component") or "").strip()
+        ]
+        state = str(row.get("state") or "").strip().lower()
+        if not state:
+            state = "ready" if bool(row.get("ready")) else "blocked"
+        result[bot_id] = {
+            "state": state,
+            "ready": bool(row.get("ready")) if "ready" in row else state == "ready",
+            "detail": failed[0]
+            if failed
+            else (messages[0] if messages else ("Ready" if state == "ready" else "Readiness unavailable.")),
+            "failed": len(failed),
+        }
+    return result
+
+
+def _with_chat_bot_readiness(chat_bots: list[dict[str, Any]], readiness_payload: Any) -> list[dict[str, Any]]:
+    readiness = _readiness_by_bot_id(readiness_payload)
+    enriched: list[dict[str, Any]] = []
+    for bot in chat_bots:
+        row = dict(bot)
+        bot_id = str(row.get("id") or "").strip()
+        row["readiness"] = readiness.get(
+            bot_id,
+            {"state": "unknown", "ready": False, "detail": "Readiness not reported.", "failed": 0},
+        )
+        enriched.append(row)
+    return enriched
+
+
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
@@ -605,6 +660,10 @@ def chat_page() -> str:
             bots = cp.list_bots() or []
         except Exception:
             bots = []
+        try:
+            bot_readiness_payload = cp.list_bot_readiness() if hasattr(cp, "list_bot_readiness") else {}
+        except Exception:
+            bot_readiness_payload = {}
 
         try:
             projects = cp.list_projects() or []
@@ -698,6 +757,8 @@ def chat_page() -> str:
             vault_items_raw = []
         vault_items = _normalize_vault_item_rows(vault_items_raw)
 
+        chat_bots = _with_chat_bot_readiness(_chat_selectable_bots(bots), bot_readiness_payload)
+
         return render_template(
             "chat.html",
             conversations=[c for c in conversations if not c.get("archived_at")],
@@ -707,7 +768,7 @@ def chat_page() -> str:
             selected_conversation=selected,
             messages=messages,
             bots=bots,
-            chat_bots=_chat_selectable_bots(bots),
+            chat_bots=chat_bots,
             projects=projects,
             vault_items=vault_items,
             repo_context_items=repo_context_items,

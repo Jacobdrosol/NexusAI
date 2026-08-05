@@ -1392,7 +1392,13 @@ function updateChatBotCapabilitySummary() {
   const imageLabel = activeBotSupportsImages() ? 'images supported' : 'text only';
   const modelLabel = [backend.provider, backend.model].filter(Boolean).join(' / ') || 'model unknown';
   const profileLabel = String(profile.label || profile.mode || bot.role || 'chat').trim();
-  summary.textContent = `${bot.name || bot.id}: ${profileLabel}; ${modelLabel}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}.`;
+  const readiness = bot.readiness && typeof bot.readiness === 'object' ? bot.readiness : {};
+  const readinessState = String(readiness.state || 'unknown').trim() || 'unknown';
+  const readinessDetail = String(readiness.detail || '').trim();
+  const readinessLabel = readinessDetail
+    ? `readiness ${readinessState} (${readinessDetail})`
+    : `readiness ${readinessState}`;
+  summary.textContent = `${bot.name || bot.id}: ${profileLabel}; ${modelLabel}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}.`;
 }
 
 function _chatGateCheckboxValue(id, fallback) {

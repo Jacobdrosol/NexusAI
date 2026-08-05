@@ -784,6 +784,23 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
                 },
             ]
 
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {
+                        "bot_id": "personal-general-chat",
+                        "state": "ready",
+                        "ready": True,
+                        "checks": [
+                            {
+                                "status": "ready",
+                                "message": "backend ready for chat",
+                            }
+                        ],
+                    }
+                ]
+            }
+
         def list_projects(self):
             return []
 
@@ -804,6 +821,8 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"Select a project manager bot" in resp.data
     assert b"chat-bot-capability-summary" in resp.data
     assert b"function updateChatBotCapabilitySummary" in resp.data
+    assert b"backend ready for chat" in resp.data
+    assert b"readinessLabel" in resp.data
 
 
 def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
