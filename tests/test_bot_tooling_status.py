@@ -298,6 +298,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Worker Assignments" in page.data
     assert b"Credential Ref Bots" in page.data
     assert b"Disabled Needs Fix" in page.data
+    assert b"setBotTableFilter('disabled-needs-fix')" in page.data
     assert b"Recommended action:" in page.data
     assert b"restore browser session" in page.data
     assert b"Open the worker browser profile" in page.data
@@ -316,6 +317,11 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     connection_row_start = page_html.index('data-id="connection-bot"')
     connection_row = page_html[connection_row_start:page_html.index("</tr>", connection_row_start)]
     assert 'data-has-tools="true"' in connection_row
+    disabled_row_start = page_html.index('data-id="disabled-needs-model"')
+    disabled_row = page_html[disabled_row_start:page_html.index("</tr>", disabled_row_start)]
+    assert 'data-disabled-needs-fix="true"' in disabled_row
+    assert "Enable blockers:" in disabled_row
+    assert "Model &#39;missing-model&#39; is not present/enabled in the model catalog." in disabled_row
     assert api.status_code == 200
     payload = api.get_json()
     assert payload["summary"]["blocked"] == 1

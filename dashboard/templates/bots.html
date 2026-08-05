@@ -26,6 +26,7 @@
     <div class="quick-links">
       <button class="btn btn-sm" type="button" onclick="setBotTableFilter('all')">All</button>
       <button class="btn btn-sm" type="button" onclick="setBotTableFilter('blocked')">Blocked</button>
+      <button class="btn btn-sm" type="button" onclick="setBotTableFilter('disabled-needs-fix')">Disabled Needs Fix</button>
       <button class="btn btn-sm" type="button" onclick="setBotTableFilter('tooling')">Tooling</button>
     </div>
   </div>
@@ -190,6 +191,7 @@
     {% set bot_tooling = (tooling.rows | selectattr('bot_id', 'equalto', b.id) | list | first) if tooling.rows else None %}
     <tr data-id="{{ b.id }}"
         data-readiness="{{ (bot_tooling.state if bot_tooling else (b.readiness.state if b.readiness else 'unknown')) }}"
+        data-disabled-needs-fix="{{ 'true' if bot_tooling and bot_tooling.disabled_activation_messages else 'false' }}"
         data-has-tools="{{ 'true' if bot_tooling and (bot_tooling.required_tools or bot_tooling.connection_actions or bot_tooling.browser_actions or bot_tooling.owner_approval_actions or bot_tooling.browser_owner_approval_actions or bot_tooling.connection_backend_count) else 'false' }}">
       <td><a href="{{ url_for('bots.bot_detail_page', bot_id=b.id) }}">{{ b.name }}</a></td>
       <td>{{ b.role }}</td>
@@ -213,6 +215,15 @@
         {% if b.readiness %}
         <span class="badge badge-{{ b.readiness.state }}" title="{{ b.readiness.detail }}">{{ b.readiness.state }}</span>
         {% if b.readiness.state != 'disabled' and b.readiness.failed %}<div class="metrics">{{ b.readiness.failed }} check(s)</div>{% endif %}
+        {% if bot_tooling and bot_tooling.disabled_activation_messages %}
+        <div class="metrics">Enable blockers:</div>
+        {% for message in bot_tooling.disabled_activation_messages[:2] %}
+        <div class="metrics">{{ message }}</div>
+        {% endfor %}
+        {% if bot_tooling.disabled_activation_messages|length > 2 %}
+        <div class="metrics">+{{ bot_tooling.disabled_activation_messages|length - 2 }} more blocker(s)</div>
+        {% endif %}
+        {% endif %}
         {% else %}
         <span class="badge badge-unknown">unknown</span>
         {% endif %}
@@ -767,9 +778,11 @@ function setBotTableFilter(mode) {
   document.querySelectorAll('#bots-table tbody tr[data-id]').forEach((row) => {
     const readiness = String(row.dataset.readiness || '');
     const hasTools = row.dataset.hasTools === 'true';
+    const disabledNeedsFix = row.dataset.disabledNeedsFix === 'true';
     const visible =
       normalized === 'all'
       || (normalized === 'blocked' && readiness === 'blocked')
+      || (normalized === 'disabled-needs-fix' && disabledNeedsFix)
       || (normalized === 'tooling' && hasTools);
     row.style.display = visible ? '' : 'none';
   });

@@ -281,3 +281,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_bot_tooling_status.py -q` passed for Batch 128 disabled activation-readiness visibility.
 - Batch 129: made assistant-message provenance resolve id-only bot and model metadata through the page bot/model catalogs for both saved and live-hydrated messages, while preserving raw ids in tooltips.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance tests/test_dashboard_phase4_pages.py::test_chat_page_resolves_id_only_message_provenance_labels tests/test_dashboard_phase4_pages.py::test_chat_page_renders_project_filter_metadata_on_conversations -q` passed for Batch 129 message provenance label resolution.
+- Batch 130: made disabled-bot activation blockers actionable on the Bots page by adding a Disabled Needs Fix table filter and row-level enable-blocker details.
+- `pytest tests/test_bot_tooling_status.py -q` passed for Batch 130 disabled activation-blocker row visibility.
