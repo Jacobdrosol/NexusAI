@@ -1713,6 +1713,7 @@ def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client)
     assert b"2026-08-04 12:33:00" in resp.data
     assert b"2026-08-04 12:34:00" in resp.data
     assert b"function renderMessageTimestampHtml" in resp.data
+    assert b"timestampEl.insertAdjacentHTML('afterend', provenanceHtml)" in resp.data
     assert b"function formatMessageUsageLabel" in resp.data
 
 

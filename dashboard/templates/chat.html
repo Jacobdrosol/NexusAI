@@ -2547,8 +2547,13 @@ function hydrateMessageElement(el, message) {
   if (provenanceHtml) {
     if (existingProvenance) {
       existingProvenance.outerHTML = provenanceHtml;
-    } else if (roleEl) {
-      roleEl.insertAdjacentHTML('afterend', provenanceHtml);
+    } else {
+      const timestampEl = el.querySelector('.message-timestamp');
+      if (timestampEl) {
+        timestampEl.insertAdjacentHTML('afterend', provenanceHtml);
+      } else if (roleEl) {
+        roleEl.insertAdjacentHTML('afterend', provenanceHtml);
+      }
     }
   } else if (existingProvenance) {
     existingProvenance.remove();
