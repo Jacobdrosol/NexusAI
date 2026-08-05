@@ -92,7 +92,7 @@
 <section class="panel" style="margin-bottom:1rem;">
   <h2 class="panel-title">Assigned Bot Scope</h2>
   <table>
-    <thead><tr><th>Bot</th><th>Status</th><th>Work Scope</th><th>Approval Gates</th></tr></thead>
+    <thead><tr><th>Bot</th><th>Status</th><th>Readiness</th><th>Work Scope</th><th>Approval Gates</th></tr></thead>
     <tbody>
       {% for bot in bots %}
       {% set scope = bot.scope_view or {} %}
@@ -103,6 +103,11 @@
           <div class="mini-note">{{ bot.role or 'bot' }}{% if bot.id %} · {{ bot.id }}{% endif %}</div>
         </td>
         <td><span class="badge badge-{{ 'enabled' if bot.enabled else 'disabled' }}">{{ 'enabled' if bot.enabled else 'disabled' }}</span></td>
+        <td>
+          {% set readiness = bot.readiness or {} %}
+          <span class="badge badge-{{ readiness.state or 'unknown' }}">{{ readiness.state or 'unknown' }}</span>
+          {% if readiness.detail %}<div class="mini-note">{{ readiness.detail }}</div>{% endif %}
+        </td>
         <td class="metrics">
           {% if scope.required_tools %}<div>Tools: {{ scope.required_tools | join(', ') }}</div>{% endif %}
           {% if scope.connection_actions %}<div>Site/API actions: {{ scope.connection_actions | join(', ') }}</div>{% endif %}
@@ -120,7 +125,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="4" class="empty">No bots are assigned to this project.</td></tr>
+      <tr><td colspan="5" class="empty">No bots are assigned to this project.</td></tr>
       {% endfor %}
     </tbody>
   </table>

@@ -175,6 +175,22 @@ def _build_project_ai_readiness(
         "ready" if enabled_bots else "attention",
         f"{len(enabled_bots)} enabled bot(s), {len(project_bots)} assigned bot(s).",
     )
+    blocked_bots = [
+        bot
+        for bot in enabled_bots
+        if str((bot.get("readiness") or {}).get("state") or "").strip().lower() in {"blocked", "disabled"}
+    ]
+    unknown_bots = [
+        bot
+        for bot in enabled_bots
+        if str((bot.get("readiness") or {}).get("state") or "").strip().lower() == "unknown"
+    ]
+    if blocked_bots:
+        add_check("Bot Readiness", "attention", f"{len(blocked_bots)} enabled assigned bot(s) are blocked.")
+    elif unknown_bots:
+        add_check("Bot Readiness", "attention", f"{len(unknown_bots)} enabled assigned bot(s) have unknown readiness.")
+    elif enabled_bots:
+        add_check("Bot Readiness", "ready", "All enabled assigned bots report ready.")
 
     memory_enabled = bool(project.get("memory_profiles_enabled", False))
     add_check(
@@ -282,6 +298,38 @@ def _with_project_bot_scope_views(bots: list[dict[str, Any]]) -> list[dict[str, 
     for bot in bots:
         row = dict(bot)
         row["scope_view"] = _project_bot_scope_view(row)
+        enriched.append(row)
+    return enriched
+
+
+def _bot_readiness_view(readiness: Any) -> dict[str, Any]:
+    if not isinstance(readiness, dict):
+        return {"state": "unknown", "detail": "readiness unavailable"}
+    state = str(readiness.get("state") or "").strip().lower()
+    if not state:
+        state = "ready" if bool(readiness.get("ready", False)) else "blocked"
+    failed_messages = [
+        str(check.get("message") or check.get("component") or "").strip()
+        for check in readiness.get("checks") or []
+        if isinstance(check, dict) and str(check.get("status") or "").strip().lower() in {"failed", "blocking"}
+    ]
+    detail = "; ".join(message for message in failed_messages if message)
+    if not detail:
+        detail = "ready" if state == "ready" else "no readiness detail"
+    return {"state": state, "detail": detail}
+
+
+def _with_project_bot_readiness_views(bots: list[dict[str, Any]], readiness_payload: Any) -> list[dict[str, Any]]:
+    rows = readiness_payload.get("readiness") if isinstance(readiness_payload, dict) else []
+    by_id = {
+        str(row.get("bot_id") or "").strip(): row
+        for row in rows or []
+        if isinstance(row, dict) and str(row.get("bot_id") or "").strip()
+    }
+    enriched = []
+    for bot in bots:
+        row = dict(bot)
+        row["readiness"] = _bot_readiness_view(by_id.get(str(bot.get("id") or "").strip()))
         enriched.append(row)
     return enriched
 
@@ -528,6 +576,9 @@ def project_detail_page(project_id: str):
         or str(bot.get("project_id") or "") == str(project_id)
     ]
     project_bots = _with_project_bot_scope_views(project_bots)
+    list_readiness = getattr(cp, "list_bot_readiness", None)
+    readiness_payload = list_readiness() if callable(list_readiness) else None
+    project_bots = _with_project_bot_readiness_views(project_bots, readiness_payload)
     project_reports: list[dict[str, Any]] = []
     for bot in project_bots:
         bot_id = str(bot.get("id") or "")

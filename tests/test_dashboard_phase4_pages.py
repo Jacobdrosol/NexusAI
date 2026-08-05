@@ -243,6 +243,18 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
                 }
             ]
 
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {
+                        "bot_id": "bot-1",
+                        "state": "blocked",
+                        "ready": False,
+                        "checks": [{"status": "failed", "message": "Browser session expired"}],
+                    }
+                ]
+            }
+
         def list_bot_artifacts(self, bot_id, limit=20):
             return []
 
@@ -277,10 +289,12 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
 
     assert resp.status_code == 200
     assert b"AI Workspace Readiness" in resp.data
-    assert b"Ready for AI work" in resp.data
+    assert b"1 setup item(s) need attention" in resp.data
+    assert b"1 enabled assigned bot(s) are blocked." in resp.data
     assert b"1 enabled / 1 total" in resp.data
     assert b"Assigned Bot Scope" in resp.data
     assert b"Research Bot" in resp.data
+    assert b"Browser session expired" in resp.data
     assert b"Tools: browser-ui" in resp.data
     assert b"Site/API actions: globeiq-agent-api.updateLesson" in resp.data
     assert b"Browser actions: lesson_preview.read" in resp.data
