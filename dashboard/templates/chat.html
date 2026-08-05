@@ -553,13 +553,14 @@
       <h2 class="panel-title">Messages</h2>
       {% if selected_conversation %}
       <div class="chat-main-header-controls">
+        {% set active_message_bot_id = selected_conversation.default_bot_id or preselected_chat_bot_id %}
         <select id="chat-bot-selector" class="form-control chat-bot-selector" aria-label="Message bot">
           <option value="">Conversation Bot</option>
           {% for group in chat_bots|groupby('chat_profile.label', default='Chat') %}
           <optgroup label="{{ group.grouper or 'Chat' }}">
             {% for b in group.list %}
             {% set blocked_chat_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
-            <option value="{{ b.id }}" {% if selected_conversation.default_bot_id and selected_conversation.default_bot_id == b.id %}selected{% endif %} {% if blocked_chat_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>
+            <option value="{{ b.id }}" {% if active_message_bot_id and active_message_bot_id == b.id %}selected{% endif %} {% if blocked_chat_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>
               {{ b.name }}{% if b.chat_profile and b.chat_profile.label %} - {{ b.chat_profile.label }}{% endif %}{% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% endif %}
             </option>
             {% endfor %}
@@ -752,7 +753,7 @@
     <form id="chat-send-form" class="chat-input chat-composer">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
-      <input type="hidden" name="bot_id" id="chat-send-bot-id" value="{{ selected_conversation.default_bot_id or '' }}">
+      <input type="hidden" name="bot_id" id="chat-send-bot-id" value="{{ selected_conversation.default_bot_id or preselected_chat_bot_id or '' }}">
       <input type="file" id="chat-attachment-input" style="display:none;" multiple onchange="handleChatAttachmentSelect(event)">
       <div id="chat-compose-dropzone" class="chat-compose-dropzone">
         <div class="chat-compose-top">
@@ -846,7 +847,7 @@
           <optgroup label="{{ group.grouper or 'Chat' }}">
             {% for b in group.list %}
             {% set blocked_default_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
-            <option value="{{ b.id }}" {% if blocked_default_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>{{ b.name }} ({{ b.id }}){% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% if b.readiness.detail %}: {{ b.readiness.detail }}{% endif %}{% endif %}</option>
+            <option value="{{ b.id }}"{% if preselected_chat_bot_id and preselected_chat_bot_id == b.id %} selected{% endif %}{% if blocked_default_bot %} disabled title="{{ b.readiness.detail }}"{% endif %}>{{ b.name }} ({{ b.id }}){% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% if b.readiness.detail %}: {{ b.readiness.detail }}{% endif %}{% endif %}</option>
             {% endfor %}
           </optgroup>
           {% endfor %}
@@ -1009,6 +1010,7 @@ const selectedProjectMemoryProfilesEnabled = {{ selected_project_memory_profiles
 const selectedProjectChatToolAccess = {{ selected_project_chat_tool_access|tojson }};
 const activeProjectFilter = {{ (active_project_filter or "")|tojson }};
 const unscopedProjectFilter = {{ unscoped_project_filter|tojson }};
+const preselectedChatBotId = {{ (preselected_chat_bot_id or "")|tojson }};
 const availableProjects = {{ projects|tojson }};
 const initialMessages = {{ messages|tojson }};
 const assignmentBots = {{ assignment_bots|tojson }};
@@ -4442,6 +4444,7 @@ document.querySelectorAll('#messages .message').forEach((messageEl) => {
   renderMessageBody(bodyEl, messageEl.dataset.content || bodyEl.dataset.rawContent || bodyEl.textContent || '');
 });
 applyConversationProjectFilter();
+if (preselectedChatBotId && !selectedConversationId) showCreateConversation();
 window.requestAnimationFrame(scrollMessagesToLatest);
 </script>
 {% endblock %}

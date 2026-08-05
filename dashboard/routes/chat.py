@@ -111,6 +111,24 @@ def _chat_selectable_bots(bots: Iterable[Any]) -> list[Any]:
     return with_bot_chat_profiles(selectable)
 
 
+def _preselected_chat_bot_id(chat_bots: Iterable[Any], requested_bot_id: str) -> str:
+    requested = str(requested_bot_id or "").strip()
+    if not requested:
+        return ""
+    for bot in chat_bots:
+        bot_id = str(_bot_value(bot, "id", "") or "").strip()
+        if bot_id != requested:
+            continue
+        readiness = _bot_value(bot, "readiness", {}) or {}
+        if not isinstance(readiness, dict):
+            readiness = {}
+        state = str(readiness.get("state") or "").strip().lower()
+        if state in {"blocked", "disabled"}:
+            return ""
+        return requested
+    return ""
+
+
 def _readiness_by_bot_id(payload: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(payload, dict):
         return {}
@@ -1839,6 +1857,7 @@ def chat_page() -> str:
     cp = get_cp_client()
     page_error: str | None = None
     active_project_filter = str(request.args.get("project_id") or "").strip()
+    requested_chat_bot_id = str(request.args.get("bot_id") or "").strip()
     try:
         try:
             conversations = _normalize_conversation_rows(cp.list_conversations(archived="all") or [])
@@ -1971,6 +1990,7 @@ def chat_page() -> str:
             api_keys=api_key_rows if isinstance(api_key_rows, list) else None,
         )
         chat_bots = _chat_selectable_bots(bots)
+        preselected_chat_bot_id = _preselected_chat_bot_id(chat_bots, requested_chat_bot_id)
         assignment_bots = _assignment_manager_bots(bots)
 
         selected_default_bot_notice = _selected_default_bot_notice(
@@ -2005,6 +2025,7 @@ def chat_page() -> str:
             messages=messages,
             bots=bots,
             chat_bots=chat_bots,
+            preselected_chat_bot_id=preselected_chat_bot_id,
             assignment_bots=assignment_bots,
             selected_default_bot_notice=selected_default_bot_notice,
             conversation_default_bot_notices=conversation_default_bot_notices,
@@ -2043,6 +2064,7 @@ def chat_page() -> str:
             messages=[],
             bots=[],
             chat_bots=[],
+            preselected_chat_bot_id="",
             assignment_bots=[],
             projects=[],
             vault_items=[],

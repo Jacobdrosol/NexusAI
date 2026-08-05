@@ -987,9 +987,10 @@ def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_cli
             return []
 
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
-        resp = dashboard_client.get("/chat")
+        resp = dashboard_client.get("/chat?bot_id=personal-vision-math-tutor")
 
     assert resp.status_code == 200
+    page_html = resp.data.decode("utf-8")
     assert b'id="create-convo-default-bot-id"' in resp.data
     assert b'id="create-convo-default-model-id"' in resp.data
     assert b'id="create-convo-bot-summary"' in resp.data
@@ -1012,6 +1013,9 @@ def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_cli
     assert b"tool_access_enabled: scopedToolAccessAllowed" in resp.data
     assert b"create-convo-bridge-project-ids')?.addEventListener('change', syncCreateConversationToolFields)" in resp.data
     assert b"Select a default bot or leave blank to use the platform default." in resp.data
+    assert 'const preselectedChatBotId = "personal-vision-math-tutor";' in page_html
+    assert 'value="personal-vision-math-tutor" selected' in page_html
+    assert "if (preselectedChatBotId && !selectedConversationId) showCreateConversation();" in page_html
 
 
 def test_chat_page_project_filter_limits_conversation_list(dashboard_client):
@@ -2876,6 +2880,8 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
 
     assert resp.status_code == 200
     assert b"Chat Profile" in resp.data
+    assert b"Use in Chat" in resp.data
+    assert b"/chat?bot_id=coding-helper" in resp.data
     assert b"Operating Summary" in resp.data
     assert b"Tooling Readiness" in resp.data
     assert b"Preflight" in resp.data
