@@ -1204,11 +1204,19 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
                     "id": "coding-chat",
                     "name": "Coding Chat",
                     "memory_profiles_enabled": True,
-                    "backends": [{"provider": "ollama_cloud", "model": "gpt-oss:120b"}],
+                    "backends": [
+                        {"provider": "ollama_cloud", "model": "gpt-oss:120b"},
+                        {"type": "custom", "provider": "http_connection", "model": "attached-http"},
+                    ],
                     "routing_rules": {
+                        "chat_profile": {"mode": "coding", "label": "Coding"},
                         "chat_tool_access": {"enabled": True, "filesystem": True, "repo_search": True}
                     },
-                    "execution_policy": {"repo_output_mode": "allow"},
+                    "execution_policy": {
+                        "repo_output_mode": "allow",
+                        "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
+                        "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                    },
                 }
             ]
 
@@ -1240,6 +1248,11 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
     payload = resp.get_json()
     assert payload["conversation_id"] == "c-project-chat"
     assert payload["bot"]["id"] == "coding-chat"
+    assert payload["bot"]["chat_profile"]["label"] == "Coding"
+    assert payload["bot"]["chat_profile"]["use_label"] == "Tool-enabled chat"
+    assert payload["bot"]["connection_actions"] == ["globeiq-agent-api.updateLesson"]
+    assert payload["bot"]["owner_approval_actions"] == ["globeiq-agent-api.updateLesson"]
+    assert payload["bot"]["http_connection_backend_count"] == 1
     assert payload["route"]["default_model_id"] == "ollama-cloud-gpt-oss-120b"
     assert payload["model"]["source"] == "conversation_default_model"
     assert payload["model"]["model"] == "qwen3.5:cloud"

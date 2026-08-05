@@ -10,7 +10,7 @@ import requests
 from flask import Blueprint, Response, jsonify, render_template, request, stream_with_context
 from flask_login import current_user, login_required
 
-from dashboard.bot_chat_profiles import bot_chat_tool_access, with_bot_chat_profiles
+from dashboard.bot_chat_profiles import bot_chat_profile, bot_chat_tool_access, with_bot_chat_profiles
 from dashboard.cp_client import get_cp_client
 from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
 from dashboard.work_overview import manager_id_for_task, project_id_for_task
@@ -36,6 +36,36 @@ def _bot_value(bot: Any, key: str, default: Any = None) -> Any:
 def _routing_rules(bot: Any) -> dict[str, Any]:
     rules = _bot_value(bot, "routing_rules", {}) or {}
     return rules if isinstance(rules, dict) else {}
+
+
+def _policy_string_list(bot: Any, key: str) -> list[str]:
+    policy = _bot_value(bot, "execution_policy", {}) or {}
+    if not isinstance(policy, dict):
+        return []
+    values = policy.get(key)
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    for value in values:
+        label = str(value or "").strip()
+        if label and label not in result:
+            result.append(label)
+    return result
+
+
+def _http_connection_backend_count(bot: Any) -> int:
+    backends = _bot_value(bot, "backends", []) or []
+    if not isinstance(backends, list):
+        return 0
+    count = 0
+    for backend in backends:
+        if not isinstance(backend, dict):
+            continue
+        provider = str(backend.get("provider") or "").strip().lower()
+        backend_type = str(backend.get("type") or "").strip().lower()
+        if provider == "http_connection" or backend_type == "http_connection":
+            count += 1
+    return count
 
 
 def _chat_selectable_bots(bots: Iterable[Any]) -> list[Any]:
@@ -628,6 +658,7 @@ def _effective_chat_context_from_cp(
 
     effective_bot_id = str(requested_bot_id or conversation.get("default_bot_id") or "").strip()
     bot = _bot_from_cp(cp, effective_bot_id)
+    normalized_profile = bot_chat_profile(bot or {}) if bot else None
     project_id = str(conversation.get("project_id") or "").strip()
     chat_access = _chat_tool_access_from_conversation(conversation)
     bot_access = bot_chat_tool_access(bot or {})
@@ -687,6 +718,10 @@ def _effective_chat_context_from_cp(
             "id": effective_bot_id or None,
             "name": str((bot or {}).get("name") or effective_bot_id or "").strip() or None,
             "available": bool(bot),
+            "chat_profile": normalized_profile,
+            "connection_actions": _policy_string_list(bot or {}, "connection_action_allowlist"),
+            "owner_approval_actions": _policy_string_list(bot or {}, "connection_action_owner_approval_required"),
+            "http_connection_backend_count": _http_connection_backend_count(bot or {}),
         },
         "route": {
             "default_bot_id": conversation.get("default_bot_id"),
