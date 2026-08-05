@@ -1099,6 +1099,7 @@ def api_create_conversation():
         return jsonify({"error": "title is required"}), 400
     cp = get_cp_client()
     default_bot_id = str(data.get("default_bot_id") or "").strip()
+    default_model_id = str(data.get("default_model_id") or "").strip()
     readiness_blocker = _bot_readiness_blocker_from_cp(cp, default_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Default bot is unavailable: {readiness_blocker}"}), 409
@@ -1109,7 +1110,7 @@ def api_create_conversation():
             "bridge_project_ids": data.get("bridge_project_ids") or [],
             "scope": data.get("scope", "global"),
             "default_bot_id": default_bot_id or None,
-            "default_model_id": data.get("default_model_id"),
+            "default_model_id": default_model_id or None,
             "owner_user_id": _current_memory_user_id(),
             "memory_profiles_enabled": bool(data.get("memory_profiles_enabled", True)),
             "memory_profile_id": data.get("memory_profile_id") or "default",

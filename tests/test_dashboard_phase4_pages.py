@@ -1058,7 +1058,10 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
             return []
 
         def list_models(self):
-            return []
+            return [
+                {"id": "ollama-cloud-gpt-oss-120b", "name": "gpt-oss:120b", "provider": "ollama_cloud", "enabled": True},
+                {"id": "ollama-cloud-disabled", "name": "old-model", "provider": "ollama_cloud", "enabled": False},
+            ]
 
         def list_vault_items(self, **kwargs):
             return []
@@ -1084,6 +1087,11 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"model credential missing" in resp.data
     assert b"function activeBotReadinessBlocker" in resp.data
     assert b"function chatBotReadinessBlocker" in resp.data
+    assert b'name="default_model_id"' in resp.data
+    assert b'value="ollama-cloud-gpt-oss-120b"' in resp.data
+    assert b"ollama_cloud / gpt-oss:120b" in resp.data
+    assert b'value="ollama-cloud-disabled" disabled' in resp.data
+    assert b"old-model" in resp.data
 
 
 def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
@@ -2473,6 +2481,33 @@ def test_chat_create_conversation_api_blocks_unavailable_default_bot(dashboard_c
     assert resp.status_code == 409
     assert b"Default bot is unavailable" in resp.data
     assert b"model credential missing" in resp.data
+
+
+def test_chat_create_conversation_api_proxies_default_model(dashboard_client):
+    _login_admin(dashboard_client)
+    captured = {}
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def create_conversation(self, body):
+            captured.update(body)
+            return {"id": "c-model", "title": body["title"]}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/conversations",
+            json={
+                "title": "Model Scoped",
+                "scope": "global",
+                "default_model_id": "ollama-cloud-gpt-oss-120b",
+            },
+        )
+
+    assert resp.status_code == 201
+    assert captured["default_model_id"] == "ollama-cloud-gpt-oss-120b"
+    assert captured["owner_user_id"] == "admin@test.com"
 
 
 def test_chat_assignment_preview_api_blocks_unavailable_pm_bot(dashboard_client):
