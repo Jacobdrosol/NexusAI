@@ -1649,9 +1649,22 @@ def _normalize_chat_send_response(raw: Any) -> Any:
         return raw
     normalized = dict(raw)
     for key in ("user_message", "assistant_message"):
-        message = _normalize_message_row(normalized.get(key))
+        value = normalized.get(key)
+        message = _normalize_message_row(value)
         if message is not None:
             normalized[key] = message
+        elif isinstance(value, dict):
+            preserved = dict(value)
+            metadata = preserved.get("metadata")
+            if isinstance(metadata, dict):
+                preserved["metadata"] = _sanitize_attachment_metadata(metadata)
+            elif isinstance(metadata, str):
+                try:
+                    parsed = json.loads(metadata)
+                    preserved["metadata"] = _sanitize_attachment_metadata(parsed) if isinstance(parsed, dict) else None
+                except Exception:
+                    preserved["metadata"] = None
+            normalized[key] = preserved
     return normalized
 
 

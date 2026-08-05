@@ -3916,6 +3916,36 @@ def test_chat_message_api_sanitizes_send_response_attachment_preview_urls(dashbo
     assert attachments[1]["data_url"] == "data:image/png;base64,aGVsbG8="
 
 
+def test_chat_message_api_sanitizes_no_id_send_response_metadata(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def post_message(self, conversation_id, body):
+            return {
+                "assistant_message": {
+                    "role": "assistant",
+                    "content": "ok",
+                    "metadata": '{"attachments":[{"name":"unsafe.svg","kind":"image","data_url":"data:image/svg+xml;base64,PHN2ZyA+","size_bytes":512}]}',
+                }
+            }
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "see this"},
+        )
+
+    assert resp.status_code == 200
+    assistant = resp.get_json()["assistant_message"]
+    assert assistant["content"] == "ok"
+    attachments = assistant["metadata"]["attachments"]
+    assert attachments[0]["name"] == "unsafe.svg"
+    assert "data_url" not in attachments[0]
+
+
 def test_chat_messages_api_sanitizes_attachment_preview_urls(dashboard_client):
     _login_admin(dashboard_client)
 
