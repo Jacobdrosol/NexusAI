@@ -107,6 +107,8 @@ def _bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
     routing = bot.get("routing_rules") if isinstance(bot.get("routing_rules"), dict) else {}
     raw_profile = routing.get("chat_profile") if isinstance(routing, dict) else None
     profile = raw_profile if isinstance(raw_profile, dict) else {}
+    operator_profile = routing.get("operator_profile") if isinstance(routing, dict) else None
+    operator_profile = operator_profile if isinstance(operator_profile, dict) else {}
     tool_access = _bot_chat_tool_access(bot)
     policy = _dict_from_any(bot.get("execution_policy"))
     mode = str(profile.get("mode") or "").strip().lower()
@@ -142,12 +144,19 @@ def _bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         capabilities.append("inline_coding_default")
     if str(policy.get("repo_output_mode") or "").strip().lower() == "allow":
         capabilities.append("repo_output")
+    tool_labels: list[str] = []
+    if bool(tool_access.get("filesystem", False)):
+        tool_labels.append("filesystem")
+    if bool(tool_access.get("repo_search", False)):
+        tool_labels.append("repo_search")
     return {
         "mode": mode,
         "label": str(profile.get("label") or _CHAT_PROFILE_LABELS[mode]).strip(),
         "description": str(profile.get("description") or "").strip(),
         "capabilities": capabilities,
         "tool_access": tool_access,
+        "tool_label": ", ".join(tool_labels) if bool(tool_access.get("enabled", False)) else "off",
+        "autonomy": str(operator_profile.get("autonomy") or "").strip() or "unspecified",
         "repo_output_mode": str(policy.get("repo_output_mode") or "deny").strip().lower(),
         "inline_coding_default": bool(policy.get("inline_coding_default", False)),
     }

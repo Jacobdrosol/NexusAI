@@ -109,6 +109,11 @@
         {% if profile.capabilities %}
         <div class="metrics">{{ profile.capabilities | join(', ') }}</div>
         {% endif %}
+        <div class="metrics">Autonomy: {{ profile.autonomy }}</div>
+        <div class="metrics">Chat tools: {{ profile.tool_label }}</div>
+        {% if profile.repo_output_mode == 'allow' %}
+        <div class="metrics">Repo output: allow</div>
+        {% endif %}
       </td>
       <td><span class="badge badge-{{ 'enabled' if b.memory_profiles_enabled else 'disabled' }}">{{ 'enabled' if b.memory_profiles_enabled else 'off' }}</span></td>
       <td>{{ b.priority }}</td>

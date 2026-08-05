@@ -3082,7 +3082,7 @@ def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
                     "role": "assistant",
                     "enabled": True,
                     "backends": [],
-                    "routing_rules": {},
+                    "routing_rules": {"operator_profile": {"autonomy": "manual_chat_only"}},
                     "execution_policy": {"repo_output_mode": "deny"},
                 },
                 {
@@ -3096,7 +3096,8 @@ def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
                             "enabled": True,
                             "filesystem": True,
                             "repo_search": True,
-                        }
+                        },
+                        "operator_profile": {"autonomy": "manual_chat_only"},
                     },
                     "execution_policy": {
                         "repo_output_mode": "allow",
@@ -3134,6 +3135,10 @@ def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
     assert b"repo_search" in resp.data
     assert b"filesystem" in resp.data
     assert b"repo_output" in resp.data
+    assert b"Autonomy: manual_chat_only" in resp.data
+    assert b"Chat tools: off" in resp.data
+    assert b"Chat tools: filesystem, repo_search" in resp.data
+    assert b"Repo output: allow" in resp.data
 
 
 def test_worker_live_endpoint_returns_payload(dashboard_client):
