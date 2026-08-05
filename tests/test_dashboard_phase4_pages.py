@@ -1006,6 +1006,7 @@ def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_cli
     assert b"Workspace tools require a project-scoped chat." in resp.data
     assert b"scopedToolAccessAllowed" in resp.data
     assert b"tool_access_enabled: scopedToolAccessAllowed" in resp.data
+    assert b"create-convo-bridge-project-ids')?.addEventListener('change', syncCreateConversationToolFields)" in resp.data
     assert b"Select a default bot or leave blank to use the platform default." in resp.data
 
 

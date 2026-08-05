@@ -501,3 +501,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Docs-only validation for Batch 236: `rg -n "Ready-To-Import Gate|validate_chat_import_manifest|memory_profiles_enabled=false|rollback identifier" docs/CHAT_HISTORY_MIGRATION.md README.md docs/features/chat-memory-profiles.md` found the expected migration gate references.
 - Batch 237: added a create-chat default-model summary that shows the selected provider/model, catalog capabilities, and image-support status before creating a conversation.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_create_modal_surfaces_default_bot_capability_summary tests/test_bot_chat_profiles.py -q` passed for Batch 237 create-chat model summary coverage.
+- Batch 238: refreshed create-chat workspace-tool summary state when project, bridged primary project, or bridged project selections change so scope/tool guidance stays current while configuring a new conversation.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_create_modal_surfaces_default_bot_capability_summary -q` passed for Batch 238 create-chat tool summary refresh coverage.

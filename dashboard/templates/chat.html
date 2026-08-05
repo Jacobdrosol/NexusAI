@@ -4310,8 +4310,15 @@ document.getElementById('create-convo-scope')?.addEventListener('change', () => 
   syncConversationScopeFields();
   syncCreateConversationToolFields();
 });
-document.getElementById('create-convo-project-id')?.addEventListener('change', syncConversationScopeFields);
-document.getElementById('create-convo-bridged-primary')?.addEventListener('change', syncConversationScopeFields);
+document.getElementById('create-convo-project-id')?.addEventListener('change', () => {
+  syncConversationScopeFields();
+  syncCreateConversationToolFields();
+});
+document.getElementById('create-convo-bridged-primary')?.addEventListener('change', () => {
+  syncConversationScopeFields();
+  syncCreateConversationToolFields();
+});
+document.getElementById('create-convo-bridge-project-ids')?.addEventListener('change', syncCreateConversationToolFields);
 document.getElementById('create-convo-default-bot-id')?.addEventListener('change', updateCreateConversationBotSummary);
 document.getElementById('create-convo-default-model-id')?.addEventListener('change', updateCreateConversationBotSummary);
 document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
