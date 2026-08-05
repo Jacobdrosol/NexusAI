@@ -641,6 +641,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["attention"]["total"] == 8
     assert brief_data["snapshot_health"]["level"] == "ready"
     assert brief_data["usage_health"]["missing_tasks"] == 2
+    assert brief_data["usage_pressure_lanes"][0]["bot_id"] == "lesson-writer"
+    assert brief_data["usage_pressure_lanes"][0]["usage_ratio"] == 0.93
+    assert brief_data["capacity"]["worker_queue_depth"] == 3
+    assert brief_data["workers"]["queue_depth"] == 3
     assert "projects" not in brief_data
     assert data["usage_pressure_lanes"] == [
         {
@@ -792,6 +796,7 @@ def test_work_overview_surfaces_token_governor_queue_cap_pressure(dashboard_clie
 
     with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
         api_resp = dashboard_client.get("/api/work/overview")
+        brief_resp = dashboard_client.get("/api/work/brief")
         page_resp = dashboard_client.get("/work")
 
     assert api_resp.status_code == 200
@@ -804,6 +809,13 @@ def test_work_overview_surfaces_token_governor_queue_cap_pressure(dashboard_clie
     assert rows[("manager", "globeiq::manager-a")]["queued_count"] == 2
     assert rows[("manager", "globeiq::manager-a")]["level"] == "critical"
     assert rows[("project", "globeiq")]["usage_ratio"] == 0.5
+    assert brief_resp.status_code == 200
+    brief_rows = {
+        (row["scope"], row["value"]): row
+        for row in brief_resp.get_json()["token_governor_queue_pressure"]
+    }
+    assert brief_rows[("bot", "audit-reader")]["queued_count"] == 2
+    assert brief_rows[("manager", "globeiq::manager-a")]["level"] == "critical"
 
     assert page_resp.status_code == 200
     assert b"Token Governor Queue Caps" in page_resp.data

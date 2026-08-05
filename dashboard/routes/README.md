@@ -185,7 +185,7 @@ Blueprint: `work`. Provides the operator command-center view for active project 
 |-|-|-|-|
 | GET | `/work` | Work overview page with active-work brief, project/manager lanes, token usage, queue pressure, holds, route gaps, and stop controls | Yes |
 | GET | `/api/work/overview` | JSON work overview using the same active-work brief and lane summaries as the page | Yes |
-| GET | `/api/work/brief` | Lightweight JSON active-work brief plus attention, snapshot, usage, and degradation health | Yes |
+| GET | `/api/work/brief` | Lightweight JSON active-work brief plus attention, snapshot, usage, token pressure, queue-cap pressure, capacity, and degradation health | Yes |
 | GET | `/api/work/lane` | List task rows for a project or project-manager lane | Yes |
 | POST | `/api/work/stop` | Stop active or waiting work for a project or project-manager lane | Yes |
 | GET | `/api/work/orchestration` | List task rows for one orchestration run | Yes |
@@ -193,7 +193,7 @@ Blueprint: `work`. Provides the operator command-center view for active project 
 | POST | `/api/work/hold` | Hold or release queue intake for a project or manager lane | Yes |
 | POST | `/api/work/bot-cap` | Set or clear bot hourly token cap overrides | Yes |
 
-The overview includes a compact `operations_brief` containing status totals, capacity state, top active lanes, top waiting lanes, top problem lanes, attention lanes, queue-pressure lanes, and recent problem tasks. This is intended for the dashboard, automation monitors, and future mobile summaries without forcing callers to re-derive lane priority from raw task rows.
+The overview includes a compact `operations_brief` containing status totals, capacity state, top active lanes, top waiting lanes, top problem lanes, attention lanes, queue-pressure lanes, and recent problem tasks. The brief endpoint also includes usage pressure, token-governor queue-cap pressure, and worker capacity fields so dashboard pollers, automation monitors, and future mobile summaries can detect runaway usage or queue saturation without pulling raw task rows.
 
 ---
 

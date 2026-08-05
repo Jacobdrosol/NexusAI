@@ -550,6 +550,10 @@ def api_work_brief():
             "attention": overview.get("attention") or {},
             "snapshot_health": overview.get("snapshot_health") or {},
             "usage_health": overview.get("usage_health") or {},
+            "usage_pressure_lanes": overview.get("usage_pressure_lanes") or [],
+            "token_governor_queue_pressure": overview.get("token_governor_queue_pressure") or [],
+            "capacity": overview.get("capacity") or {},
+            "workers": overview.get("workers") or {},
             "data_degraded": bool(overview.get("data_degraded", False)),
             "data_warnings": overview.get("data_warnings") or [],
         }
