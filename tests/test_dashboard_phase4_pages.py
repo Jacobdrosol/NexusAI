@@ -232,7 +232,7 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
                     "role": "researcher",
                     "project_id": "globeiq",
                     "enabled": True,
-                    "backends": [{"type": "remote_llm", "provider": "ollama_cloud", "api_key_ref": "OLLAMA_CLOUD_KEY"}],
+                    "backends": [{"type": "remote_llm", "provider": "ollama_cloud", "model": "qwen3.5:cloud", "api_key_ref": "OLLAMA_CLOUD_KEY"}],
                     "execution_policy": {
                         "required_worker_tools": ["browser-ui"],
                         "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
@@ -296,6 +296,7 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert b"Assigned Bot Scope" in resp.data
     assert b"Research Bot" in resp.data
     assert b"Browser session expired" in resp.data
+    assert b"Routes: ollama_cloud / qwen3.5:cloud" in resp.data
     assert b"Tools: browser-ui" in resp.data
     assert b"Site/API actions: globeiq-agent-api.updateLesson" in resp.data
     assert b"Browser actions: lesson_preview.read" in resp.data

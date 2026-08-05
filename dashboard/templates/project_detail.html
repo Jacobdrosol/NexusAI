@@ -109,13 +109,14 @@
           {% if readiness.detail %}<div class="mini-note">{{ readiness.detail }}</div>{% endif %}
         </td>
         <td class="metrics">
+          {% if scope.backend_routes %}<div>Routes: {{ scope.backend_routes | join(', ') }}</div>{% endif %}
           {% if scope.required_tools %}<div>Tools: {{ scope.required_tools | join(', ') }}</div>{% endif %}
           {% if scope.connection_actions %}<div>Site/API actions: {{ scope.connection_actions | join(', ') }}</div>{% endif %}
           {% if scope.browser_actions %}<div>Browser actions: {{ scope.browser_actions | join(', ') }}</div>{% endif %}
           {% if scope.credential_refs %}<div>Credential refs: {{ scope.credential_refs | join(', ') }}</div>{% endif %}
           {% if scope.repo_output_mode == 'allow' %}<div>Repo output: allow</div>{% endif %}
           {% if scope.can_apply_db_actions %}<div>Database actions: allowed</div>{% endif %}
-          {% if not scope.required_tools and not scope.connection_actions and not scope.browser_actions and not scope.credential_refs and scope.repo_output_mode != 'allow' and not scope.can_apply_db_actions %}Chat/planning only{% endif %}
+          {% if not scope.backend_routes and not scope.required_tools and not scope.connection_actions and not scope.browser_actions and not scope.credential_refs and scope.repo_output_mode != 'allow' and not scope.can_apply_db_actions %}Chat/planning only{% endif %}
         </td>
         <td class="metrics">
           {% if approval_count %}

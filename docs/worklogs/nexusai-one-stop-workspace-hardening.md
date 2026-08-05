@@ -291,3 +291,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_bot_tooling_status.py -q` passed for Batch 133 bot import readiness-blocker messaging.
 - Batch 134: added concise backend route labels to the Bots page so provider/model/worker routing is visible from the main bot inventory instead of only backend counts.
 - `pytest tests/test_bot_tooling_status.py -q` passed for Batch 134 bot backend route visibility.
+- Batch 135: added assigned-bot backend route labels to Project Detail so project launch review shows provider/model/worker routes alongside tools, credentials, and approval gates.
+- `pytest tests/test_dashboard_phase4_pages.py::test_project_detail_page_surfaces_ai_workspace_readiness -q` passed for Batch 135 project assigned-bot route visibility.

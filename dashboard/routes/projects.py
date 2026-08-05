@@ -283,10 +283,22 @@ def _project_bot_scope_view(bot: dict[str, Any]) -> dict[str, Any]:
         return result
 
     credential_refs = []
+    backend_routes = []
     backends = bot.get("backends") if isinstance(bot.get("backends"), list) else []
     for backend in backends:
         if not isinstance(backend, dict):
             continue
+        backend_type = str(backend.get("type") or "").strip()
+        provider = str(backend.get("provider") or "").strip()
+        model = str(backend.get("model") or "").strip()
+        worker_id = str(backend.get("worker_id") or "").strip()
+        route = provider or backend_type or "backend"
+        if model:
+            route += f" / {model}"
+        if worker_id:
+            route += f" on {worker_id}"
+        if route and route not in backend_routes:
+            backend_routes.append(route)
         for key in ("api_key_ref", "credential_ref", "auth_token_ref"):
             label = str(backend.get(key) or "").strip()
             lowered = label.lower()
@@ -308,6 +320,7 @@ def _project_bot_scope_view(bot: dict[str, Any]) -> dict[str, Any]:
         "repo_output_mode": str(policy.get("repo_output_mode") or "deny").strip().lower() or "deny",
         "can_apply_db_actions": bool(policy.get("can_apply_db_actions", False)),
         "credential_refs": credential_refs,
+        "backend_routes": backend_routes,
     }
 
 
