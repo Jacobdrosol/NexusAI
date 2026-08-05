@@ -84,9 +84,9 @@ All routes are prefixed with `/v1/`. Auth: set `X-Nexus-API-Key: <token>` header
 | `GET` | `/v1/chat/conversations` | List conversations | `project_id`, `scope`, `archived`, `limit` | — |
 | `GET` | `/v1/chat/conversations/{id}` | Get conversation | — | 404 |
 | `DELETE` | `/v1/chat/conversations/{id}` | Archive conversation | — | 404 |
-| `POST` | `/v1/chat/conversations/{id}/messages` | Post message (streaming SSE) | `content`, `bot_id`, `context_items`, `include_project_context`, `use_workspace_tools`, `attachments`, `is_assign` | 404, 400 |
+| `POST` | `/v1/chat/conversations/{id}/messages` | Post message (streaming SSE) | `content`, `bot_id`, `context_items`, `context_item_ids`, `include_project_context`, `use_workspace_tools`, `attachments`, `is_assign` | 404, 400 |
 | `GET` | `/v1/chat/conversations/{id}/messages` | List messages | `limit` | 404 |
-| `POST` | `/v1/chat/conversations/{id}/assign` | @assign orchestration | `instruction`, `pm_bot_id`, `context_items`, `conversation_brief` | 404, 400 |
+| `POST` | `/v1/chat/conversations/{id}/assign` | @assign orchestration | `instruction`, `pm_bot_id`, `context_items`, `context_item_ids`, `conversation_brief` | 404, 400 |
 | `PUT` | `/v1/chat/conversations/{id}/route-defaults` | Update default bot/model | `default_bot_id`, `default_model_id` | 404 |
 | `PUT` | `/v1/chat/conversations/{id}/tool-access` | Update tool access flags | `enabled`, `filesystem`, `repo_search` | 404 |
 | `GET` | `/v1/chat/conversations/{id}/memory` | Semantic search in conv memory | `query`, `limit` | 404 |
@@ -100,6 +100,8 @@ For individual messages, the conversation default model is applied only when the
 Image attachments are validated against that same effective model route. A vision-capable preferred model allows screenshots even if the bot's base backend is text-only; a text-only preferred model rejects screenshots even if the bot's base backend is vision-capable.
 
 Direct chat token usage is summarized from assistant-message metadata via `/v1/chat/usage`, grouped by conversation, bot, and provider/model. The response also includes `chat_token_governor` status. When `token_governor_enabled` is true, direct chat sends are rejected with HTTP 429 if measured rolling-hour chat usage plus `token_governor_estimated_tokens_per_chat_message` would exceed `token_governor_chat_global_hourly_limit` or the applicable chat bot hourly cap.
+
+Assignment preview/create/splice requests accept up to 50 manual `context_items` and up to 200 selected vault `context_item_ids`. The assignment API resolves the first 20 selected vault ids into bounded `[vault:<id>]` context snippets before passing context into PM preview or execution. Preview responses expose `context_item_count` only; they do not echo raw context text.
 
 ---
 

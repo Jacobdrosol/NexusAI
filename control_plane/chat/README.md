@@ -152,7 +152,7 @@ await pm_orchestrator.orchestrate_assignment(
     conversation_id: str,
     instruction: str,
     requested_pm_bot_id: str,        # required; raises BotNotFoundError if invalid
-    context_items: List[str],        # repo profile, vault items, etc.
+    context_items: List[str],        # repo profile, resolved vault snippets, selected chat context, etc.
     conversation_brief: str,
     conversation_transcript: str,
     conversation_message_count: int,
@@ -162,6 +162,8 @@ await pm_orchestrator.orchestrate_assignment(
 ```
 
 Returns: `{orchestration_id, pm_bot_id, instruction, plan, tasks, allowed_bot_ids, workflow_graph_id, pipeline_name}`
+
+Assignment API callers may send manual `context_items` and selected vault `context_item_ids`. The API resolves vault ids into bounded `[vault:<id>]` snippets before calling the orchestrator; the orchestrator receives only normalized context strings.
 
 #### Flow
 
