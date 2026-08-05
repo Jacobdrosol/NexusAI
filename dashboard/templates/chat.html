@@ -942,6 +942,7 @@ let lastAssignmentRecapOrchestrationId = '';
 let activeAssignmentPreview = null;
 let chatSendInFlight = false;
 let lastServerEffectiveContext = null;
+let serverEffectiveContextRefreshController = null;
 
 function scrollMessagesToLatest() {
   const container = document.getElementById('messages');
@@ -1738,6 +1739,33 @@ function inlineCodingRequestBlocker() {
   return '';
 }
 
+function serverEffectiveContextParams() {
+  const params = new URLSearchParams();
+  const botId = activeChatBotId();
+  if (botId) params.set('bot_id', botId);
+  if (_chatGateCheckboxValue('use-workspace-tools-message', false)) params.set('use_workspace_tools', 'true');
+  if (_chatGateCheckboxValue('enable-inline-coding-message', false)) params.set('inline_coding_enabled', 'true');
+  return params;
+}
+
+async function refreshServerEffectiveContextSummary() {
+  if (!selectedConversationId) return;
+  if (serverEffectiveContextRefreshController) {
+    serverEffectiveContextRefreshController.abort();
+  }
+  serverEffectiveContextRefreshController = new AbortController();
+  const params = serverEffectiveContextParams();
+  const res = await fetch(
+    '/api/chat/conversations/' + encodeURIComponent(selectedConversationId) + '/effective-context?' + params.toString(),
+    {headers: {'Accept': 'application/json'}, signal: serverEffectiveContextRefreshController.signal},
+  );
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    lastServerEffectiveContext = data;
+  }
+  renderChatEffectiveContextSummary();
+}
+
 async function serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodingEnabled, hasImageAttachment}) {
   lastServerEffectiveContext = null;
   if (!selectedConversationId || (!useWorkspaceTools && !inlineCodingEnabled && !hasImageAttachment)) return '';
@@ -1814,7 +1842,22 @@ function renderChatEffectiveContextSummary() {
   const codingText = codingRequested
     ? (codingBlocker || 'inline coding active')
     : 'inline coding inactive: message toggle off';
+  const serverModel = lastServerEffectiveContext?.model && typeof lastServerEffectiveContext.model === 'object'
+    ? lastServerEffectiveContext.model
+    : null;
+  const localModel = effectiveChatModelInfo();
+  const modelProvider = String(serverModel?.provider || localModel.provider || '').trim();
+  const modelName = String(serverModel?.model || localModel.model || '').trim();
+  const modelSource = String(serverModel?.source || localModel.source || 'local estimate').trim();
+  const modelBlocker = String(serverModel?.blocker || '').trim();
+  const modelImageSupported = serverModel
+    ? serverModel.image_attachments_supported === true
+    : activeBotSupportsImages();
+  const modelClass = modelBlocker ? 'attention' : (modelProvider || modelName ? 'ready' : 'disabled');
+  const modelLabel = [modelProvider, modelName].filter(Boolean).join(' / ') || 'model unknown';
+  const modelText = `effective model: ${modelSource} ${modelLabel}; ${modelImageSupported ? 'images supported' : 'text only'}${modelBlocker ? '; ' + modelBlocker : ''}`;
   summary.innerHTML = `
+    <span class="badge badge-${modelClass}">${esc(modelText)}</span>
     <span class="badge badge-${memoryClass}">${esc(memoryText)}</span>
     <span class="badge badge-${toolsClass}">${esc(toolText)}</span>
     <span class="badge badge-${codingClass}">${esc(codingText)}</span>
@@ -3798,13 +3841,33 @@ document.getElementById('chat-project-filter')?.addEventListener('change', funct
 });
 document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
 document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
-document.getElementById('chat-tool-enabled')?.addEventListener('change', syncConversationToolAccessEditor);
-document.getElementById('chat-tool-filesystem')?.addEventListener('change', renderChatEffectiveContextSummary);
-document.getElementById('chat-tool-repo-search')?.addEventListener('change', renderChatEffectiveContextSummary);
-document.getElementById('chat-memory-enabled')?.addEventListener('change', renderChatEffectiveContextSummary);
-document.getElementById('use-workspace-tools-message')?.addEventListener('change', renderChatEffectiveContextSummary);
+document.getElementById('chat-tool-enabled')?.addEventListener('change', () => {
+  syncConversationToolAccessEditor();
+  refreshServerEffectiveContextSummary().catch(() => {});
+});
+document.getElementById('chat-tool-filesystem')?.addEventListener('change', () => {
+  renderChatEffectiveContextSummary();
+  refreshServerEffectiveContextSummary().catch(() => {});
+});
+document.getElementById('chat-tool-repo-search')?.addEventListener('change', () => {
+  renderChatEffectiveContextSummary();
+  refreshServerEffectiveContextSummary().catch(() => {});
+});
+document.getElementById('chat-memory-enabled')?.addEventListener('change', () => {
+  renderChatEffectiveContextSummary();
+  refreshServerEffectiveContextSummary().catch(() => {});
+});
+document.getElementById('use-workspace-tools-message')?.addEventListener('change', () => {
+  renderChatEffectiveContextSummary();
+  refreshServerEffectiveContextSummary().catch(() => {});
+});
+document.getElementById('enable-inline-coding-message')?.addEventListener('change', () => {
+  renderChatEffectiveContextSummary();
+  refreshServerEffectiveContextSummary().catch(() => {});
+});
 document.getElementById('chat-default-model-selector')?.addEventListener('change', () => {
   updateChatBotCapabilitySummary();
+  refreshServerEffectiveContextSummary().catch(() => {});
   if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
     alert('The newly selected conversation model does not support image attachments. Remove the screenshots or switch to a vision-capable model.');
   }
@@ -3813,6 +3876,7 @@ document.getElementById('chat-bot-selector')?.addEventListener('change', () => {
   syncSendBotSelection();
   updateChatBotCapabilitySummary();
   renderChatEffectiveContextSummary();
+  refreshServerEffectiveContextSummary().catch(() => {});
   if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
     alert('The newly selected chat bot model does not support image attachments. Remove the screenshots or switch back to a vision-capable bot.');
   }
@@ -3823,6 +3887,7 @@ syncConversationToolAccessEditor();
 syncSendBotSelection();
 updateChatBotCapabilitySummary();
 renderChatEffectiveContextSummary();
+refreshServerEffectiveContextSummary().catch(() => {});
 bindChatTextareaBehavior();
 renderComposerAttachments();
 setupChatComposerDragDrop();

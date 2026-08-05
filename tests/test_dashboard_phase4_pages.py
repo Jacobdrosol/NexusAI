@@ -1165,6 +1165,8 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"/effective-context?" in resp.data
     assert b"hasImageAttachment" in resp.data
     assert b"image_attachments_supported" in resp.data
+    assert b"refreshServerEffectiveContextSummary" in resp.data
+    assert b"effective model:" in resp.data
     assert b"Workspace tools are not available:" in resp.data
     assert b"Inline coding is not available:" in resp.data
     assert b"inline coding inactive: message toggle off" in resp.data
