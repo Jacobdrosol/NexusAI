@@ -130,6 +130,9 @@
         {% set mode = b.operating_mode or {'state': 'unknown', 'detail': 'Schedule coverage is unavailable.'} %}
         {% set mode_badge = 'active' if mode.state == 'scheduled' else mode.state %}
         <span class="badge badge-{{ mode_badge }}" title="{{ mode.detail }}">{{ mode.state }}</span>
+        {% if mode.active_schedule_count or mode.paused_schedule_count %}
+        <div class="metrics">{{ mode.active_schedule_count or 0 }} active / {{ mode.paused_schedule_count or 0 }} paused schedule(s)</div>
+        {% endif %}
       </td>
       <td>{{ b.backends | length }} backend(s)</td>
       <td class="actions">

@@ -392,11 +392,15 @@ def _bot_schedule_mode(schedule_payload: Any) -> dict[str, dict[str, Any]]:
             modes[bot_id] = {
                 "state": "scheduled",
                 "detail": f"{active_count} active recurring schedule(s).",
+                "active_schedule_count": active_count,
+                "paused_schedule_count": paused_count,
             }
         elif paused_count:
             modes[bot_id] = {
                 "state": "paused",
                 "detail": f"{paused_count} paused schedule(s); no recurring dispatch is active.",
+                "active_schedule_count": 0,
+                "paused_schedule_count": paused_count,
             }
     return modes
 
@@ -422,6 +426,8 @@ def _with_bot_operating_mode(
             row["operating_mode"] = {
                 "state": "disabled",
                 "detail": "This bot is disabled and cannot receive dispatch.",
+                "active_schedule_count": 0,
+                "paused_schedule_count": 0,
             }
         else:
             row["operating_mode"] = schedule_mode_by_bot_id.get(
@@ -429,6 +435,8 @@ def _with_bot_operating_mode(
                 {
                     "state": "manual",
                     "detail": "No recurring schedule is active; this bot runs only through an explicit task or workflow trigger.",
+                    "active_schedule_count": 0,
+                    "paused_schedule_count": 0,
                 },
             )
         enriched.append(row)

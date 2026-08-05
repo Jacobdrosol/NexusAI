@@ -3068,6 +3068,8 @@ def test_bots_page_identifies_scheduled_and_manual_dispatch_modes(dashboard_clie
     assert b"manual" in resp.data
     assert b"paused" in resp.data
     assert b"disabled" in resp.data
+    assert b"1 active / 0 paused schedule(s)" in resp.data
+    assert b"0 active / 1 paused schedule(s)" in resp.data
 
 
 def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
