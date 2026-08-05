@@ -1197,6 +1197,7 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
                     "id": "coding-chat",
                     "name": "Coding Chat",
                     "memory_profiles_enabled": True,
+                    "backends": [{"provider": "ollama_cloud", "model": "gpt-oss:120b"}],
                     "routing_rules": {
                         "chat_tool_access": {"enabled": True, "filesystem": True, "repo_search": True}
                     },
@@ -1206,6 +1207,17 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
 
         def list_projects(self):
             return [{"id": "globeiq", "name": "GlobeIQ", "memory_profiles_enabled": True}]
+
+        def list_models(self):
+            return [
+                {
+                    "id": "ollama-cloud-gpt-oss-120b",
+                    "name": "qwen3.5:cloud",
+                    "provider": "ollama_cloud",
+                    "capabilities": ["vision"],
+                    "enabled": True,
+                }
+            ]
 
         def get_project_chat_tool_access(self, project_id):
             assert project_id == "globeiq"
@@ -1222,6 +1234,10 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
     assert payload["conversation_id"] == "c-project-chat"
     assert payload["bot"]["id"] == "coding-chat"
     assert payload["route"]["default_model_id"] == "ollama-cloud-gpt-oss-120b"
+    assert payload["model"]["source"] == "conversation_default_model"
+    assert payload["model"]["model"] == "qwen3.5:cloud"
+    assert payload["model"]["capabilities"] == ["vision"]
+    assert payload["model"]["image_attachments_supported"] is True
     assert payload["memory"]["active"] is True
     assert payload["memory"]["reasons"] == []
     assert payload["workspace_tools"]["requested"] is True
@@ -1231,6 +1247,71 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
     assert payload["inline_coding"]["requested"] is True
     assert payload["inline_coding"]["available"] is True
     assert payload["inline_coding"]["blocker"] == ""
+
+
+def test_chat_effective_context_api_uses_explicit_bot_backend_model(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c-project-chat",
+                    "title": "Project Chat",
+                    "project_id": "globeiq",
+                    "default_bot_id": "default-chat",
+                    "default_model_id": "vision-default",
+                    "memory_profiles_enabled": True,
+                    "tool_access_enabled": False,
+                }
+            ]
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "default-chat",
+                    "name": "Default Chat",
+                    "memory_profiles_enabled": True,
+                    "backends": [{"provider": "ollama_cloud", "model": "qwen3.5:cloud"}],
+                },
+                {
+                    "id": "explicit-chat",
+                    "name": "Explicit Chat",
+                    "memory_profiles_enabled": True,
+                    "backends": [{"provider": "openai", "model": "gpt-4o-mini"}],
+                },
+            ]
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ", "memory_profiles_enabled": True}]
+
+        def list_models(self):
+            return [
+                {
+                    "id": "vision-default",
+                    "name": "qwen3.5:cloud",
+                    "provider": "ollama_cloud",
+                    "capabilities": ["vision"],
+                    "enabled": True,
+                }
+            ]
+
+        def get_project_chat_tool_access(self, project_id):
+            return {"enabled": False, "filesystem": False, "repo_search": False}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get(
+            "/api/chat/conversations/c-project-chat/effective-context?bot_id=explicit-chat"
+        )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["bot"]["id"] == "explicit-chat"
+    assert payload["route"]["requested_bot_id"] == "explicit-chat"
+    assert payload["model"]["source"] == "bot_backend"
+    assert payload["model"]["provider"] == "openai"
+    assert payload["model"]["model"] == "gpt-4o-mini"
+    assert payload["model"]["image_attachments_supported"] is True
 
 
 def test_chat_effective_context_api_explains_blocked_gates(dashboard_client):

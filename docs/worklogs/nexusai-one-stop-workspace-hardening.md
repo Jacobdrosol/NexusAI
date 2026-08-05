@@ -90,6 +90,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 52 in progress: expanded the lightweight Work brief API with usage pressure, token-governor queue-cap pressure, and worker capacity so monitor clients can watch runaway usage and queue saturation without loading raw task rows.
 - Batch 53 in progress: surfaced partial-data warnings in bot tooling readiness so operators can tell when bot listings loaded but readiness, worker, or probe evidence is incomplete.
 - Batch 54 in progress: wired the chat composer to call the effective-context API before sending workspace-tool or inline-coding requests so stale browser-side gate calculations are caught earlier.
+- Batch 55 in progress: expanded the chat effective-context API with effective model route, capabilities, and image-attachment support so future clients can preflight screenshots without duplicating model heuristics.
 
 ## Validation
 
@@ -147,3 +148,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load tests/test_work_overview.py::test_work_overview_surfaces_token_governor_queue_cap_pressure tests/test_work_overview.py::test_work_overview_groups_tasks_by_project_and_manager -q` passed for Batch 52 Work brief safety signals.
 - `pytest tests/test_bot_tooling_status.py -q` passed for Batch 53 bot tooling partial-data warnings.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_reports_active_memory_tools_and_coding tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_explains_blocked_gates tests/test_dashboard_phase4_pages.py::test_chat_message_api_blocks_workspace_tools_without_project_policy tests/test_dashboard_phase4_pages.py::test_chat_stream_api_blocks_inline_coding_for_unscoped_chat -q` passed for Batch 54 composer effective-context preflight.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_reports_active_memory_tools_and_coding tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_uses_explicit_bot_backend_model tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_explains_blocked_gates tests/test_dashboard_phase4_pages.py::test_chat_page_image_preflight_uses_effective_default_model -q` passed for Batch 55 effective-context model capability output.

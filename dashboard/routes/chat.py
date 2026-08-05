@@ -284,6 +284,102 @@ def _model_catalog_entry_from_cp(cp: Any, model_id: str) -> tuple[dict[str, Any]
     return None, f"{safe_model_id} is not in the enabled model catalog"
 
 
+def _model_capabilities(model: dict[str, Any] | None) -> list[str]:
+    raw = (model or {}).get("capabilities")
+    if not isinstance(raw, list):
+        return []
+    return [str(item or "").strip() for item in raw if str(item or "").strip()]
+
+
+def _model_supports_image_attachments(*, provider: str, model_name: str, capabilities: list[str] | None = None) -> bool:
+    normalized_capabilities = {str(item or "").strip().lower() for item in (capabilities or [])}
+    if normalized_capabilities & {"image", "images", "vision", "multimodal"}:
+        return True
+    provider_key = str(provider or "").strip().lower()
+    lowered = str(model_name or "").strip().lower()
+    if provider_key == "gemini":
+        return True
+    if provider_key == "openai":
+        return any(token in lowered for token in ("gpt-4o", "gpt-4.1", "gpt-5"))
+    if provider_key == "claude":
+        return any(token in lowered for token in ("claude-3", "claude-4"))
+    if provider_key in {"ollama_cloud", "ollama"}:
+        return any(
+            token in lowered
+            for token in ("vision", "-vl", "qwen2.5-vl", "qwen-vl", "qwen3-vl", "qwen3.5:", "llava", "gemma3")
+        )
+    return False
+
+
+def _effective_model_context_from_cp(
+    cp: Any,
+    conversation: dict[str, Any],
+    bot: dict[str, Any] | None,
+    requested_bot_id: str,
+) -> dict[str, Any]:
+    default_model_id = str(conversation.get("default_model_id") or "").strip()
+    default_bot_id = str(conversation.get("default_bot_id") or "").strip()
+    safe_requested_bot_id = str(requested_bot_id or "").strip()
+    route_uses_default_model = bool(
+        default_model_id
+        and (
+            not safe_requested_bot_id
+            or not default_bot_id
+            or safe_requested_bot_id == default_bot_id
+        )
+    )
+    if route_uses_default_model:
+        catalog_model, blocker = _model_catalog_entry_from_cp(cp, default_model_id)
+        if catalog_model:
+            provider = str(catalog_model.get("provider") or "").strip()
+            model_name = str(catalog_model.get("name") or catalog_model.get("id") or "").strip()
+            capabilities = _model_capabilities(catalog_model)
+            return {
+                "source": "conversation_default_model",
+                "provider": provider or None,
+                "model": model_name or None,
+                "model_id": str(catalog_model.get("id") or default_model_id).strip() or default_model_id,
+                "capabilities": capabilities,
+                "image_attachments_supported": _model_supports_image_attachments(
+                    provider=provider,
+                    model_name=model_name,
+                    capabilities=capabilities,
+                ),
+                "blocker": "",
+            }
+        if blocker:
+            return {
+                "source": "conversation_default_model",
+                "provider": None,
+                "model": None,
+                "model_id": default_model_id,
+                "capabilities": [],
+                "image_attachments_supported": False,
+                "blocker": blocker,
+            }
+
+    backend = None
+    for candidate in (bot or {}).get("backends") or []:
+        if isinstance(candidate, dict):
+            backend = candidate
+            break
+    provider = str((backend or {}).get("provider") or "").strip()
+    model_name = str((backend or {}).get("model") or "").strip()
+    return {
+        "source": "bot_backend",
+        "provider": provider or None,
+        "model": model_name or None,
+        "model_id": None,
+        "capabilities": [],
+        "image_attachments_supported": _model_supports_image_attachments(
+            provider=provider,
+            model_name=model_name,
+            capabilities=[],
+        ),
+        "blocker": "" if backend else "no bot backend",
+    }
+
+
 def _default_route_model_compatibility_blocker_from_cp(cp: Any, default_bot_id: str, default_model_id: str) -> str:
     safe_bot_id = str(default_bot_id or "").strip()
     safe_model_id = str(default_model_id or "").strip()
@@ -518,6 +614,12 @@ def _effective_chat_context_from_cp(
 
     coding_blocker = _inline_coding_request_blocker_from_cp(cp, conversation_id, effective_bot_id)
     inline_available = not bool(coding_blocker)
+    model_context = _effective_model_context_from_cp(
+        cp,
+        conversation,
+        bot,
+        requested_bot_id=effective_bot_id,
+    )
 
     return {
         "conversation_id": conversation.get("id"),
@@ -532,6 +634,7 @@ def _effective_chat_context_from_cp(
             "default_model_id": conversation.get("default_model_id"),
             "requested_bot_id": str(requested_bot_id or "").strip() or None,
         },
+        "model": model_context,
         "memory": {
             "active": memory_active,
             "profile_id": conversation.get("memory_profile_id") or "default",
