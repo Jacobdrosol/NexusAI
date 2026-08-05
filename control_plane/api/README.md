@@ -80,6 +80,7 @@ All routes are prefixed with `/v1/`. Auth: set `X-Nexus-API-Key: <token>` header
 | Method | Path | Description | Key Params | Errors |
 |--------|------|-------------|------------|--------|
 | `POST` | `/v1/chat/conversations` | Create conversation | `title`, `scope`, `project_id`, `default_bot_id`, `default_model_id`, `tool_access_*` | 400 |
+| `GET` | `/v1/chat/usage` | Summarize direct chat token usage | `hours`, `limit_conversations` | — |
 | `GET` | `/v1/chat/conversations` | List conversations | `project_id`, `scope`, `archived`, `limit` | — |
 | `GET` | `/v1/chat/conversations/{id}` | Get conversation | — | 404 |
 | `DELETE` | `/v1/chat/conversations/{id}` | Archive conversation | — | 404 |
@@ -90,11 +91,15 @@ All routes are prefixed with `/v1/`. Auth: set `X-Nexus-API-Key: <token>` header
 | `PUT` | `/v1/chat/conversations/{id}/tool-access` | Update tool access flags | `enabled`, `filesystem`, `repo_search` | 404 |
 | `GET` | `/v1/chat/conversations/{id}/memory` | Semantic search in conv memory | `query`, `limit` | 404 |
 
+Conversation `scope` is restricted to `global`, `project`, or `bridged`. Workspace tool flags on conversation create and update require a `project` or `bridged` conversation with a project id; unscoped chats cannot hold repo/filesystem tool access.
+
 `default_model_id` is copied into chat task metadata as `preferred_model_id` for normal and streaming message dispatch. When the model catalog has entries, conversation create and route-default updates reject disabled or unknown catalog model IDs. If a default bot and default model are both set, the bot must expose an LLM backend for the catalog model provider. The scheduler resolves valid catalog IDs and applies the selected model only to compatible LLM backends.
 
 For individual messages, the conversation default model is applied only when the request uses the conversation default bot, omits `bot_id`, or the conversation has no default bot. A one-off explicit `bot_id` override on a conversation with a different default bot uses that bot's own backend model instead of inheriting the conversation model.
 
 Image attachments are validated against that same effective model route. A vision-capable preferred model allows screenshots even if the bot's base backend is text-only; a text-only preferred model rejects screenshots even if the bot's base backend is vision-capable.
+
+Direct chat token usage is summarized from assistant-message metadata via `/v1/chat/usage`, grouped by conversation, bot, and provider/model. The response also includes `chat_token_governor` status. When `token_governor_enabled` is true, direct chat sends are rejected with HTTP 429 if measured rolling-hour chat usage plus `token_governor_estimated_tokens_per_chat_message` would exceed `token_governor_chat_global_hourly_limit` or the applicable chat bot hourly cap.
 
 ---
 

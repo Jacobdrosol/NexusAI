@@ -294,8 +294,22 @@ Rules:
 - if any switch is disabled, tool access is denied
 - filesystem snippets require project repository workspace to be enabled for that project
 - repo semantic search requires `repo_search` enabled at all three levels
+- unscoped chats cannot enable workspace tools; create a project or bridged chat before requesting repo/filesystem access
 
-### 6.5 Repository Workspace Runtime and Toolchains
+### 6.5 Direct Chat Usage Controls
+
+Direct chat usage is tracked separately from autonomous worker task usage. The Work page shows chat token usage by conversation, bot, and provider/model, plus the latest measured assistant message for each row.
+
+If the token governor is enabled, direct chat can also be capped from Settings:
+
+- `token_governor_chat_global_hourly_limit` caps all direct chat usage in the rolling hour.
+- `token_governor_chat_bot_hourly_limit` caps each chat bot by default.
+- `token_governor_chat_bot_hourly_limits` overrides specific chat bot caps.
+- `token_governor_estimated_tokens_per_chat_message` reserves budget before measured usage is available.
+
+The default chat caps are `0`, which means disabled. When a configured chat cap would be exceeded, the chat API rejects the message before saving the user message or dispatching model work.
+
+### 6.6 Repository Workspace Runtime and Toolchains
 
 Repository workspace actions and PM-generated assignment test runs execute in the configured repo workspace runtime for the project. In most self-hosted setups, that means the VM or container running NexusAI, not the operator's local laptop/browser session.
 
