@@ -61,6 +61,40 @@ def _worker_ids(bot: dict[str, Any]) -> list[str]:
     return ids
 
 
+def _connection_actions(bot: dict[str, Any], key: str) -> list[str]:
+    policy = _as_dict(bot.get("execution_policy"))
+    actions = []
+    for action in _as_list(policy.get(key)):
+        label = str(action or "").strip()
+        if label and label not in actions:
+            actions.append(label)
+    return actions
+
+
+def _connection_backend_count(bot: dict[str, Any]) -> int:
+    count = 0
+    for backend in _as_list(bot.get("backends")):
+        if not isinstance(backend, dict):
+            continue
+        provider = str(backend.get("provider") or "").strip().lower()
+        backend_type = str(backend.get("type") or "").strip().lower()
+        if provider == "http_connection" or backend_type == "http_connection":
+            count += 1
+    return count
+
+
+def _connection_context_label(bot: dict[str, Any]) -> str:
+    routing = _as_dict(bot.get("routing_rules"))
+    config = _as_dict(routing.get("connection_context"))
+    if not config:
+        return ""
+    for key in ("connection_name", "fetch_connection_name", "connection_id", "fetch_connection_id"):
+        value = str(config.get(key) or "").strip()
+        if value:
+            return value
+    return "attached connection context"
+
+
 def _failed_messages(readiness: dict[str, Any]) -> list[str]:
     messages = []
     for check in _as_list(readiness.get("checks")):
@@ -139,6 +173,7 @@ def build_bot_tooling_status(
 
     state_counts: Counter[str] = Counter()
     tool_counts: Counter[str] = Counter()
+    connection_action_counts: Counter[str] = Counter()
     blocker_counts: Counter[str] = Counter()
     blocked_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     rows: list[dict[str, Any]] = []
@@ -157,6 +192,12 @@ def build_bot_tooling_status(
         tools = _required_tools(bot)
         for tool in tools:
             tool_counts[tool] += 1
+        connection_actions = _connection_actions(bot, "connection_action_allowlist")
+        owner_approval_actions = _connection_actions(bot, "connection_action_owner_approval_required")
+        for action in connection_actions:
+            connection_action_counts[action] += 1
+        connection_backend_count = _connection_backend_count(bot)
+        connection_context = _connection_context_label(bot)
         worker_ids = _worker_ids(bot)
         messages = _failed_messages(readiness)
         category = _blocking_category(messages, tools, worker_ids) if state == "blocked" else ""
@@ -183,6 +224,10 @@ def build_bot_tooling_status(
             "enabled": enabled,
             "state": state,
             "required_tools": tools,
+            "connection_actions": connection_actions,
+            "owner_approval_actions": owner_approval_actions,
+            "connection_backend_count": connection_backend_count,
+            "connection_context": connection_context,
             "worker_ids": worker_ids,
             "workers": worker_statuses,
             "blocking_category": category,
@@ -208,11 +253,18 @@ def build_bot_tooling_status(
             "disabled": int(state_counts.get("disabled", 0)),
             "required_tool_count": int(sum(tool_counts.values())),
             "tooling_bot_count": sum(1 for row in rows if row["required_tools"]),
+            "connection_action_bot_count": sum(1 for row in rows if row["connection_actions"]),
+            "owner_approval_action_count": sum(len(row["owner_approval_actions"]) for row in rows),
+            "http_connection_backend_count": sum(row["connection_backend_count"] for row in rows),
         },
         "state_counts": dict(state_counts),
         "required_tools": [
             {"tool": tool, "bot_count": int(count)}
             for tool, count in sorted(tool_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "connection_actions": [
+            {"action": action, "bot_count": int(count)}
+            for action, count in sorted(connection_action_counts.items(), key=lambda item: (-item[1], item[0]))
         ],
         "blocked_groups": [
             {

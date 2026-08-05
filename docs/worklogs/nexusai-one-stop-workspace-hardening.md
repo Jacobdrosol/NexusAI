@@ -92,6 +92,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 54 in progress: wired the chat composer to call the effective-context API before sending workspace-tool or inline-coding requests so stale browser-side gate calculations are caught earlier.
 - Batch 55 in progress: expanded the chat effective-context API with effective model route, capabilities, and image-attachment support so future clients can preflight screenshots without duplicating model heuristics.
 - Batch 63 in progress: added bot-list use labels so manual chat, tool-enabled chat, scheduled workers, workflow workers, pipeline entries, and project managers can be distinguished from the main bot table.
+- Batch 64 in progress: surfaced bot-scoped HTTP connection action metadata on the tooling API and bots page without exposing credentials, including allowlisted actions, owner-approval counts, connection-context labels, and HTTP connection backend counts.
 
 ## Validation
 
@@ -158,3 +159,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_dashboard_phase4_pages.py::test_chat_page_image_preflight_uses_effective_default_model tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_reports_active_memory_tools_and_coding -q` passed for Batch 61 chat route draft visibility.
 - `pytest tests/test_bot_chat_profiles.py tests/test_bot_tooling_status.py tests/test_dashboard_phase4_pages.py::test_bots_page_surfaces_bot_scoped_chat_profiles -q` passed for Batch 62 bot chat profile capability clarity.
 - `pytest tests/test_bot_chat_profiles.py tests/test_bot_tooling_status.py tests/test_dashboard_phase4_pages.py::test_bots_page_surfaces_bot_scoped_chat_profiles -q` passed for Batch 63 bot use-label visibility.
+- `pytest tests/test_bot_tooling_status.py tests/test_dashboard_phase4_pages.py::test_bots_page_surfaces_bot_scoped_chat_profiles -q` passed for Batch 64 connection-action visibility.

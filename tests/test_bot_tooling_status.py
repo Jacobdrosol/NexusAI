@@ -43,6 +43,20 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 "backends": [{"worker_id": "llm-worker", "type": "remote_llm"}],
             },
             {
+                "id": "connection-bot",
+                "name": "Connection Bot",
+                "enabled": True,
+                "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http"}],
+                "routing_rules": {"connection_context": {"connection_name": "globeiq-agent-api"}},
+                "execution_policy": {
+                    "connection_action_allowlist": [
+                        "globeiq-agent-api.updateLesson",
+                        "globeiq-agent-api.updateLesson",
+                    ],
+                    "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                },
+            },
+            {
                 "id": "disabled-bot",
                 "name": "Disabled Bot",
                 "enabled": False,
@@ -62,6 +76,7 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                     ],
                 },
                 {"bot_id": "ready-bot", "state": "ready", "ready": True, "checks": []},
+                {"bot_id": "connection-bot", "state": "ready", "ready": True, "checks": []},
                 {"bot_id": "disabled-bot", "state": "disabled", "ready": False, "checks": []},
             ]
         },
@@ -77,11 +92,20 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
         },
     )
 
-    assert status["summary"]["ready"] == 1
+    assert status["summary"]["ready"] == 2
     assert status["summary"]["blocked"] == 1
     assert status["summary"]["disabled"] == 1
     assert status["summary"]["tooling_bot_count"] == 1
+    assert status["summary"]["connection_action_bot_count"] == 1
+    assert status["summary"]["owner_approval_action_count"] == 1
+    assert status["summary"]["http_connection_backend_count"] == 1
     assert status["required_tools"] == [{"tool": "browser-ui", "bot_count": 1}]
+    assert status["connection_actions"] == [{"action": "globeiq-agent-api.updateLesson", "bot_count": 1}]
+    connection_row = next(row for row in status["rows"] if row["bot_id"] == "connection-bot")
+    assert connection_row["connection_actions"] == ["globeiq-agent-api.updateLesson"]
+    assert connection_row["owner_approval_actions"] == ["globeiq-agent-api.updateLesson"]
+    assert connection_row["connection_backend_count"] == 1
+    assert connection_row["connection_context"] == "globeiq-agent-api"
     assert status["blocked_groups"][0]["category"] == "browser_session"
     assert status["blocked_groups"][0]["label"] == "Authenticated browser session"
     assert "site account can exist" in status["blocked_groups"][0]["detail"]
@@ -104,6 +128,18 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
                     "enabled": True,
                     "backends": [{"worker_id": "browser-worker", "type": "browser"}],
                     "execution_policy": {"required_worker_tools": ["browser-ui"]},
+                },
+                {
+                    "id": "connection-bot",
+                    "name": "Connection Bot",
+                    "role": "site-updater",
+                    "enabled": True,
+                    "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http"}],
+                    "routing_rules": {"connection_context": {"connection_name": "globeiq-agent-api"}},
+                    "execution_policy": {
+                        "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
+                        "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                    },
                 }
             ]
 
@@ -115,6 +151,12 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
                         "state": "blocked",
                         "ready": False,
                         "checks": [{"status": "failed", "message": "browser_session_check_failed"}],
+                    },
+                    {
+                        "bot_id": "connection-bot",
+                        "state": "ready",
+                        "ready": True,
+                        "checks": [],
                     }
                 ]
             }
@@ -146,9 +188,15 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Authenticated browser session" in page.data
     assert b"site account can exist" in page.data
     assert b"browser-ui" in page.data
+    assert b"Connection Action Bots" in page.data
+    assert b"Connection actions" in page.data
+    assert b"globeiq-agent-api.updateLesson" in page.data
+    assert b"Owner approval: 1" in page.data
+    assert b"Context: globeiq-agent-api" in page.data
     assert api.status_code == 200
     payload = api.get_json()
     assert payload["summary"]["blocked"] == 1
+    assert payload["summary"]["connection_action_bot_count"] == 1
     assert payload["blocked_groups"][0]["category"] == "browser_session"
     assert payload["blocked_groups"][0]["label"] == "Authenticated browser session"
 
