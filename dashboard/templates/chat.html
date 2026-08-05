@@ -1196,6 +1196,10 @@ function applyConversationProjectFilter() {
 }
 
 function clearConversationFilters() {
+  if (activeProjectFilter) {
+    window.location = buildChatUrl({conversation_id: selectedConversationId});
+    return;
+  }
   const filterEl = document.getElementById('chat-project-filter');
   const searchEl = document.getElementById('chat-conversation-search');
   if (filterEl) filterEl.value = '';
