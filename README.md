@@ -244,6 +244,7 @@ For detailed walkthroughs, use:
 - `docs/GETTING_STARTED.md`
 - `docs/USER_GUIDE.md`
 - `docs/OPERATIONS.md`
+- `docs/CHAT_HISTORY_MIGRATION.md` (staged plan for importing external chat history safely)
 - `docs/PM_BOT_PACK_OLLAMA_CLOUD.md` (manual PM bot import workflow reference)
 
 ---
