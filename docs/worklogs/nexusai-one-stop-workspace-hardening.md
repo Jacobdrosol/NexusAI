@@ -50,6 +50,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 12 in progress: added worker-list runtime tool evidence so browser, CLI, and provider credential blockers are visible from the fleet table without opening each worker or using SSH.
 - Batch 13 in progress: clarified bot tooling blocker labels so browser-backed GlobeIQ blockers distinguish an authenticated browser-session problem from a missing worker or missing site account.
 - Batch 14 in progress: added chat-bot readiness evidence to the chat page so the active bot summary shows ready, blocked, disabled, or unknown before sending a message.
+- Batch 15 in progress: added Work Overview quality-gate visibility from existing Platform AI test suites and latest runs without launching new tests or worker tasks.
 
 ## Validation
 
@@ -67,3 +68,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_workers_page_surfaces_runtime_tool_evidence tests/test_dashboard_phase4_pages.py::test_worker_probe_view_exposes_attested_runtime_tool_evidence tests/test_dashboard_phase4_pages.py::test_worker_probe_view_marks_unavailable_browser_session_degraded tests/test_dashboard_phase4_pages.py::test_worker_detail_page_loads_when_logged_in -q` passed for Batch 12 worker-list runtime evidence.
 - `pytest tests/test_bot_tooling_status.py tests/test_dashboard_phase4_pages.py::test_bots_page_surfaces_bot_scoped_chat_profiles tests/test_dashboard_phase4_pages.py::test_bots_page_identifies_scheduled_and_manual_dispatch_modes -q` passed for Batch 13 bot blocker labeling.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance tests/test_dashboard_phase4_pages.py::test_chat_page_project_filter_limits_conversation_list tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 14 chat bot readiness.
+- `pytest tests/test_dashboard_phase4_pages.py::test_work_page_surfaces_provider_model_usage tests/test_dashboard_phase4_pages.py::test_schedules_page_and_proxy_support_operational_schedule_management -q` and `pytest tests/test_dashboard_phase4_pages.py::test_settings_token_governor_api_reports_settings_and_live_status -q` passed for Batch 15 quality gate visibility.

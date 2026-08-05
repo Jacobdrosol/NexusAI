@@ -3752,6 +3752,31 @@ def test_work_page_surfaces_provider_model_usage(dashboard_client):
                 "token_governor": {"limits": {}},
             }
 
+        def list_platform_ai_quality_suites_global(self, **kwargs):
+            return {
+                "suites": [
+                    {
+                        "id": "suite-1",
+                        "name": "Research Bot Quality",
+                        "pipeline_bot_id": "research-bot",
+                        "suite": {"tests": [{"id": "checks-output"}, {"id": "checks-evidence"}]},
+                    }
+                ]
+            }
+
+        def list_platform_ai_quality_suite_runs(self, suite_id, **kwargs):
+            assert suite_id == "suite-1"
+            return {
+                "runs": [
+                    {
+                        "id": "run-1",
+                        "status": "passed",
+                        "score": 0.92,
+                        "completed_at": "2026-03-12T00:10:00+00:00",
+                    }
+                ]
+            }
+
     with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/work")
 
@@ -3760,6 +3785,10 @@ def test_work_page_surfaces_provider_model_usage(dashboard_client):
     assert b"ollama_cloud" in resp.data
     assert b"gpt-oss:120b" in resp.data
     assert b"12,345" in resp.data
+    assert b"Quality Gates" in resp.data
+    assert b"Research Bot Quality" in resp.data
+    assert b"research-bot" in resp.data
+    assert b"0.92" in resp.data
 
 
 def test_vault_upload_api_validates_required_fields(dashboard_client):

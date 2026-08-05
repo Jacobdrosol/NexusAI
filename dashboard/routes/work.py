@@ -242,6 +242,52 @@ def _token_governor_queue_pressure(
     return rows[: max(1, int(limit or 12))]
 
 
+def _quality_gate_summary(cp: Any, suites_payload: Any, *, limit: int = 5) -> dict[str, Any]:
+    suites = suites_payload.get("suites") if isinstance(suites_payload, dict) else []
+    suites = [suite for suite in (suites or []) if isinstance(suite, dict)]
+    rows: list[dict[str, Any]] = []
+    status_counts: dict[str, int] = {}
+    list_runs = getattr(cp, "list_platform_ai_quality_suite_runs", None)
+
+    for suite in suites[: max(1, int(limit or 5))]:
+        suite_id = str(suite.get("id") or "").strip()
+        if not suite_id:
+            continue
+        runs_payload = _safe_call(list_runs, suite_id, limit=1, timeout=1.0) if callable(list_runs) else None
+        runs = runs_payload.get("runs") if isinstance(runs_payload, dict) else []
+        runs = [run for run in (runs or []) if isinstance(run, dict)]
+        latest = runs[0] if runs else {}
+        status = str(latest.get("status") or "not_run").strip().lower() or "not_run"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        suite_def = suite.get("suite") if isinstance(suite.get("suite"), dict) else {}
+        tests = suite_def.get("tests") if isinstance(suite_def.get("tests"), list) else []
+        target = (
+            str(suite.get("pipeline_bot_id") or "").strip()
+            or str(suite.get("assignment_id") or "").strip()
+            or str(suite.get("session_id") or "").strip()
+            or "global"
+        )
+        rows.append(
+            {
+                "suite_id": suite_id,
+                "name": str(suite.get("name") or suite_id).strip(),
+                "target": target,
+                "test_count": len(tests),
+                "latest_status": status,
+                "latest_score": latest.get("score"),
+                "latest_at": str(latest.get("completed_at") or latest.get("created_at") or "").strip(),
+            }
+        )
+
+    return {
+        "available": isinstance(suites_payload, dict),
+        "suite_count": len(suites),
+        "shown_count": len(rows),
+        "status_counts": status_counts,
+        "rows": rows,
+    }
+
+
 def _safe_count(container: dict[str, Any], key: str) -> int:
     try:
         return max(0, int(container.get(key) or 0))
@@ -464,6 +510,16 @@ def _load_work_overview() -> dict[str, Any]:
     overview["usage_health"] = _usage_health(overview["usage"])
     overview["usage_pressure_lanes"] = _usage_pressure_lanes(overview["usage"])
     overview["token_governor_queue_pressure"] = _token_governor_queue_pressure(tasks, overview["usage"])
+    list_quality_suites = getattr(cp, "list_platform_ai_quality_suites_global", None)
+    if callable(list_quality_suites):
+        quality_suites, warning = _safe_cp_call(cp, "quality gate suites", list_quality_suites, limit=8, timeout=1.0)
+        overview["quality_gates"] = _quality_gate_summary(cp, quality_suites)
+        if warning:
+            warnings.append(warning)
+            overview["data_degraded"] = True
+            overview["data_warnings"] = warnings
+    else:
+        overview["quality_gates"] = _quality_gate_summary(cp, None)
     overview["bot_cap_audit"] = _bot_cap_audit_rows()
     _attach_attention_summary(overview)
     return overview
