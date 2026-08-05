@@ -301,3 +301,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance -q` passed for Batch 138 chat message timestamp visibility.
 - Batch 139: corrected live message hydration ordering so streamed assistant provenance is inserted after the persisted timestamp instead of pushing timestamps below model/bot details.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance -q` passed for Batch 139 live timestamp/provenance ordering.
+- Batch 140: expanded the chat-history migration staging guide with operator staging layout, source-specific export handling, dry-run JSONL contracts, and import blockers so external ChatGPT/Codex/Claude/Gemini/OpenWebUI history can be prepared without committing private exports or enabling tools/memory by default.
+- Docs-only validation for Batch 140: reviewed `docs/CHAT_HISTORY_MIGRATION.md` diff; no runtime tests required.

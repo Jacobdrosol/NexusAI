@@ -68,6 +68,109 @@ Each imported message should preserve:
    - memory profile pages do not include imported messages until the owner enables memory training for selected chats
 7. Enable memory selectively only after manual review or a dedicated memory-extraction pass.
 
+## Operator Staging Layout
+
+Keep raw exports and generated import plans outside this repository. Recommended layout:
+
+```text
+<operator-staging-root>/
+  raw/
+    chatgpt/
+    codex/
+    claude/
+    gemini/
+    openwebui/
+  normalized/
+    conversations.jsonl
+    messages.jsonl
+    attachments.jsonl
+  reports/
+    dry-run-summary.md
+    project-mapping-review.csv
+    secret-scan-findings.json
+    unsupported-items.json
+  approved/
+    import-plan.json
+```
+
+The repository should contain importer code and documentation only. It must not contain raw source exports, normalized personal history, private attachments, source cookies, account identifiers beyond reviewed NexusAI user IDs, or generated import plans for a real user.
+
+## Source Export Notes
+
+| Source | Expected Inputs | Important Handling |
+| --- | --- | --- |
+| ChatGPT | Data export archive with conversations JSON and optional attachments. | Preserve conversation tree order when present. Mark generated image/file artifacts as attachments, not memory. |
+| Codex | Task/thread export or local task archive when available. | Preserve repository path, branch, commit, and task ID in `metadata.import`; do not infer repo write permissions. |
+| Claude | Exported conversations or copied project transcripts. | Preserve project/source labels when available, but keep project mapping pending owner review. |
+| Gemini | Exported conversations from Takeout or copied transcripts. | Normalize role names and timestamps; mark missing timestamps in the dry-run report. |
+| OpenWebUI | Database/API export or conversation JSON. | Preserve local model names as source metadata; map models to NexusAI routes only after import review. |
+
+If a source only supports copied transcripts, import them as `archive` or `unscoped` unless the owner supplies an explicit project mapping.
+
+## Dry-Run Manifest Contract
+
+The first importer pass should emit JSONL files with one object per line and no database writes.
+
+Conversation record:
+
+```json
+{
+  "source_platform": "chatgpt",
+  "source_conversation_id": "source-stable-id",
+  "title": "Conversation title",
+  "owner_user_id": "user@example.com",
+  "scope": "global",
+  "project_id": null,
+  "bridge_project_ids": [],
+  "memory_profiles_enabled": false,
+  "tool_access_enabled": false,
+  "tool_access_filesystem": false,
+  "tool_access_repo_search": false,
+  "metadata": {"import": {"source_platform": "chatgpt", "validation_status": "pending"}}
+}
+```
+
+Message record:
+
+```json
+{
+  "source_platform": "chatgpt",
+  "source_conversation_id": "source-stable-id",
+  "source_message_id": "source-message-id",
+  "role": "user",
+  "content": "message text",
+  "created_at": "2026-08-05T12:00:00+00:00",
+  "metadata": {"import": {"source_platform": "chatgpt", "source_message_id": "source-message-id"}}
+}
+```
+
+Attachment record:
+
+```json
+{
+  "source_platform": "chatgpt",
+  "source_conversation_id": "source-stable-id",
+  "source_message_id": "source-message-id",
+  "name": "file.png",
+  "mime_type": "image/png",
+  "size_bytes": 12345,
+  "staged_path": "<operator-staging-root>/raw/chatgpt/file.png",
+  "import_action": "review"
+}
+```
+
+## Import Blockers
+
+The dry-run report must block import until these are resolved:
+
+- Any secret-like value in message text, file names, attachment metadata, or source metadata.
+- Any unsupported attachment type that cannot be safely skipped or retained as metadata-only.
+- Any conversation mapped to a project that does not exist in NexusAI.
+- Any imported conversation requesting workspace tools.
+- Any imported conversation requesting memory training before owner review.
+- Any source export item with ambiguous ownership.
+- Any malformed timestamp that would break stable message ordering.
+
 ## Memory Policy
 
 Bulk imported history must not automatically train memory profiles. The safe default is:
