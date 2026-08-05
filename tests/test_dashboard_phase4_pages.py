@@ -1319,6 +1319,89 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"Default route is unavailable: ${routeBlocker}" in resp.data
 
 
+def test_chat_page_warns_when_conversation_default_bot_is_not_chat_selectable(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-worker-default",
+                    "title": "Worker Default",
+                    "project_id": None,
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "default_bot_id": "globeiq-live-audit-qc-02-bot",
+                    "memory_profiles_enabled": True,
+                    "memory_profile_id": "default",
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "personal-general-chat",
+                    "name": "Personal General Chat",
+                    "role": "assistant",
+                    "routing_rules": {
+                        "operator_profile": {"autonomy": "manual_chat_only"},
+                        "chat_profile": {"mode": "chat", "label": "General Chat"},
+                    },
+                },
+                {
+                    "id": "globeiq-live-audit-qc-02-bot",
+                    "name": "GlobeIQ Live Audit QC 02",
+                    "role": "qc",
+                    "routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}},
+                },
+            ]
+
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {"bot_id": "personal-general-chat", "state": "ready", "ready": True, "checks": []},
+                    {"bot_id": "globeiq-live-audit-qc-02-bot", "state": "ready", "ready": True, "checks": []},
+                ]
+            }
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-worker-default")
+
+    assert resp.status_code == 200
+    assert b'id="chat-default-bot-route-warning"' in resp.data
+    assert b"Default bot unavailable: GlobeIQ Live Audit QC 02 (globeiq-live-audit-qc-02-bot)." in resp.data
+    assert b"not configured for manual chat use" in resp.data
+    page_html = resp.data.decode("utf-8")
+    selector_start = page_html.index('id="chat-bot-selector"')
+    chat_selector = page_html[selector_start:page_html.index("</select>", selector_start)]
+    assert "GlobeIQ Live Audit QC 02" not in chat_selector
+
+
 def test_chat_page_does_not_block_chat_bot_when_readiness_is_unreported(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -4004,6 +4087,46 @@ def test_chat_create_conversation_api_blocks_missing_default_bot_credential_ref(
     assert b"Missing key-vault credential reference(s): MISSING_OLLAMA_KEY" in resp.data
 
 
+def test_chat_create_conversation_api_blocks_non_chat_default_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "worker-qc", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "worker-qc",
+                    "name": "Worker QC",
+                    "role": "qc",
+                    "routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}},
+                }
+            ]
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+        def create_conversation(self, body):
+            raise AssertionError("non-chat default bot should not reach control plane create")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/conversations",
+            json={"title": "Worker Default", "default_bot_id": "worker-qc"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Default bot is unavailable" in resp.data
+    assert b"worker-qc is not configured for manual chat use" in resp.data
+
+
 def test_chat_create_conversation_api_proxies_default_model(dashboard_client):
     _login_admin(dashboard_client)
     captured = {}
@@ -4371,6 +4494,49 @@ def test_chat_message_api_blocks_unavailable_conversation_default_bot(dashboard_
     assert resp.status_code == 409
     assert b"Selected bot is unavailable" in resp.data
     assert b"default bot disabled after chat creation" in resp.data
+
+
+def test_chat_message_api_blocks_non_chat_conversation_default_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "default_bot_id": "worker-qc"}]
+
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "worker-qc", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "worker-qc",
+                    "name": "Worker QC",
+                    "role": "qc",
+                    "routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}},
+                }
+            ]
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+        def post_message(self, conversation_id, body):
+            raise AssertionError("non-chat default bot should not reach control plane post")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Selected bot is unavailable" in resp.data
+    assert b"worker-qc is not configured for manual chat use" in resp.data
 
 
 def test_chat_message_api_blocks_workspace_tools_without_project_policy(dashboard_client):
@@ -4743,6 +4909,46 @@ def test_chat_conversation_route_defaults_api_blocks_unavailable_default_bot(das
     assert b"backend missing" in resp.data
 
 
+def test_chat_conversation_route_defaults_api_blocks_non_chat_default_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "worker-qc", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "worker-qc",
+                    "name": "Worker QC",
+                    "role": "qc",
+                    "routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}},
+                }
+            ]
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+        def update_conversation_route_defaults(self, *args, **kwargs):
+            raise AssertionError("non-chat bot should not reach control plane route defaults update")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/route-defaults",
+            json={"default_bot_id": "worker-qc"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Default bot is unavailable" in resp.data
+    assert b"worker-qc is not configured for manual chat use" in resp.data
+
+
 def test_chat_conversation_route_defaults_api_blocks_unknown_default_model(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -4874,6 +5080,52 @@ def test_chat_stream_api_blocks_unavailable_conversation_default_bot(dashboard_c
     assert resp.status_code == 409
     assert b"Selected bot is unavailable" in resp.data
     assert b"default stream bot blocked" in resp.data
+
+
+def test_chat_stream_api_blocks_non_chat_conversation_default_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "default_bot_id": "worker-qc"}]
+
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "worker-qc", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "worker-qc",
+                    "name": "Worker QC",
+                    "role": "qc",
+                    "routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}},
+                }
+            ]
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+    def _fake_post(*args, **kwargs):
+        raise AssertionError("non-chat default stream bot should not open an upstream request")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={"conversation_id": "c1", "content": "hello"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Selected bot is unavailable" in resp.data
+    assert b"worker-qc is not configured for manual chat use" in resp.data
 
 
 def test_chat_stream_api_blocks_workspace_tools_without_shared_mode(dashboard_client):

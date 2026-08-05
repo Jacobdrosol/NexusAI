@@ -559,6 +559,11 @@
           </div>
         </details>
       </div>
+      {% if selected_default_bot_notice %}
+      <div id="chat-default-bot-route-warning" class="chat-composer-status error">
+        Default bot unavailable: {{ selected_default_bot_notice.label }}. {{ selected_default_bot_notice.detail }}
+      </div>
+      {% endif %}
       <div id="chat-bot-capability-summary" class="mini-note chat-bot-capability-summary"></div>
       <div id="chat-effective-context-summary" class="chat-effective-context-summary"></div>
       {% endif %}

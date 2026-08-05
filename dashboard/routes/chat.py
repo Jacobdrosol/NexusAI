@@ -376,6 +376,66 @@ def _bot_readiness_blocker_from_cp(cp: Any, bot_id: str) -> str:
     return f"{safe_bot_id} is {tooling_state}: {detail}" if detail else f"{safe_bot_id} is {tooling_state}"
 
 
+def _chat_selectability_blocker_from_cp(cp: Any, bot_id: str) -> str:
+    safe_bot_id = str(bot_id or "").strip()
+    if not safe_bot_id or not hasattr(cp, "list_bots"):
+        return ""
+    try:
+        bots = cp.list_bots()
+    except Exception:
+        return ""
+    if not isinstance(bots, list) or not bots:
+        return ""
+    bot = next((row for row in bots if isinstance(row, dict) and str(row.get("id") or "").strip() == safe_bot_id), None)
+    if not bot:
+        return f"{safe_bot_id} is not registered in the bot inventory"
+    selectable_ids = {
+        str(row.get("id") or "").strip()
+        for row in _chat_selectable_bots([bot])
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+    if safe_bot_id not in selectable_ids:
+        return f"{safe_bot_id} is not configured for manual chat use"
+    return ""
+
+
+def _chat_bot_availability_blocker_from_cp(cp: Any, bot_id: str) -> str:
+    readiness_blocker = _bot_readiness_blocker_from_cp(cp, bot_id)
+    if readiness_blocker:
+        return readiness_blocker
+    return _chat_selectability_blocker_from_cp(cp, bot_id)
+
+
+def _selected_default_bot_notice(
+    selected: dict[str, Any] | None,
+    *,
+    bots: list[dict[str, Any]],
+    chat_bots: list[dict[str, Any]],
+) -> dict[str, str] | None:
+    default_bot_id = str((selected or {}).get("default_bot_id") or "").strip()
+    if not default_bot_id:
+        return None
+    chat_bot_ids = {
+        str(bot.get("id") or "").strip()
+        for bot in chat_bots or []
+        if isinstance(bot, dict) and str(bot.get("id") or "").strip()
+    }
+    if default_bot_id in chat_bot_ids:
+        return None
+    labels = _bot_display_labels(bots)
+    label = labels.get(default_bot_id, default_bot_id)
+    bot_exists = any(
+        isinstance(bot, dict) and str(bot.get("id") or "").strip() == default_bot_id
+        for bot in bots or []
+    )
+    detail = (
+        "This conversation default bot is not configured for manual chat use. Pick a chat-capable bot and save defaults before sending."
+        if bot_exists
+        else "This conversation default bot is not present in the current bot inventory. Pick an available chat bot and save defaults before sending."
+    )
+    return {"bot_id": default_bot_id, "label": label, "detail": detail}
+
+
 def _model_catalog_blocker_from_cp(cp: Any, model_id: str) -> str:
     _, blocker = _model_catalog_entry_from_cp(cp, model_id)
     return blocker
@@ -1656,6 +1716,12 @@ def chat_page() -> str:
         chat_bots = _chat_selectable_bots(bots)
         assignment_bots = _assignment_manager_bots(bots)
 
+        selected_default_bot_notice = _selected_default_bot_notice(
+            selected,
+            bots=bots,
+            chat_bots=chat_bots,
+        )
+
         return render_template(
             "chat.html",
             conversations=[c for c in conversations if not c.get("archived_at")],
@@ -1668,6 +1734,7 @@ def chat_page() -> str:
             bots=bots,
             chat_bots=chat_bots,
             assignment_bots=assignment_bots,
+            selected_default_bot_notice=selected_default_bot_notice,
             projects=projects,
             vault_items=vault_items,
             repo_context_items=repo_context_items,
@@ -1737,7 +1804,7 @@ def api_create_conversation():
     cp = get_cp_client()
     default_bot_id = str(data.get("default_bot_id") or "").strip()
     default_model_id = str(data.get("default_model_id") or "").strip()
-    readiness_blocker = _bot_readiness_blocker_from_cp(cp, default_bot_id)
+    readiness_blocker = _chat_bot_availability_blocker_from_cp(cp, default_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Default bot is unavailable: {readiness_blocker}"}), 409
     model_blocker = _model_catalog_blocker_from_cp(cp, default_model_id)
@@ -1872,7 +1939,7 @@ def api_update_conversation_route_defaults(conversation_id: str):
     cp = get_cp_client()
     default_bot_id = str(data.get("default_bot_id") or "").strip()
     default_model_id = str(data.get("default_model_id") or "").strip()
-    readiness_blocker = _bot_readiness_blocker_from_cp(cp, default_bot_id)
+    readiness_blocker = _chat_bot_availability_blocker_from_cp(cp, default_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Default bot is unavailable: {readiness_blocker}"}), 409
     model_blocker = _model_catalog_blocker_from_cp(cp, default_model_id)
@@ -1919,7 +1986,7 @@ def _validated_chat_send_payload(
 ) -> tuple[Any | None, dict[str, Any]]:
     bot_id = str(data.get("bot_id") or "").strip()
     readiness_bot_id = bot_id or _conversation_default_bot_id_from_cp(cp, conversation_id)
-    readiness_blocker = _bot_readiness_blocker_from_cp(cp, readiness_bot_id)
+    readiness_blocker = _chat_bot_availability_blocker_from_cp(cp, readiness_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), {}
     image_model_blocker = _image_attachment_model_blocker_from_cp(cp, conversation_id, bot_id, attachments)
