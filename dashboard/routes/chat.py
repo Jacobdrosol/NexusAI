@@ -26,6 +26,8 @@ _CHAT_SELECTABLE_ROLES = {
     "tutor",
 }
 _ALLOWED_CONVERSATION_SCOPES = {"global", "project", "bridged"}
+_CHAT_CONTEXT_ITEM_MAX_CHARS = 12000
+_CHAT_CONTEXT_ITEM_ID_MAX_CHARS = 256
 
 
 def _bot_value(bot: Any, key: str, default: Any = None) -> Any:
@@ -473,8 +475,10 @@ def _context_payload_blocker(raw_context_items: Any, raw_context_item_ids: Any) 
         if len(raw_context_items) > 50:
             return "context_items is limited to 50 items"
         for item in raw_context_items:
-            if not isinstance(item, dict):
-                return "context_items must contain objects"
+            if not isinstance(item, str):
+                return "context_items must contain strings"
+            if len(item) > _CHAT_CONTEXT_ITEM_MAX_CHARS:
+                return f"context_items entries are limited to {_CHAT_CONTEXT_ITEM_MAX_CHARS} characters"
     if raw_context_item_ids is not None:
         if not isinstance(raw_context_item_ids, list):
             return "context_item_ids must be a list"
@@ -483,6 +487,10 @@ def _context_payload_blocker(raw_context_items: Any, raw_context_item_ids: Any) 
         for item_id in raw_context_item_ids:
             if not isinstance(item_id, str):
                 return "context_item_ids must contain strings"
+            if not item_id.strip():
+                return "context_item_ids must contain non-empty strings"
+            if len(item_id) > _CHAT_CONTEXT_ITEM_ID_MAX_CHARS:
+                return f"context_item_ids entries are limited to {_CHAT_CONTEXT_ITEM_ID_MAX_CHARS} characters"
     return ""
 
 

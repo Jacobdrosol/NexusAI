@@ -2809,6 +2809,69 @@ def test_chat_message_api_blocks_invalid_context_payload(dashboard_client):
     assert b"context_items must be a list" in resp.data
 
 
+def test_chat_message_api_proxies_string_context_items(dashboard_client):
+    _login_admin(dashboard_client)
+    seen: dict[str, object] = {}
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def post_message(self, conversation_id, body):
+            seen["conversation_id"] = conversation_id
+            seen["body"] = body
+            return {"assistant_message": {"id": "a1", "content": "ok"}}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello", "context_items": ["Chat: prior notes"]},
+        )
+
+    assert resp.status_code == 200
+    assert seen["conversation_id"] == "c1"
+    assert seen["body"]["context_items"] == ["Chat: prior notes"]
+
+
+def test_chat_message_api_blocks_object_context_items(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def post_message(self, conversation_id, body):
+            raise AssertionError("object context payload should not reach control plane message send")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello", "context_items": [{"id": "vault-1"}]},
+        )
+
+    assert resp.status_code == 400
+    assert b"Invalid context payload" in resp.data
+    assert b"context_items must contain strings" in resp.data
+
+
+def test_chat_stream_api_blocks_oversized_context_item_id(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+    def _fake_post(*args, **kwargs):
+        raise AssertionError("oversized context id should not open an upstream stream request")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={"conversation_id": "c1", "content": "hello", "context_item_ids": ["x" * 257]},
+        )
+
+    assert resp.status_code == 400
+    assert b"Invalid context payload" in resp.data
+    assert b"context_item_ids entries are limited to 256 characters" in resp.data
+
+
 def test_chat_message_api_blocks_image_attachment_for_text_only_effective_model(dashboard_client):
     _login_admin(dashboard_client)
 

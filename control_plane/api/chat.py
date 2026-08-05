@@ -7,7 +7,7 @@ import logging
 import os
 from pathlib import Path
 import re
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Tuple
+from typing import Annotated, Any, AsyncGenerator, Dict, List, Literal, Optional, Tuple
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -182,6 +182,10 @@ _MEMORY_PROFILE_RECALL_RE = re.compile(
     re.IGNORECASE,
 )
 _ALLOWED_CONVERSATION_SCOPES = {"global", "project", "bridged"}
+_CHAT_CONTEXT_ITEM_MAX_CHARS = 12000
+_CHAT_CONTEXT_ITEM_ID_MAX_CHARS = 256
+ChatContextItem = Annotated[str, Field(max_length=_CHAT_CONTEXT_ITEM_MAX_CHARS)]
+ChatContextItemId = Annotated[str, Field(min_length=1, max_length=_CHAT_CONTEXT_ITEM_ID_MAX_CHARS)]
 
 
 class CreateConversationRequest(BaseModel):
@@ -323,8 +327,8 @@ class PostMessageRequest(BaseModel):
     content: str
     bot_id: Optional[str] = None
     user_id: Optional[str] = None
-    context_items: Optional[List[str]] = Field(default=None, max_length=50)
-    context_item_ids: Optional[List[str]] = Field(default=None, max_length=200)
+    context_items: Optional[List[ChatContextItem]] = Field(default=None, max_length=50)
+    context_item_ids: Optional[List[ChatContextItemId]] = Field(default=None, max_length=200)
     include_project_context: bool = False
     use_workspace_tools: bool = False
     inline_coding_enabled: bool = False
