@@ -69,6 +69,15 @@
       <strong>{{ operating_summary.chat_tool_label }}</strong>
     </div>
     <div>
+      <div class="mini-note">Backend Routes</div>
+      <strong>{{ operating_summary.backend_route_count }} configured</strong>
+      {% for route in operating_summary.backend_route_labels %}
+      <div class="mini-note">Route: {{ route }}</div>
+      {% else %}
+      <div class="mini-note">No backend route configured</div>
+      {% endfor %}
+    </div>
+    <div>
       <div class="mini-note">Personal Memory</div>
       <span class="badge badge-{{ 'enabled' if operating_summary.memory_enabled else 'disabled' }}">{{ 'enabled' if operating_summary.memory_enabled else 'off' }}</span>
     </div>

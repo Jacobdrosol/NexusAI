@@ -2191,6 +2191,9 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"ready" in resp.data
     assert b"1 active / 0 paused" in resp.data
     assert b"Coding" in resp.data
+    assert b"Backend Routes" in resp.data
+    assert b"1 configured" in resp.data
+    assert b"Route: ollama_cloud / qwen3.5:397b on coding-worker" in resp.data
     assert b"Use:" in resp.data
     assert b"Tool-enabled chat" in resp.data
     assert b"Autonomy:" in resp.data

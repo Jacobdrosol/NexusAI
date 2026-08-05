@@ -326,6 +326,27 @@ def _bot_dependency_view(payload: Any) -> dict[str, Any] | None:
     }
 
 
+def _backend_route_labels(bot: dict[str, Any], *, limit: int = 4) -> list[str]:
+    labels: list[str] = []
+    for backend in bot.get("backends") or []:
+        if not isinstance(backend, dict):
+            continue
+        backend_type = str(backend.get("type") or "").strip()
+        provider = str(backend.get("provider") or "").strip()
+        model = str(backend.get("model") or "").strip()
+        worker_id = str(backend.get("worker_id") or "").strip()
+        label = provider or backend_type or "backend"
+        if model:
+            label = f"{label} / {model}"
+        if worker_id:
+            label = f"{label} on {worker_id}"
+        if label not in labels:
+            labels.append(label)
+        if len(labels) >= max(1, int(limit or 4)):
+            break
+    return labels
+
+
 def _bot_detail_operating_summary(
     bot: dict[str, Any],
     readiness: Any,
@@ -375,6 +396,8 @@ def _bot_detail_operating_summary(
         "paused_schedule_count": len(paused_schedules),
         "readiness_state": readiness_state,
         "chat_profile_label": chat_profile.get("label") or chat_profile.get("mode") or "Chat",
+        "backend_route_labels": _backend_route_labels(bot),
+        "backend_route_count": len([backend for backend in bot.get("backends") or [] if isinstance(backend, dict)]),
         "chat_tool_label": (
             ", ".join(tool_modes)
             if bool(chat_tools.get("enabled", False)) and tool_modes
