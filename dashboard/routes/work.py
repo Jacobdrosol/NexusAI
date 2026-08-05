@@ -354,6 +354,45 @@ def _cap_pressure_brief(lanes: list[dict[str, Any]], *, kind: str) -> dict[str, 
     }
 
 
+def _global_cap_pressure(
+    usage_summary: dict[str, Any],
+    *,
+    governor_key: str,
+    global_limit_key: str,
+    kind: str,
+) -> dict[str, Any]:
+    governor = usage_summary.get(governor_key) if isinstance(usage_summary.get(governor_key), dict) else {}
+    limits = governor.get("limits") if isinstance(governor.get("limits"), dict) else {}
+    hourly_limit = _safe_count(limits, global_limit_key)
+    totals = usage_summary.get("totals") if isinstance(usage_summary.get("totals"), dict) else {}
+    total_tokens = _safe_count(totals, "total_tokens")
+    if not governor.get("enabled") or hourly_limit <= 0:
+        level = "idle"
+        label = "no global cap"
+        ratio = 0.0
+    else:
+        ratio = round(total_tokens / hourly_limit, 2)
+        if ratio >= 1:
+            level = "critical"
+            label = "global cap hit"
+        elif ratio >= 0.8:
+            level = "warning"
+            label = "global cap near"
+        else:
+            level = "ready"
+            label = "global cap ok"
+    return {
+        "kind": kind,
+        "level": level,
+        "label": label,
+        "total_tokens": total_tokens,
+        "hourly_limit": hourly_limit,
+        "remaining_tokens": max(0, hourly_limit - total_tokens) if hourly_limit > 0 else 0,
+        "usage_ratio": ratio,
+        "recommended_action": _usage_pressure_recommended_action(level, kind="chat" if kind == "chat" else "task"),
+    }
+
+
 def _usage_brief(usage: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
     totals = usage.get("totals") if isinstance(usage.get("totals"), dict) else {}
 
@@ -802,6 +841,12 @@ def _load_work_overview() -> dict[str, Any]:
     overview["usage_brief"] = _usage_brief(overview["usage"])
     overview["usage_pressure_lanes"] = _usage_pressure_lanes(overview["usage"])
     overview["usage_cap_pressure"] = _cap_pressure_brief(overview["usage_pressure_lanes"], kind="worker")
+    overview["usage_global_cap_pressure"] = _global_cap_pressure(
+        overview["usage"],
+        governor_key="token_governor",
+        global_limit_key="global_hourly_tokens",
+        kind="worker",
+    )
     overview["token_governor_queue_pressure"] = _token_governor_queue_pressure(tasks, overview["usage"])
     chat_usage = getattr(cp, "chat_usage", None)
     if callable(chat_usage):
@@ -817,9 +862,17 @@ def _load_work_overview() -> dict[str, Any]:
     overview["chat_usage_brief"] = _chat_usage_brief(overview["chat_usage"])
     overview["chat_usage_pressure_lanes"] = _chat_usage_pressure_lanes(overview["chat_usage"])
     overview["chat_cap_pressure"] = _cap_pressure_brief(overview["chat_usage_pressure_lanes"], kind="chat")
+    overview["chat_global_cap_pressure"] = _global_cap_pressure(
+        overview["chat_usage"],
+        governor_key="chat_token_governor",
+        global_limit_key="global_hourly_tokens",
+        kind="chat",
+    )
     operations_brief = overview.get("operations_brief") if isinstance(overview.get("operations_brief"), dict) else {}
     operations_brief["usage_cap_pressure"] = overview["usage_cap_pressure"]
+    operations_brief["usage_global_cap_pressure"] = overview["usage_global_cap_pressure"]
     operations_brief["chat_cap_pressure"] = overview["chat_cap_pressure"]
+    operations_brief["chat_global_cap_pressure"] = overview["chat_global_cap_pressure"]
     overview["operations_brief"] = operations_brief
     list_quality_suites = getattr(cp, "list_platform_ai_quality_suites_global", None)
     if callable(list_quality_suites):
@@ -863,9 +916,11 @@ def api_work_brief():
             "usage_health": overview.get("usage_health") or {},
             "usage_brief": overview.get("usage_brief") or {},
             "usage_cap_pressure": overview.get("usage_cap_pressure") or {},
+            "usage_global_cap_pressure": overview.get("usage_global_cap_pressure") or {},
             "chat_usage_health": overview.get("chat_usage_health") or {},
             "chat_usage_brief": overview.get("chat_usage_brief") or {},
             "chat_cap_pressure": overview.get("chat_cap_pressure") or {},
+            "chat_global_cap_pressure": overview.get("chat_global_cap_pressure") or {},
             "chat_token_governor": (overview.get("chat_usage") or {}).get("chat_token_governor") or {},
             "usage_pressure_lanes": overview.get("usage_pressure_lanes") or [],
             "chat_usage_pressure_lanes": overview.get("chat_usage_pressure_lanes") or [],

@@ -210,10 +210,22 @@
         worker caps {{ worker_cap.label }}
       </span>
       {% endif %}
+      {% set worker_global_cap = operations_brief.usage_global_cap_pressure or {} %}
+      {% if worker_global_cap.level in ["critical", "warning"] %}
+      <span class="badge {% if worker_global_cap.level == 'critical' %}badge-failed{% else %}badge-yellow{% endif %}">
+        worker {{ worker_global_cap.label }}
+      </span>
+      {% endif %}
       {% set chat_cap = operations_brief.chat_cap_pressure or {} %}
       {% if chat_cap.level in ["critical", "warning"] %}
       <span class="badge {% if chat_cap.level == 'critical' %}badge-failed{% else %}badge-yellow{% endif %}">
         chat caps {{ chat_cap.label }}
+      </span>
+      {% endif %}
+      {% set chat_global_cap = operations_brief.chat_global_cap_pressure or {} %}
+      {% if chat_global_cap.level in ["critical", "warning"] %}
+      <span class="badge {% if chat_global_cap.level == 'critical' %}badge-failed{% else %}badge-yellow{% endif %}">
+        chat {{ chat_global_cap.label }}
       </span>
       {% endif %}
     </div>
