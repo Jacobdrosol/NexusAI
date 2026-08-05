@@ -3045,4 +3045,31 @@ select.form-control {
     min-height: 0;
     overflow: hidden;
   }
+
+  .page-chat .chat-main-header {
+    align-items: center;
+    min-height: 0;
+  }
+
+  .page-chat .chat-main-header .panel-title {
+    display: none;
+  }
+
+  .page-chat .chat-main-header-controls {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .page-chat .chat-bot-selector {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .page-chat #chat-default-model-selector,
+  .page-chat .chat-main-header-controls > button,
+  .page-chat .chat-bot-capability-summary,
+  .page-chat .chat-effective-context-summary {
+    display: none;
+  }
 }

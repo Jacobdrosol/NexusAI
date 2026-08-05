@@ -786,6 +786,9 @@ def test_chat_mobile_layout_uses_a_conversation_drawer():
     assert "height: 100dvh;" in final_mobile_rules
     assert ".page-chat .app-main" in final_mobile_rules
     assert "overflow: hidden;" in final_mobile_rules
+    assert ".page-chat .chat-bot-capability-summary" in final_mobile_rules
+    assert ".page-chat .chat-effective-context-summary" in final_mobile_rules
+    assert "#chat-default-model-selector" in final_mobile_rules
     assert "height: 100dvh;" in css
 
     template = Path("dashboard/templates/chat.html").read_text(encoding="utf-8")
