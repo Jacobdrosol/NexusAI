@@ -845,9 +845,11 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"backend ready for chat" in resp.data
     assert b"readinessLabel" in resp.data
     assert b"Personal Blocked Chat - Blocked Chat - blocked" in resp.data
-    assert b"Personal Blocked Chat (personal-blocked-chat) - blocked" in resp.data
+    assert b"Personal Blocked Chat (personal-blocked-chat) - blocked: model credential missing" in resp.data
+    assert b'value="personal-blocked-chat" disabled title="model credential missing"' in resp.data
     assert b"model credential missing" in resp.data
     assert b"function activeBotReadinessBlocker" in resp.data
+    assert b"function chatBotReadinessBlocker" in resp.data
 
 
 def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):

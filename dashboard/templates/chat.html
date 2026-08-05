@@ -639,7 +639,8 @@
         <select class="form-control" name="default_bot_id">
           <option value="">None</option>
           {% for b in chat_bots %}
-          <option value="{{ b.id }}">{{ b.name }} ({{ b.id }}){% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% endif %}</option>
+          {% set blocked_default_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
+          <option value="{{ b.id }}" {% if blocked_default_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>{{ b.name }} ({{ b.id }}){% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% if b.readiness.detail %}: {{ b.readiness.detail }}{% endif %}{% endif %}</option>
           {% endfor %}
         </select>
       </div>
@@ -1360,6 +1361,11 @@ function activeBotSupportsImages() {
 
 function activeBotReadinessBlocker() {
   const bot = activeChatBot();
+  if (!bot) return '';
+  return chatBotReadinessBlocker(bot);
+}
+
+function chatBotReadinessBlocker(bot) {
   if (!bot) return '';
   const readiness = bot.readiness && typeof bot.readiness === 'object' ? bot.readiness : {};
   const state = String(readiness.state || '').trim().toLowerCase();
@@ -2485,6 +2491,17 @@ document.getElementById('chat-send-form')?.addEventListener('submit', function(e
 document.getElementById('form-create-convo')?.addEventListener('submit', async function(e) {
   e.preventDefault();
   const fd = new FormData(this);
+  const requestedDefaultBotId = String(fd.get('default_bot_id') || '').trim();
+  if (requestedDefaultBotId) {
+    const requestedDefaultBot = Array.isArray(availableBots)
+      ? availableBots.find((bot) => String(bot?.id || '') === requestedDefaultBotId)
+      : null;
+    const readinessBlocker = chatBotReadinessBlocker(requestedDefaultBot);
+    if (readinessBlocker) {
+      alert(`Default bot is unavailable: ${readinessBlocker}`);
+      return;
+    }
+  }
   const scope = (fd.get('scope') || 'global').toString();
   let projectId = null;
   let bridgeProjectIds = [];
@@ -2504,7 +2521,7 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
       project_id: projectId,
       bridge_project_ids: bridgeProjectIds,
       scope,
-      default_bot_id: fd.get('default_bot_id') || null,
+      default_bot_id: requestedDefaultBotId || null,
       memory_profiles_enabled: !!document.getElementById('create-convo-memory-enabled')?.checked,
       memory_profile_id: fd.get('memory_profile_id') || 'default',
       tool_access_enabled: !!document.getElementById('create-convo-tool-enabled')?.checked,
