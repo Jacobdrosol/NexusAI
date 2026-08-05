@@ -1868,6 +1868,9 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                         "filesystem": True,
                         "repo_search": True,
                     },
+                    "operator_profile": {
+                        "autonomy": "manual_chat_only",
+                    },
                 },
                 "execution_policy": {
                     "repo_output_mode": "allow",
@@ -1924,6 +1927,12 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"ready" in resp.data
     assert b"1 active / 0 paused" in resp.data
     assert b"Coding" in resp.data
+    assert b"Use:" in resp.data
+    assert b"Tool-enabled chat" in resp.data
+    assert b"Autonomy:" in resp.data
+    assert b"manual_chat_only" in resp.data
+    assert b"Chat Tools:" in resp.data
+    assert b"filesystem, repo_search" in resp.data
     assert b"Personal Memory" in resp.data
     assert b"enabled" in resp.data
     assert b"repo_search" in resp.data

@@ -189,10 +189,13 @@
   <div class="split-grid" style="grid-template-columns:1fr 1fr;">
     <div>
       <div><strong>Mode:</strong> <span class="badge badge-info">{{ chat_profile.label }}</span></div>
+      <div><strong>Use:</strong> {{ chat_profile.use_label or 'General chat' }}</div>
+      <div><strong>Autonomy:</strong> {{ chat_profile.autonomy or 'unspecified' }}</div>
       <div><strong>Capabilities:</strong> {{ chat_profile.capabilities | join(', ') if chat_profile.capabilities else 'standard chat' }}</div>
       <div><strong>Personal Memory:</strong> <span class="badge badge-{{ 'enabled' if bot.memory_profiles_enabled else 'disabled' }}">{{ 'enabled' if bot.memory_profiles_enabled else 'off' }}</span></div>
     </div>
     <div>
+      <div><strong>Chat Tools:</strong> {{ chat_profile.tool_label or 'off' }}</div>
       <div><strong>Repo Output:</strong> {{ chat_profile.repo_output_mode or 'deny' }}</div>
       <div><strong>Inline Coding Default:</strong> {{ 'yes' if chat_profile.inline_coding_default else 'no' }}</div>
     </div>
