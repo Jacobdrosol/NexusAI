@@ -204,6 +204,18 @@
       <span class="badge {% if operations_brief.capacity_level == 'critical' %}badge-failed{% elif operations_brief.capacity_level == 'warning' %}badge-yellow{% elif operations_brief.capacity_level == 'idle' %}badge-queued{% else %}badge-completed{% endif %}">
         capacity {{ operations_brief.capacity_level or "unknown" }}
       </span>
+      {% set worker_cap = operations_brief.usage_cap_pressure or {} %}
+      {% if worker_cap.level in ["critical", "warning"] %}
+      <span class="badge {% if worker_cap.level == 'critical' %}badge-failed{% else %}badge-yellow{% endif %}">
+        worker caps {{ worker_cap.label }}
+      </span>
+      {% endif %}
+      {% set chat_cap = operations_brief.chat_cap_pressure or {} %}
+      {% if chat_cap.level in ["critical", "warning"] %}
+      <span class="badge {% if chat_cap.level == 'critical' %}badge-failed{% else %}badge-yellow{% endif %}">
+        chat caps {{ chat_cap.label }}
+      </span>
+      {% endif %}
     </div>
   </div>
   <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;gap:1rem;">

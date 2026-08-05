@@ -321,6 +321,39 @@ def _chat_usage_pressure_lanes(chat_usage: dict[str, Any], *, limit: int = 10) -
     return rows[: max(1, int(limit or 10))]
 
 
+def _cap_pressure_brief(lanes: list[dict[str, Any]], *, kind: str) -> dict[str, Any]:
+    rows = [row for row in lanes if isinstance(row, dict)]
+    counts = {"critical": 0, "warning": 0, "ready": 0}
+    for row in rows:
+        level = str(row.get("level") or "ready").strip().lower()
+        counts[level if level in counts else "ready"] += 1
+
+    top_lane = rows[0] if rows else {}
+    if counts["critical"]:
+        level = "critical"
+        label = "cap hit"
+    elif counts["warning"]:
+        level = "warning"
+        label = "near cap"
+    elif rows:
+        level = "ready"
+        label = "within cap"
+    else:
+        level = "idle"
+        label = "no cap pressure"
+
+    return {
+        "kind": kind,
+        "level": level,
+        "label": label,
+        "total_lanes": len(rows),
+        "critical_lanes": counts["critical"],
+        "warning_lanes": counts["warning"],
+        "ready_lanes": counts["ready"],
+        "top_lane": top_lane,
+    }
+
+
 def _usage_brief(usage: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
     totals = usage.get("totals") if isinstance(usage.get("totals"), dict) else {}
 
@@ -768,6 +801,7 @@ def _load_work_overview() -> dict[str, Any]:
     overview["usage_health"] = _usage_health(overview["usage"])
     overview["usage_brief"] = _usage_brief(overview["usage"])
     overview["usage_pressure_lanes"] = _usage_pressure_lanes(overview["usage"])
+    overview["usage_cap_pressure"] = _cap_pressure_brief(overview["usage_pressure_lanes"], kind="worker")
     overview["token_governor_queue_pressure"] = _token_governor_queue_pressure(tasks, overview["usage"])
     chat_usage = getattr(cp, "chat_usage", None)
     if callable(chat_usage):
@@ -782,6 +816,11 @@ def _load_work_overview() -> dict[str, Any]:
     overview["chat_usage_health"] = _chat_usage_health(overview["chat_usage"])
     overview["chat_usage_brief"] = _chat_usage_brief(overview["chat_usage"])
     overview["chat_usage_pressure_lanes"] = _chat_usage_pressure_lanes(overview["chat_usage"])
+    overview["chat_cap_pressure"] = _cap_pressure_brief(overview["chat_usage_pressure_lanes"], kind="chat")
+    operations_brief = overview.get("operations_brief") if isinstance(overview.get("operations_brief"), dict) else {}
+    operations_brief["usage_cap_pressure"] = overview["usage_cap_pressure"]
+    operations_brief["chat_cap_pressure"] = overview["chat_cap_pressure"]
+    overview["operations_brief"] = operations_brief
     list_quality_suites = getattr(cp, "list_platform_ai_quality_suites_global", None)
     if callable(list_quality_suites):
         quality_suites, warning = _safe_cp_call(cp, "quality gate suites", list_quality_suites, limit=8, timeout=1.0)
@@ -823,8 +862,10 @@ def api_work_brief():
             "snapshot_health": overview.get("snapshot_health") or {},
             "usage_health": overview.get("usage_health") or {},
             "usage_brief": overview.get("usage_brief") or {},
+            "usage_cap_pressure": overview.get("usage_cap_pressure") or {},
             "chat_usage_health": overview.get("chat_usage_health") or {},
             "chat_usage_brief": overview.get("chat_usage_brief") or {},
+            "chat_cap_pressure": overview.get("chat_cap_pressure") or {},
             "chat_token_governor": (overview.get("chat_usage") or {}).get("chat_token_governor") or {},
             "usage_pressure_lanes": overview.get("usage_pressure_lanes") or [],
             "chat_usage_pressure_lanes": overview.get("chat_usage_pressure_lanes") or [],

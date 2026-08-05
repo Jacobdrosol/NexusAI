@@ -716,6 +716,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"global cap 90,000" in resp.data
     assert b"estimate 3,500" in resp.data
     assert b"Chat Bot Usage Pressure" in resp.data
+    assert b"worker caps near cap" in resp.data
+    assert b"chat caps near cap" in resp.data
     assert b"override chat cap" in resp.data
     assert b"warning 0.8" in resp.data
     assert b"Cap Chat At Current" in resp.data
@@ -767,6 +769,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert data["operations_brief"]["top_waiting_lanes"][0]["recommended_action"]["label"] == "review failed output"
     assert data["operations_brief"]["top_problem_lanes"][0]["manager_id"] == "globeiq-pm"
     assert data["operations_brief"]["top_problem_lanes"][0]["recommended_action"]["level"] == "critical"
+    assert data["operations_brief"]["usage_cap_pressure"]["level"] == "warning"
+    assert data["operations_brief"]["usage_cap_pressure"]["top_lane"]["bot_id"] == "lesson-writer"
+    assert data["operations_brief"]["chat_cap_pressure"]["level"] == "warning"
+    assert data["operations_brief"]["chat_cap_pressure"]["top_lane"]["bot_id"] == "general-chat"
     assert data["attention_lanes"][0]["recommended_action"]["label"] == "review failed output"
     assert data["queue_pressure_lanes"][0]["recommended_action"]["label"] == "unblock before adding work"
     assert data["attention"]["problem_tasks"] == 1
@@ -803,8 +809,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["attention"]["total"] == 8
     assert brief_data["snapshot_health"]["level"] == "ready"
     assert brief_data["usage_health"]["missing_tasks"] == 2
+    assert brief_data["usage_cap_pressure"]["label"] == "near cap"
     assert brief_data["chat_usage_health"]["missing_messages"] == 1
     assert brief_data["chat_usage_health"]["total_tokens"] == 40
+    assert brief_data["chat_cap_pressure"]["label"] == "near cap"
     assert brief_data["usage_brief"]["totals"]["prompt_tokens"] == 60
     assert brief_data["usage_brief"]["totals"]["completion_tokens"] == 80
     assert brief_data["chat_usage_brief"]["totals"]["prompt_tokens"] == 30
