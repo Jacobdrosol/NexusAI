@@ -306,6 +306,56 @@
 
     {% if selected_conversation %}
     <hr class="chat-divider">
+    {% if selected_project_work and selected_project_work.project_ids %}
+    <section class="chat-workspace-context project-work-summary">
+      <div class="page-header" style="margin-bottom:0.5rem;">
+        <h2 class="panel-title">Project Work</h2>
+        <a class="btn btn-sm" href="{{ url_for('work.work_page') }}">Open Work</a>
+      </div>
+      {% if selected_project_work.available %}
+      <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:0.5rem;margin-bottom:0.65rem;">
+        <div class="card"><div class="card-label">Active</div><div class="card-value card-blue">{{ selected_project_work.total or 0 }}</div></div>
+        <div class="card"><div class="card-label">Running</div><div class="card-value card-green">{{ selected_project_work.counts.running or 0 }}</div></div>
+        <div class="card"><div class="card-label">Queued</div><div class="card-value card-yellow">{{ selected_project_work.counts.queued or 0 }}</div></div>
+        <div class="card"><div class="card-label">Blocked</div><div class="card-value {% if selected_project_work.counts.blocked %}card-red{% else %}card-green{% endif %}">{{ selected_project_work.counts.blocked or 0 }}</div></div>
+        <div class="card"><div class="card-label">Failed</div><div class="card-value {% if selected_project_work.counts.failed %}card-red{% else %}card-green{% endif %}">{{ selected_project_work.counts.failed or 0 }}</div></div>
+      </div>
+      <div class="mini-note chat-mini-block">Projects: {{ selected_project_work.project_ids|join(', ') }}</div>
+      {% if selected_project_work.by_manager %}
+      <div class="table-wrap" style="margin-top:0.5rem;">
+        <table>
+          <thead><tr><th>Manager</th><th>Running</th><th>Queued</th><th>Blocked</th><th>Failed</th></tr></thead>
+          <tbody>
+            {% for row in selected_project_work.by_manager %}
+            <tr>
+              <td><code>{{ row.manager_id }}</code></td>
+              <td>{{ row.running or 0 }}</td>
+              <td>{{ row.queued or 0 }}</td>
+              <td>{{ row.blocked or 0 }}</td>
+              <td>{{ row.failed or 0 }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+      {% if selected_project_work.recent %}
+      <div class="mini-note chat-mini-block">Newest active tasks</div>
+      <div class="list">
+        {% for task in selected_project_work.recent %}
+        <div class="list-item">
+          <div><code>{{ task.id }}</code> <span class="badge badge-{{ task.status }}">{{ task.status }}</span></div>
+          <small>{{ task.manager_id }}{% if task.bot_id %} / {{ task.bot_id }}{% endif %}{% if task.updated_at %} / {{ task.updated_at[:19] | replace('T', ' ') }}{% endif %}</small>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% else %}
+      <div class="empty">{{ selected_project_work.error or "Project work snapshot unavailable." }}</div>
+      {% endif %}
+    </section>
+    <hr class="chat-divider">
+    {% endif %}
     <details class="chat-workspace-context">
     <summary class="chat-summary chat-workspace-context-summary">Message context and tools</summary>
     <div class="chat-workspace-context-content">

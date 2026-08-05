@@ -731,6 +731,101 @@ def test_chat_page_project_filter_limits_conversation_list(dashboard_client):
     assert b"project_id=globeiq" in resp.data
 
 
+def test_chat_page_surfaces_selected_project_work_snapshot(dashboard_client):
+    _login_admin(dashboard_client)
+    seen: dict[str, object] = {}
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-project-work",
+                    "title": "Project Work Chat",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": ["nexusai"],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "memory_profiles_enabled": True,
+                    "memory_profile_id": "default",
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_projects(self):
+            return [
+                {"id": "globeiq", "name": "GlobeIQ", "enabled": True, "memory_profiles_enabled": True},
+                {"id": "nexusai", "name": "NexusAI", "enabled": True, "memory_profiles_enabled": True},
+            ]
+
+        def list_models(self):
+            return []
+
+        def get_project_chat_tool_access(self, project_id):
+            return {"enabled": False, "filesystem": False, "repo_search": False}
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+        def list_tasks(self, **kwargs):
+            seen.update(kwargs)
+            return [
+                {
+                    "id": "task-running",
+                    "bot_id": "writer",
+                    "status": "running",
+                    "metadata": {"project_id": "globeiq", "manager_bot_id": "content-manager"},
+                    "updated_at": "2026-03-12T10:00:00+00:00",
+                },
+                {
+                    "id": "task-queued",
+                    "bot_id": "reviewer",
+                    "status": "queued",
+                    "metadata": {"project_id": "nexusai", "manager_bot_id": "platform-manager"},
+                    "updated_at": "2026-03-12T09:00:00+00:00",
+                },
+                {
+                    "id": "task-blocked",
+                    "bot_id": "browser",
+                    "status": "blocked",
+                    "metadata": {"project_id": "globeiq", "manager_bot_id": "content-manager"},
+                    "updated_at": "2026-03-12T08:00:00+00:00",
+                },
+                {
+                    "id": "task-other",
+                    "bot_id": "other",
+                    "status": "running",
+                    "metadata": {"project_id": "other", "manager_bot_id": "other-manager"},
+                    "updated_at": "2026-03-12T07:00:00+00:00",
+                },
+            ]
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-project-work")
+
+    assert resp.status_code == 200
+    assert seen["statuses"] == ["queued", "blocked", "running", "failed"]
+    assert seen["include_content"] is False
+    assert b"Project Work" in resp.data
+    assert b"Projects: globeiq, nexusai" in resp.data
+    assert b"content-manager" in resp.data
+    assert b"platform-manager" in resp.data
+    assert b"task-running" in resp.data
+    assert b"task-queued" in resp.data
+    assert b"task-blocked" in resp.data
+    assert b"task-other" not in resp.data
+
+
 def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     _login_admin(dashboard_client)
 

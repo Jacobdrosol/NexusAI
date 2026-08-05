@@ -13,6 +13,7 @@ from flask_login import current_user, login_required
 from dashboard.bot_chat_profiles import with_bot_chat_profiles
 from dashboard.cp_client import get_cp_client
 from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
+from dashboard.work_overview import manager_id_for_task, project_id_for_task
 from shared.chat_attachments import CHAT_ATTACHMENT_MAX_FILES, CHAT_ATTACHMENT_MAX_TOTAL_BYTES
 
 bp = Blueprint("chat", __name__)
@@ -157,6 +158,84 @@ def _assignment_manager_bots(bots: Iterable[Any]) -> list[dict[str, Any]]:
         if isinstance(capabilities, dict) and bool(capabilities.get("is_project_manager")):
             managers.append(row)
     return managers
+
+
+def _selected_project_work_summary(cp: Any, project_ids: list[str]) -> dict[str, Any]:
+    scoped_project_ids = [str(pid or "").strip() for pid in project_ids if str(pid or "").strip()]
+    if not scoped_project_ids:
+        return {"available": False, "project_ids": [], "counts": {}, "total": 0, "by_manager": [], "recent": []}
+    try:
+        tasks = _cp_list_tasks_safe(
+            cp,
+            statuses=["queued", "blocked", "running", "failed"],
+            limit=200,
+            include_content=False,
+        )
+    except Exception:
+        return {
+            "available": False,
+            "project_ids": scoped_project_ids,
+            "counts": {},
+            "total": 0,
+            "by_manager": [],
+            "recent": [],
+            "error": "Task snapshot unavailable.",
+        }
+    if not isinstance(tasks, list):
+        return {
+            "available": False,
+            "project_ids": scoped_project_ids,
+            "counts": {},
+            "total": 0,
+            "by_manager": [],
+            "recent": [],
+            "error": "Task snapshot unavailable.",
+        }
+
+    scoped = [task for task in tasks if isinstance(task, dict) and project_id_for_task(task) in scoped_project_ids]
+    counts: dict[str, int] = {}
+    by_manager: dict[str, dict[str, Any]] = {}
+    for task in scoped:
+        status = str(task.get("status") or "unknown").strip().lower() or "unknown"
+        counts[status] = counts.get(status, 0) + 1
+        manager_id = manager_id_for_task(task) or "unassigned"
+        row = by_manager.setdefault(
+            manager_id,
+            {
+                "manager_id": manager_id,
+                "queued": 0,
+                "blocked": 0,
+                "running": 0,
+                "failed": 0,
+                "total": 0,
+            },
+        )
+        if status in row:
+            row[status] += 1
+        row["total"] += 1
+
+    recent = sorted(
+        scoped,
+        key=lambda task: str(task.get("updated_at") or task.get("created_at") or ""),
+        reverse=True,
+    )[:5]
+    return {
+        "available": True,
+        "project_ids": scoped_project_ids,
+        "counts": counts,
+        "total": len(scoped),
+        "by_manager": sorted(by_manager.values(), key=lambda row: (-int(row.get("total") or 0), str(row.get("manager_id") or "")))[:5],
+        "recent": [
+            {
+                "id": str(task.get("id") or ""),
+                "bot_id": str(task.get("bot_id") or ""),
+                "status": str(task.get("status") or "unknown"),
+                "manager_id": manager_id_for_task(task) or "unassigned",
+                "updated_at": str(task.get("updated_at") or task.get("created_at") or ""),
+            }
+            for task in recent
+        ],
+    }
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
@@ -712,6 +791,7 @@ def chat_page() -> str:
         repo_context_items: list[dict[str, Any]] = []
         repo_context_sections: list[dict[str, Any]] = []
         repo_context_item_ids: list[str] = []
+        selected_project_ids: list[str] = []
         if selected_id:
             for c in conversations:
                 if c.get("id") == selected_id:
@@ -726,16 +806,15 @@ def chat_page() -> str:
                 page_error = page_error or "Selected conversation messages could not be loaded."
 
         if selected:
-            project_ids: list[str] = []
             project_id = str(selected.get("project_id") or "").strip()
             if project_id:
-                project_ids.append(project_id)
+                selected_project_ids.append(project_id)
             for bridged in selected.get("bridge_project_ids") or []:
                 value = str(bridged or "").strip()
-                if value and value not in project_ids:
-                    project_ids.append(value)
+                if value and value not in selected_project_ids:
+                    selected_project_ids.append(value)
 
-            for pid in project_ids:
+            for pid in selected_project_ids:
                 namespace = f"project:{pid}:repo"
                 if hasattr(cp, "get_project_github_context_sync_status"):
                     try:
@@ -779,6 +858,7 @@ def chat_page() -> str:
             if selected_project_id and hasattr(cp, "get_project_chat_tool_access")
             else None
         )
+        selected_project_work = _selected_project_work_summary(cp, selected_project_ids)
 
         try:
             vault_items_raw = _cp_list_vault_items_safe(cp, limit=30, include_content=False) or []
@@ -808,6 +888,7 @@ def chat_page() -> str:
             repo_context_item_ids=repo_context_item_ids,
             selected_project_memory_profiles_enabled=selected_project_memory_profiles_enabled,
             selected_project_chat_tool_access=selected_project_chat_tool_access,
+            selected_project_work=selected_project_work,
             model_catalog=model_catalog,
             chat_attachment_limits={
                 "max_files": CHAT_ATTACHMENT_MAX_FILES,
@@ -838,6 +919,7 @@ def chat_page() -> str:
             repo_context_item_ids=[],
             selected_project_memory_profiles_enabled=False,
             selected_project_chat_tool_access=_normalize_project_chat_tool_access(None),
+            selected_project_work={"available": False, "project_ids": [], "counts": {}, "total": 0, "by_manager": [], "recent": []},
             model_catalog=[],
             chat_attachment_limits={
                 "max_files": CHAT_ATTACHMENT_MAX_FILES,
