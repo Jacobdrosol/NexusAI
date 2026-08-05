@@ -4755,6 +4755,43 @@ def test_chat_create_conversation_api_proxies_default_model(dashboard_client):
     assert captured["owner_user_id"] == "admin@test.com"
 
 
+def test_chat_create_conversation_api_warns_when_project_gate_blocks_memory(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def create_conversation(self, body):
+            return {
+                "id": "c-project-memory",
+                "title": body["title"],
+                "project_id": body["project_id"],
+                "memory_profiles_enabled": body["memory_profiles_enabled"],
+                "memory_profile_id": body["memory_profile_id"],
+            }
+
+        def list_projects(self):
+            return [{"id": "globeiq", "memory_profiles_enabled": False}]
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/conversations",
+            json={
+                "title": "Project Memory",
+                "scope": "project",
+                "project_id": "globeiq",
+                "memory_profiles_enabled": True,
+                "memory_profile_id": "default",
+            },
+        )
+
+    assert resp.status_code == 201
+    payload = resp.get_json()
+    assert payload["memory_profiles_enabled"] is True
+    assert "project memory gate is off" in payload["memory_effective_warning"]
+
+
 def test_chat_create_conversation_api_blocks_unscoped_workspace_tools(dashboard_client):
     _login_admin(dashboard_client)
 

@@ -1988,6 +1988,11 @@ def api_create_conversation():
     )
     if created is None:
         return _cp_error_response(cp)
+    if isinstance(created, dict) and bool(created.get("memory_profiles_enabled", data.get("memory_profiles_enabled", True))):
+        project_id = str(created.get("project_id") or data.get("project_id") or "").strip()
+        if project_id and not _project_memory_profiles_enabled_from_cp(cp, project_id):
+            created = dict(created)
+            created["memory_effective_warning"] = "Memory is enabled for this chat, but the project memory gate is off. Project-scoped memory will not be used until the project allows memory profiles."
     return jsonify(created), 201
 
 
