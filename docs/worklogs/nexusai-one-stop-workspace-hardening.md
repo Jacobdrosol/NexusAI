@@ -221,3 +221,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 92: added chat bot usage pressure lanes to the Work overview and brief API so direct-chat token spend is evaluated against chat-specific bot hourly caps, including cap source, remaining tokens, pressure level, and latest usage timestamp.
 - Batch 93: added Work page chat bot cap controls and `/api/work/chat-bot-cap` so operators can set or clear chat-specific hourly bot cap overrides from measured direct-chat spend without changing autonomous worker caps.
 - Batch 94: aligned direct-chat token governor reads with the shared runtime settings instance so control-plane chat admission uses the same settings store edited by the dashboard and test deployments.
+- Batch 95: added direct-chat token governor live status to Settings so the cap editor shows current chat state, chat hourly remaining, chat bot cap, and per-message reserve alongside autonomous task governor status.

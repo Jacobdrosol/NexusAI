@@ -218,14 +218,21 @@ def _token_governor_live_status() -> dict[str, Any] | None:
     try:
         from dashboard.cp_client import get_cp_client
 
-        usage = get_cp_client().task_usage(hours=1, limit_bots=1, timeout=1.0)
+        cp = get_cp_client()
+        usage = cp.task_usage(hours=1, limit_bots=1, timeout=1.0)
+        chat_usage = cp.chat_usage(hours=1, limit_conversations=1, timeout=1.0) if callable(getattr(cp, "chat_usage", None)) else None
     except Exception:
         logger.exception("Failed to load token governor live status")
         return None
     if not isinstance(usage, dict):
         return None
     status = usage.get("token_governor")
-    return status if isinstance(status, dict) else None
+    if not isinstance(status, dict):
+        return None
+    chat_status = chat_usage.get("chat_token_governor") if isinstance(chat_usage, dict) else None
+    if isinstance(chat_status, dict):
+        status = {**status, "chat": chat_status}
+    return status
 
 
 def _compose_project_name() -> str:

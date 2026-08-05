@@ -4795,6 +4795,9 @@ def test_settings_page_loads_for_admin(dashboard_client):
     assert b"Token Governor Project Hourly Limit" in resp.data
     assert b"Token Governor Bot Hourly Limits" in resp.data
     assert b"Token Governor Chat Global Hourly Limit" in resp.data
+    assert b"Chat State" in resp.data
+    assert b"Chat Hourly Remaining" in resp.data
+    assert b"Reserve / Chat" in resp.data
 
 
 def test_settings_token_governor_api_reports_settings_and_live_status(dashboard_client):
@@ -4819,6 +4822,21 @@ def test_settings_token_governor_api_reports_settings_and_live_status(dashboard_
                 }
             }
 
+        def chat_usage(self, hours=24, limit_conversations=25, timeout=None):
+            return {
+                "chat_token_governor": {
+                    "enabled": True,
+                    "limits": {
+                        "global_hourly_tokens": 90000,
+                        "bot_hourly_tokens": 12000,
+                        "estimated_tokens_per_message": 3500,
+                    },
+                    "current": {
+                        "global_hourly_remaining": 85000,
+                    },
+                }
+            }
+
     with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/api/settings/token-governor")
 
@@ -4834,6 +4852,8 @@ def test_settings_token_governor_api_reports_settings_and_live_status(dashboard_
     assert "token_governor_estimated_tokens_per_chat_message" in keys
     assert data["status"]["limits"]["project_hourly_tokens"] == 500
     assert data["status"]["current"]["running_llm_tasks"] == 1
+    assert data["status"]["chat"]["limits"]["bot_hourly_tokens"] == 12000
+    assert data["status"]["chat"]["current"]["global_hourly_remaining"] == 85000
 
 
 def test_settings_token_governor_api_updates_whitelisted_values(dashboard_client):

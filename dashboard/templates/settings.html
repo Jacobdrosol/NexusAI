@@ -168,6 +168,9 @@
   {% set tg = token_governor_status or {} %}
   {% set tg_limits = tg.limits or {} %}
   {% set tg_current = tg.current or {} %}
+  {% set chat_tg = tg.chat or {} %}
+  {% set chat_tg_limits = chat_tg.limits or {} %}
+  {% set chat_tg_current = chat_tg.current or {} %}
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0.75rem;margin-bottom:1.25rem;">
     <div style="background:#12141e;border:1px solid #2d3045;border-radius:6px;padding:0.85rem;">
       <div class="mini-note">State</div>
@@ -192,6 +195,30 @@
     <div style="background:#12141e;border:1px solid #2d3045;border-radius:6px;padding:0.85rem;">
       <div class="mini-note">Reserve / Task</div>
       <div id="tg-estimate" style="font-size:1.15rem;font-weight:700;">{{ "{:,}".format(tg_limits.estimated_tokens_per_task or 0) }}</div>
+    </div>
+    <div style="background:#12141e;border:1px solid #2d3045;border-radius:6px;padding:0.85rem;">
+      <div class="mini-note">Chat State</div>
+      <div id="tg-chat-state" style="font-size:1.15rem;font-weight:700;">{{ "Enabled" if chat_tg.enabled else "Disabled" }}</div>
+    </div>
+    <div style="background:#12141e;border:1px solid #2d3045;border-radius:6px;padding:0.85rem;">
+      <div class="mini-note">Chat Hourly Remaining</div>
+      <div id="tg-chat-global-remaining" style="font-size:1.15rem;font-weight:700;">
+        {% if chat_tg_current.global_hourly_remaining is not none %}
+        {{ "{:,}".format(chat_tg_current.global_hourly_remaining or 0) }}
+        {% else %}
+        No cap
+        {% endif %}
+      </div>
+    </div>
+    <div style="background:#12141e;border:1px solid #2d3045;border-radius:6px;padding:0.85rem;">
+      <div class="mini-note">Chat Bot Cap</div>
+      <div id="tg-chat-bot-cap" style="font-size:1.15rem;font-weight:700;">
+        {{ "{:,}".format(chat_tg_limits.bot_hourly_tokens or 0) if chat_tg_limits.bot_hourly_tokens else "No cap" }}
+      </div>
+    </div>
+    <div style="background:#12141e;border:1px solid #2d3045;border-radius:6px;padding:0.85rem;">
+      <div class="mini-note">Reserve / Chat</div>
+      <div id="tg-chat-estimate" style="font-size:1.15rem;font-weight:700;">{{ "{:,}".format(chat_tg_limits.estimated_tokens_per_message or 0) }}</div>
     </div>
   </div>
 
@@ -779,10 +806,17 @@ function applyTokenGovernorStatus(status) {
   status = status || {};
   var limits = status.limits || {};
   var current = status.current || {};
+  var chat = status.chat || {};
+  var chatLimits = chat.limits || {};
+  var chatCurrent = chat.current || {};
   var state = document.getElementById('tg-state');
   var remaining = document.getElementById('tg-global-remaining');
   var running = document.getElementById('tg-running-llm');
   var estimate = document.getElementById('tg-estimate');
+  var chatState = document.getElementById('tg-chat-state');
+  var chatRemaining = document.getElementById('tg-chat-global-remaining');
+  var chatBotCap = document.getElementById('tg-chat-bot-cap');
+  var chatEstimate = document.getElementById('tg-chat-estimate');
   if (state) state.textContent = status.enabled ? 'Enabled' : 'Disabled';
   if (remaining) {
     remaining.textContent = current.global_hourly_remaining == null ? 'No cap' : formatInt(current.global_hourly_remaining);
@@ -791,6 +825,12 @@ function applyTokenGovernorStatus(status) {
     running.textContent = formatInt(current.running_llm_tasks) + ' / ' + (limits.llm_concurrency || 'No cap');
   }
   if (estimate) estimate.textContent = formatInt(limits.estimated_tokens_per_task);
+  if (chatState) chatState.textContent = chat.enabled ? 'Enabled' : 'Disabled';
+  if (chatRemaining) {
+    chatRemaining.textContent = chatCurrent.global_hourly_remaining == null ? 'No cap' : formatInt(chatCurrent.global_hourly_remaining);
+  }
+  if (chatBotCap) chatBotCap.textContent = chatLimits.bot_hourly_tokens ? formatInt(chatLimits.bot_hourly_tokens) : 'No cap';
+  if (chatEstimate) chatEstimate.textContent = formatInt(chatLimits.estimated_tokens_per_message);
 }
 
 function applyTokenGovernorSettings(settings) {
