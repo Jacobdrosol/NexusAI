@@ -56,6 +56,8 @@
 {% set chat_usage_pressure_lanes = overview.chat_usage_pressure_lanes or [] %}
 {% set bot_cap_audit = overview.bot_cap_audit or [] %}
 {% set token_governor_queue_pressure = overview.token_governor_queue_pressure or [] %}
+{% set queue_cap_critical = token_governor_queue_pressure|selectattr('level', 'equalto', 'critical')|list|length %}
+{% set queue_cap_warning = token_governor_queue_pressure|selectattr('level', 'equalto', 'warning')|list|length %}
 {% set quality_gates = overview.quality_gates or {} %}
 {% set operations_brief = overview.operations_brief or {} %}
 {% set brief_status = operations_brief.status_breakdown or {} %}
@@ -136,6 +138,12 @@
   <div class="card">
     <div class="card-label">Worker Queue</div>
     <div class="card-value {% if workers.queue_depth %}card-yellow{% else %}card-green{% endif %}">{{ workers.queue_depth or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Queue Cap Alerts</div>
+    <div class="card-value {% if queue_cap_critical %}card-red{% elif queue_cap_warning %}card-yellow{% else %}card-green{% endif %}">
+      {{ queue_cap_critical + queue_cap_warning }}
+    </div>
   </div>
   <div class="card">
     <div class="card-label">Held Lanes</div>

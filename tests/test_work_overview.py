@@ -1130,6 +1130,7 @@ def test_work_overview_surfaces_token_governor_queue_cap_pressure(dashboard_clie
     assert brief_rows[("manager", "globeiq::manager-a")]["level"] == "critical"
 
     assert page_resp.status_code == 200
+    assert b"Queue Cap Alerts" in page_resp.data
     assert b"Token Governor Queue Caps" in page_resp.data
     assert b"audit-reader" in page_resp.data
     assert b"globeiq::manager-a" in page_resp.data
