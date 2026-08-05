@@ -4210,6 +4210,54 @@ def test_chat_message_api_blocks_unavailable_explicit_bot(dashboard_client):
     assert b"chat model credential missing" in resp.data
 
 
+def test_chat_message_api_blocks_missing_explicit_bot_credential_ref(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "missing-key-chat", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "missing-key-chat",
+                    "name": "Missing Key Chat",
+                    "role": "assistant",
+                    "backends": [
+                        {
+                            "type": "cloud_api",
+                            "provider": "ollama_cloud",
+                            "model": "gpt-oss:120b",
+                            "api_key_ref": "MISSING_OLLAMA_KEY",
+                        }
+                    ],
+                    "routing_rules": {"operator_profile": {"autonomy": "manual_chat_only"}},
+                }
+            ]
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return [{"name": "OTHER_KEY"}]
+
+        def post_message(self, conversation_id, body):
+            raise AssertionError("missing explicit bot credential should not reach control plane post")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello", "bot_id": "missing-key-chat"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Selected bot is unavailable" in resp.data
+    assert b"Missing key-vault credential reference(s): MISSING_OLLAMA_KEY" in resp.data
+
+
 def test_chat_message_api_blocks_unavailable_conversation_default_bot(dashboard_client):
     _login_admin(dashboard_client)
 
