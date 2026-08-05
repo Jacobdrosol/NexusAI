@@ -12,7 +12,7 @@
 <table id="workers-table">
   <thead>
     <tr>
-      <th>Name</th><th>Host</th><th>Status</th><th>Runtime</th><th>Budget</th><th>Last Heartbeat</th><th>Enabled</th><th>Capabilities</th><th>Actions</th>
+      <th>Name</th><th>Host</th><th>Status</th><th>Runtime</th><th>Dependent Bots</th><th>Budget</th><th>Last Heartbeat</th><th>Enabled</th><th>Capabilities</th><th>Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -67,6 +67,22 @@
         {% endif %}
       </td>
       <td class="metrics">
+        {% set deps = w.dependency_summary or {} %}
+        {% set enabled_deps = deps.enabled_bot_count or 0 %}
+        {% set disabled_deps = deps.disabled_bot_count or 0 %}
+        {% if enabled_deps or disabled_deps %}
+        <div>{{ enabled_deps }} enabled bot(s){% if disabled_deps %}, {{ disabled_deps }} disabled{% endif %}</div>
+        {% if deps.backend_routes %}
+        <div>Routes: {{ deps.backend_routes | join(', ') }}</div>
+        {% endif %}
+        {% if deps.bot_names %}
+        <div title="{{ deps.bot_names | join(', ') }}">Bots: {{ deps.bot_names[:3] | join(', ') }}{% if deps.bot_names | length > 3 %}, +{{ (deps.bot_names | length) - 3 }} more{% endif %}</div>
+        {% endif %}
+        {% else %}
+        —
+        {% endif %}
+      </td>
+      <td class="metrics">
         {% set limits = w.runtime_limits or {} %}
         {% if limits %}
         <div>{{ limits.get('cpus', '—') }} CPU</div>
@@ -86,7 +102,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="9" style="text-align:center;color:#718096;">No workers registered</td></tr>
+    <tr><td colspan="10" style="text-align:center;color:#718096;">No workers registered</td></tr>
     {% endfor %}
   </tbody>
 </table>

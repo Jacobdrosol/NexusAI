@@ -5027,6 +5027,49 @@ def test_workers_page_surfaces_runtime_tool_evidence(dashboard_client):
                 }
             ]
 
+        def list_bots(self):
+            return [
+                {
+                    "id": "globeiq-browser-auditor",
+                    "name": "GlobeIQ Browser Auditor",
+                    "enabled": True,
+                    "backends": [
+                        {
+                            "type": "browser",
+                            "provider": "browser",
+                            "model": "browser-ui",
+                            "worker_id": "nexus-browser-worker",
+                        }
+                    ],
+                },
+                {
+                    "id": "parked-helper",
+                    "name": "Parked Helper",
+                    "enabled": False,
+                    "backends": [
+                        {
+                            "type": "llm",
+                            "provider": "ollama_cloud",
+                            "model": "qwen3.5:cloud",
+                            "worker_id": "nexus-browser-worker",
+                        }
+                    ],
+                },
+                {
+                    "id": "other-worker-bot",
+                    "name": "Other Worker Bot",
+                    "enabled": True,
+                    "backends": [
+                        {
+                            "type": "browser",
+                            "provider": "browser",
+                            "model": "browser-ui",
+                            "worker_id": "separate-worker",
+                        }
+                    ],
+                },
+            ]
+
         def list_worker_probes(self):
             return {
                 "probes": [
@@ -5061,6 +5104,11 @@ def test_workers_page_surfaces_runtime_tool_evidence(dashboard_client):
     assert b"auth needed for claude" in resp.data
     assert b"brave_search missing" in resp.data
     assert b"ollama_cloud ok" in resp.data
+    assert b"1 enabled bot(s), 1 disabled" in resp.data
+    assert b"Routes: browser / browser-ui on nexus-browser-worker, ollama_cloud / qwen3.5:cloud on nexus-browser-worker" in resp.data
+    assert b"GlobeIQ Browser Auditor" in resp.data
+    assert b"Parked Helper" in resp.data
+    assert b"Other Worker Bot" not in resp.data
     assert b"secret" not in resp.data.lower()
 
 

@@ -197,6 +197,61 @@ def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:
     }
 
 
+def _backend_route_labels(backends: Any, *, worker_id: str | None = None) -> list[str]:
+    if not isinstance(backends, list):
+        return []
+    routes: list[str] = []
+    target_worker_id = str(worker_id or "").strip()
+    for backend in backends:
+        if not isinstance(backend, dict):
+            continue
+        backend_worker_id = str(backend.get("worker_id") or "").strip()
+        if target_worker_id and backend_worker_id != target_worker_id:
+            continue
+        backend_type = str(backend.get("type") or "").strip()
+        provider = str(backend.get("provider") or "").strip()
+        model = str(backend.get("model") or "").strip()
+        route = provider or backend_type or "backend"
+        if model:
+            route += f" / {model}"
+        if backend_worker_id:
+            route += f" on {backend_worker_id}"
+        if route and route not in routes:
+            routes.append(route)
+    return routes
+
+
+def _worker_dependency_summary(worker_id: str, bots: Any) -> dict[str, Any]:
+    if not isinstance(bots, list):
+        bots = []
+    enabled_count = 0
+    disabled_count = 0
+    backend_routes: list[str] = []
+    dependent_bot_names: list[str] = []
+    for bot in bots:
+        if not isinstance(bot, dict):
+            continue
+        routes = _backend_route_labels(bot.get("backends"), worker_id=worker_id)
+        if not routes:
+            continue
+        if bool(bot.get("enabled", True)):
+            enabled_count += 1
+        else:
+            disabled_count += 1
+        bot_name = str(bot.get("name") or bot.get("id") or "").strip()
+        if bot_name and bot_name not in dependent_bot_names:
+            dependent_bot_names.append(bot_name)
+        for route in routes:
+            if route not in backend_routes:
+                backend_routes.append(route)
+    return {
+        "enabled_bot_count": enabled_count,
+        "disabled_bot_count": disabled_count,
+        "backend_routes": backend_routes,
+        "bot_names": dependent_bot_names,
+    }
+
+
 def _control_plane_error(cp, fallback: str) -> tuple[dict[str, str], int]:
     error = cp.last_error()
     status = int(error.get("status_code") or 502)
@@ -214,7 +269,7 @@ def _control_plane_error(cp, fallback: str) -> tuple[dict[str, str], int]:
     return {"error": detail or fallback}, status
 
 
-def _with_worker_probe_views(workers: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
+def _with_worker_probe_views(workers: list[dict[str, Any]], payload: Any, bots: Any = None) -> list[dict[str, Any]]:
     """Attach the latest persisted runtime evidence without performing fresh probes."""
     raw_probes = payload.get("probes") if isinstance(payload, dict) else []
     probe_by_id = {
@@ -225,7 +280,9 @@ def _with_worker_probe_views(workers: list[dict[str, Any]], payload: Any) -> lis
     enriched: list[dict[str, Any]] = []
     for worker in workers:
         row = dict(worker)
-        row["probe"] = _worker_probe_view(probe_by_id.get(str(row.get("id") or "").strip()))
+        worker_id = str(row.get("id") or "").strip()
+        row["probe"] = _worker_probe_view(probe_by_id.get(worker_id))
+        row["dependency_summary"] = _worker_dependency_summary(worker_id, bots)
         enriched.append(row)
     return enriched
 
@@ -239,9 +296,11 @@ def workers_page() -> str:
     cp = get_cp_client()
     cp_data = cp.list_workers()
     if cp_data is not None:
+        bot_lister = getattr(cp, "list_bots", None)
+        bots = bot_lister() if callable(bot_lister) else None
         return render_template(
             "workers.html",
-            workers=_with_worker_probe_views(cp_data, cp.list_worker_probes()),
+            workers=_with_worker_probe_views(cp_data, cp.list_worker_probes(), bots),
             error=None,
         )
 
