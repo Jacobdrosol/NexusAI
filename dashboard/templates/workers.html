@@ -95,10 +95,21 @@
       <td><span class="badge badge-{{ 'enabled' if w.enabled else 'disabled' }}">{{ 'enabled' if w.enabled else 'disabled' }}</span></td>
       <td class="metrics">{{ w.capabilities | length }} cap(s)</td>
       <td class="actions">
-        <button class="btn btn-sm" onclick="toggleWorker('{{ w.id }}', {{ 'false' if w.enabled else 'true' }})">
+        {% set deps = w.dependency_summary or {} %}
+        {% set enabled_deps = deps.enabled_bot_count or 0 %}
+        {% set total_deps = enabled_deps + (deps.disabled_bot_count or 0) %}
+        <button
+          class="btn btn-sm"
+          onclick="toggleWorker('{{ w.id }}', {{ 'false' if w.enabled else 'true' }})"
+          {% if w.enabled and enabled_deps %}disabled title="Open worker detail and reassign or disable dependent bots before disabling this worker."{% endif %}
+        >
           {{ 'Disable' if w.enabled else 'Enable' }}
         </button>
-        <button class="btn btn-sm btn-danger" onclick="deleteWorker('{{ w.id }}')">Delete</button>
+        <button
+          class="btn btn-sm btn-danger"
+          onclick="deleteWorker('{{ w.id }}')"
+          {% if total_deps %}disabled title="Open worker detail and clear dependent bots before deleting this worker."{% endif %}
+        >Delete</button>
       </td>
     </tr>
     {% else %}

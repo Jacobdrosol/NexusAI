@@ -5122,6 +5122,8 @@ def test_workers_page_surfaces_runtime_tool_evidence(dashboard_client):
     assert b"GlobeIQ Browser Auditor" in resp.data
     assert b"Parked Helper" in resp.data
     assert b"Other Worker Bot" not in resp.data
+    assert b"Open worker detail and reassign or disable dependent bots before disabling this worker." in resp.data
+    assert b"Open worker detail and clear dependent bots before deleting this worker." in resp.data
     assert b"secret" not in resp.data.lower()
 
 
