@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,9 +17,74 @@ class BotExport:
     bot_id: str
     name: str
     path: Path
+    raw: Dict[str, Any]
     triggers: List[Dict[str, Any]]
     workflow_mismatch: bool
     output_contract: Dict[str, Any]
+
+
+SECRET_KEY_NAMES = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "client_secret",
+    "cookie",
+    "password",
+    "private_key",
+    "secret",
+    "session",
+    "token",
+}
+SECRET_VALUE_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9_\-]{16,}"),
+    re.compile(r"ghp_[A-Za-z0-9_]{16,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{16,}"),
+    re.compile(r"xox[baprs]-[A-Za-z0-9\-]{16,}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+]
+
+
+def _secret_name(key: Any) -> bool:
+    normalized = str(key or "").strip().lower().replace("-", "_")
+    return normalized in SECRET_KEY_NAMES or normalized.endswith("_token") or normalized.endswith("_secret")
+
+
+def _walk_values(value: Any, path: str = "") -> list[tuple[str, Any]]:
+    rows: list[tuple[str, Any]] = [(path, value)]
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            rows.extend(_walk_values(nested, child_path))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            rows.extend(_walk_values(nested, f"{path}[{index}]"))
+    return rows
+
+
+def _looks_like_credential_ref(value: str) -> bool:
+    normalized = value.strip()
+    if not normalized:
+        return False
+    if normalized.startswith(("env:", "vault:", "secret:", "key_ref:", "credential:")):
+        return True
+    if normalized.isupper() and all(char.isalnum() or char == "_" for char in normalized):
+        return True
+    return False
+
+
+def _raw_secret_findings(raw: Dict[str, Any]) -> list[str]:
+    findings: list[str] = []
+    for path, value in _walk_values(raw):
+        leaf = path.rsplit(".", 1)[-1].split("[", 1)[0]
+        if isinstance(value, str):
+            if any(pattern.search(value) for pattern in SECRET_VALUE_PATTERNS):
+                findings.append(path)
+                continue
+            if _secret_name(leaf) and value and not _looks_like_credential_ref(value):
+                findings.append(path)
+        elif _secret_name(leaf) and value is not None:
+            findings.append(path)
+    return findings
 
 
 def _is_template(value: Any) -> bool:
@@ -55,8 +121,7 @@ def _field_path_exists(value: Any, path: str) -> bool:
     return True
 
 
-def _load_export(path: Path) -> BotExport:
-    raw = json.loads(path.read_text(encoding="utf-8-sig"))
+def _load_export_from_raw(raw: Dict[str, Any], path: Path) -> BotExport:
     bot = raw.get("bot") or {}
     bot_id = str(bot.get("id") or "").strip()
     name = str(bot.get("name") or bot_id)
@@ -80,10 +145,15 @@ def _load_export(path: Path) -> BotExport:
         bot_id=bot_id,
         name=name,
         path=path,
+        raw=raw,
         triggers=selected,
         workflow_mismatch=workflow_mismatch,
         output_contract=output_contract,
     )
+
+
+def _load_export(path: Path) -> BotExport:
+    return _load_export_from_raw(json.loads(path.read_text(encoding="utf-8-sig")), path)
 
 
 def _validate(
@@ -113,11 +183,23 @@ def _validate(
             )
 
     print("\nValidation")
+    seen_bot_ids: dict[str, Path] = {}
     for item in sorted(exports, key=lambda x: x.bot_id):
         if not item.bot_id:
             print(f"ERROR: missing bot.id in {item.path}")
             exit_code = 1
             continue
+        if item.bot_id in seen_bot_ids:
+            print(f"ERROR: duplicate bot.id '{item.bot_id}' in {seen_bot_ids[item.bot_id]} and {item.path}")
+            exit_code = 1
+        else:
+            seen_bot_ids[item.bot_id] = item.path
+        raw_secret_paths = _raw_secret_findings(item.raw)
+        if raw_secret_paths:
+            preview = ", ".join(raw_secret_paths[:5])
+            suffix = "" if len(raw_secret_paths) <= 5 else f", +{len(raw_secret_paths) - 5} more"
+            print(f"ERROR: {item.bot_id} contains raw secret-like values at {preview}{suffix}")
+            exit_code = 1
         if item.workflow_mismatch:
             print(
                 f"WARNING: workflow trigger mismatch between bot.workflow and routing_rules.workflow in {item.path}"

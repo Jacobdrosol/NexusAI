@@ -67,6 +67,7 @@ def test_chat_import_manifest_validator_accepts_safe_dry_run(tmp_path):
 def test_chat_import_manifest_validator_blocks_tools_memory_secrets_and_unsafe_attachments(tmp_path):
     manifest_dir = tmp_path / "normalized"
     manifest_dir.mkdir()
+    secret_value = "sk-" + "1234567890abcdef1234567890"
     _write_jsonl(
         manifest_dir / "conversations.jsonl",
         [
@@ -92,7 +93,7 @@ def test_chat_import_manifest_validator_blocks_tools_memory_secrets_and_unsafe_a
                 "source_conversation_id": "source-conv-1",
                 "source_message_id": "msg-1",
                 "role": "assistant",
-                "content": "token=sk-1234567890abcdef1234567890",
+                "content": f"token={secret_value}",
                 "created_at": "not-a-date",
             }
         ],
