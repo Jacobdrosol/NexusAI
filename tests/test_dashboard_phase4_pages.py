@@ -3242,6 +3242,28 @@ def test_chat_create_conversation_api_proxies_default_model(dashboard_client):
     assert captured["owner_user_id"] == "admin@test.com"
 
 
+def test_chat_create_conversation_api_blocks_unscoped_workspace_tools(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def create_conversation(self, body):
+            raise AssertionError("unscoped workspace tool request should not reach control plane create")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/conversations",
+            json={
+                "title": "Unsafe Tools",
+                "scope": "global",
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert b"workspace tools require a project-scoped or bridged conversation" in resp.data
+
+
 def test_chat_create_conversation_api_blocks_disabled_default_model(dashboard_client):
     _login_admin(dashboard_client)
 

@@ -5868,7 +5868,10 @@ async def test_repo_grounded_output_strips_tool_echo_only_output(cp_app):
 @pytest.mark.anyio
 async def test_update_conversation_tool_access_endpoint(cp_app):
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
-        create_resp = await client.post("/v1/chat/conversations", json={"title": "Tool Access Conversation"})
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Tool Access Conversation", "scope": "project", "project_id": "globeiq"},
+        )
         assert create_resp.status_code == 200
         conversation_id = create_resp.json()["id"]
 
@@ -5881,6 +5884,39 @@ async def test_update_conversation_tool_access_endpoint(cp_app):
         assert body["tool_access_enabled"] is True
         assert body["tool_access_filesystem"] is True
         assert body["tool_access_repo_search"] is True
+
+
+@pytest.mark.anyio
+async def test_create_conversation_blocks_workspace_tools_without_project_scope(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Unsafe Tool Conversation",
+                "scope": "global",
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+
+        assert create_resp.status_code == 400
+        assert "workspace tools require a project-scoped or bridged conversation" in create_resp.text
+
+
+@pytest.mark.anyio
+async def test_update_conversation_tool_access_blocks_unscoped_conversation(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Unscoped Tool Guard"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        update_resp = await client.put(
+            f"/v1/chat/conversations/{conversation_id}/tool-access",
+            json={"enabled": True, "filesystem": True, "repo_search": True},
+        )
+
+        assert update_resp.status_code == 400
+        assert "workspace tools require a project-scoped or bridged conversation" in update_resp.text
 
 
 @pytest.mark.anyio

@@ -1127,6 +1127,20 @@ def _normalize_conversation_rows(rows: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _workspace_tool_access_requested(data: dict[str, Any]) -> bool:
+    return bool(
+        data.get("tool_access_enabled", False)
+        or data.get("tool_access_filesystem", False)
+        or data.get("tool_access_repo_search", False)
+    )
+
+
+def _workspace_tool_access_allowed_for_create(data: dict[str, Any]) -> bool:
+    scope = str(data.get("scope") or "global").strip()
+    project_id = str(data.get("project_id") or "").strip()
+    return scope in {"project", "bridged"} and bool(project_id)
+
+
 def _normalize_project_chat_tool_access(raw: Any) -> dict[str, bool]:
     if not isinstance(raw, dict):
         raw = {}
@@ -1493,6 +1507,8 @@ def api_create_conversation():
     title = (data.get("title") or "").strip()
     if not title:
         return jsonify({"error": "title is required"}), 400
+    if _workspace_tool_access_requested(data) and not _workspace_tool_access_allowed_for_create(data):
+        return jsonify({"error": "workspace tools require a project-scoped or bridged conversation"}), 400
     cp = get_cp_client()
     default_bot_id = str(data.get("default_bot_id") or "").strip()
     default_model_id = str(data.get("default_model_id") or "").strip()

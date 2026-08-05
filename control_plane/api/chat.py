@@ -198,6 +198,20 @@ class CreateConversationRequest(BaseModel):
     tool_access_repo_search: bool = False
 
 
+def _workspace_tool_access_requested(
+    *,
+    enabled: bool = False,
+    filesystem: bool = False,
+    repo_search: bool = False,
+) -> bool:
+    return bool(enabled or filesystem or repo_search)
+
+
+def _workspace_tool_access_allowed_for_scope(*, scope: str, project_id: Optional[str]) -> bool:
+    normalized_scope = str(scope or "global").strip()
+    return normalized_scope in {"project", "bridged"} and bool((project_id or "").strip())
+
+
 class UpdateConversationRouteDefaultsRequest(BaseModel):
     default_bot_id: Optional[str] = None
     default_model_id: Optional[str] = None
@@ -3736,6 +3750,15 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
         if not project_id:
             raise HTTPException(status_code=400, detail="project_id is required for bridged conversations")
         bridge_project_ids = [pid for pid in bridge_project_ids if pid != project_id]
+    if _workspace_tool_access_requested(
+        enabled=body.tool_access_enabled,
+        filesystem=body.tool_access_filesystem,
+        repo_search=body.tool_access_repo_search,
+    ) and not _workspace_tool_access_allowed_for_scope(scope=body.scope, project_id=project_id):
+        raise HTTPException(
+            status_code=400,
+            detail="workspace tools require a project-scoped or bridged conversation",
+        )
 
     catalog_model = await _validate_default_model_id(request, body.default_model_id)
     await _validate_default_model_compatible_with_bot(
@@ -3787,6 +3810,20 @@ async def update_conversation_tool_access(
 ) -> ChatConversation:
     chat_manager = request.app.state.chat_manager
     try:
+        if _workspace_tool_access_requested(
+            enabled=body.enabled,
+            filesystem=body.filesystem,
+            repo_search=body.repo_search,
+        ):
+            conversation = await chat_manager.get_conversation(conversation_id)
+            if not _workspace_tool_access_allowed_for_scope(
+                scope=conversation.scope,
+                project_id=conversation.project_id,
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="workspace tools require a project-scoped or bridged conversation",
+                )
         return await chat_manager.update_conversation_tool_access(
             conversation_id,
             tool_access_enabled=body.enabled,
