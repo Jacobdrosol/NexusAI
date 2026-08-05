@@ -198,6 +198,11 @@ class CreateConversationRequest(BaseModel):
     tool_access_repo_search: bool = False
 
 
+class UpdateConversationRouteDefaultsRequest(BaseModel):
+    default_bot_id: Optional[str] = None
+    default_model_id: Optional[str] = None
+
+
 class PostMessageRequest(BaseModel):
     content: str
     bot_id: Optional[str] = None
@@ -3702,6 +3707,23 @@ async def update_conversation_memory_profile(
             conversation_id,
             memory_profiles_enabled=body.enabled,
             memory_profile_id=body.profile_id,
+        )
+    except ConversationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.put("/conversations/{conversation_id}/route-defaults", response_model=ChatConversation)
+async def update_conversation_route_defaults(
+    conversation_id: str,
+    request: Request,
+    body: UpdateConversationRouteDefaultsRequest,
+) -> ChatConversation:
+    chat_manager = request.app.state.chat_manager
+    try:
+        return await chat_manager.update_conversation_route_defaults(
+            conversation_id,
+            default_bot_id=body.default_bot_id,
+            default_model_id=body.default_model_id,
         )
     except ConversationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

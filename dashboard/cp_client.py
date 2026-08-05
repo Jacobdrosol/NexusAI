@@ -1001,6 +1001,21 @@ class CPClient:
             {"enabled": bool(enabled), "profile_id": profile_id or "default"},
         )
 
+    def update_conversation_route_defaults(
+        self,
+        conversation_id: str,
+        *,
+        default_bot_id: Optional[str] = None,
+        default_model_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        return self._put(
+            f"/v1/chat/conversations/{conversation_id}/route-defaults",
+            {
+                "default_bot_id": str(default_bot_id or "").strip() or None,
+                "default_model_id": str(default_model_id or "").strip() or None,
+            },
+        )
+
     # Vault
     def list_vault_items(
         self,

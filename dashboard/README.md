@@ -146,7 +146,7 @@ Provides auth secret handling, OpenAPI schema parsing, and database connectivity
 | Project repo workspace | `get_project_repo_workspace`, `update_project_repo_workspace`, `get_project_repo_workspace_status`, `discard_project_repo_workspace_untracked`, `clone_project_repo_workspace`, `pull_project_repo_workspace`, `commit_project_repo_workspace`, `push_project_repo_workspace`, `run_project_repo_workspace_command`, `apply_project_assignment_to_repo_workspace`, `review_project_assignment_files`, `list_project_repo_workspace_runs`, `summarize_project_repo_workspace_runs`, `list_project_orchestration_workspaces` |
 | Models | `list_models`, `create_model`, `delete_model` |
 | API keys | `list_keys`, `upsert_key`, `delete_key` |
-| Chat | `list_conversations`, `create_conversation`, `delete_conversation`, `archive_conversation`, `restore_conversation`, `list_messages`, `post_message`, `mark_pm_run_failed`, `update_conversation_tool_access` |
+| Chat | `list_conversations`, `create_conversation`, `delete_conversation`, `archive_conversation`, `restore_conversation`, `list_messages`, `post_message`, `mark_pm_run_failed`, `update_conversation_route_defaults`, `update_conversation_tool_access`, `update_conversation_memory_profile` |
 | Vault | `list_vault_items`, `ingest_vault_item`, `upsert_vault_item`, `search_vault`, `get_vault_item`, `list_vault_chunks`, `delete_vault_item`, `list_vault_namespaces` |
 | Diagnostics | `probe_paths` |
 

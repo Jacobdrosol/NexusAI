@@ -1185,6 +1185,26 @@ def api_update_conversation_memory_profile(conversation_id: str):
     return jsonify(updated)
 
 
+@bp.put("/api/chat/conversations/<conversation_id>/route-defaults")
+@login_required
+def api_update_conversation_route_defaults(conversation_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    default_bot_id = str(data.get("default_bot_id") or "").strip()
+    default_model_id = str(data.get("default_model_id") or "").strip()
+    readiness_blocker = _bot_readiness_blocker_from_cp(cp, default_bot_id)
+    if readiness_blocker:
+        return jsonify({"error": f"Default bot is unavailable: {readiness_blocker}"}), 409
+    updated = cp.update_conversation_route_defaults(
+        conversation_id=conversation_id,
+        default_bot_id=default_bot_id or None,
+        default_model_id=default_model_id or None,
+    )
+    if updated is None:
+        return _cp_error_response(cp, "conversation route defaults update failed")
+    return jsonify(updated)
+
+
 @bp.post("/api/chat/messages")
 @login_required
 def api_send_message():

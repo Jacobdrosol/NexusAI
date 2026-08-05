@@ -1092,6 +1092,9 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"ollama_cloud / gpt-oss:120b" in resp.data
     assert b'value="ollama-cloud-disabled" disabled' in resp.data
     assert b"old-model" in resp.data
+    assert b'id="chat-default-model-selector"' in resp.data
+    assert b"Save Defaults" in resp.data
+    assert b"function saveConversationRouteDefaults" in resp.data
 
 
 def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
@@ -2807,6 +2810,72 @@ def test_chat_conversation_tool_access_api_surfaces_control_plane_error(dashboar
 
     assert resp.status_code == 400
     assert b"tool access update blocked" in resp.data
+
+
+def test_chat_conversation_route_defaults_api_proxies_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+    captured = {}
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def update_conversation_route_defaults(self, conversation_id, default_bot_id=None, default_model_id=None):
+            captured.update(
+                {
+                    "conversation_id": conversation_id,
+                    "default_bot_id": default_bot_id,
+                    "default_model_id": default_model_id,
+                }
+            )
+            return {
+                "id": conversation_id,
+                "default_bot_id": default_bot_id,
+                "default_model_id": default_model_id,
+            }
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/route-defaults",
+            json={"default_bot_id": "personal-research-chat", "default_model_id": "ollama-cloud-gpt-oss-120b"},
+        )
+
+    assert resp.status_code == 200
+    assert captured == {
+        "conversation_id": "c1",
+        "default_bot_id": "personal-research-chat",
+        "default_model_id": "ollama-cloud-gpt-oss-120b",
+    }
+
+
+def test_chat_conversation_route_defaults_api_blocks_unavailable_default_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {
+                        "bot_id": "blocked-chat",
+                        "state": "blocked",
+                        "ready": False,
+                        "checks": [{"status": "failed", "message": "backend missing"}],
+                    }
+                ]
+            }
+
+        def update_conversation_route_defaults(self, *args, **kwargs):
+            raise AssertionError("blocked bot should not reach control plane route defaults update")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/route-defaults",
+            json={"default_bot_id": "blocked-chat", "default_model_id": "ollama-cloud-gpt-oss-120b"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Default bot is unavailable" in resp.data
+    assert b"backend missing" in resp.data
 
 
 def test_chat_stream_api_blocks_unavailable_explicit_bot(dashboard_client):

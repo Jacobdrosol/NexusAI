@@ -112,7 +112,9 @@ Blueprint: `chat`.
 | DELETE | `/api/chat/conversations/<conversation_id>` | Delete a conversation | Yes |
 | POST | `/api/chat/conversations/<conversation_id>/archive` | Archive a conversation | Yes |
 | POST | `/api/chat/conversations/<conversation_id>/restore` | Restore an archived conversation | Yes |
+| PUT | `/api/chat/conversations/<conversation_id>/route-defaults` | Update default bot/model for a conversation | Yes |
 | PUT | `/api/chat/conversations/<conversation_id>/tool-access` | Update tool access settings for a conversation | Yes |
+| PUT | `/api/chat/conversations/<conversation_id>/memory-profile` | Update personal memory settings for a conversation | Yes |
 | POST | `/api/chat/messages` | Send a chat message (non-streaming) | Yes |
 | POST | `/api/chat/stream` | Send a chat message and stream the reply as SSE (proxies CP `/v1/chat/conversations/<id>/stream`) | Yes |
 | GET | `/api/chat/conversations/<conversation_id>/messages` | List messages for a conversation | Yes |

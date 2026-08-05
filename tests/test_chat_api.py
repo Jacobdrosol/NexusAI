@@ -5593,6 +5593,26 @@ async def test_update_conversation_tool_access_endpoint(cp_app):
 
 
 @pytest.mark.anyio
+async def test_update_conversation_route_defaults_endpoint(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Route Defaults"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        update_resp = await client.put(
+            f"/v1/chat/conversations/{conversation_id}/route-defaults",
+            json={
+                "default_bot_id": "personal-research-chat",
+                "default_model_id": "ollama-cloud-gpt-oss-120b",
+            },
+        )
+        assert update_resp.status_code == 200
+        body = update_resp.json()
+        assert body["default_bot_id"] == "personal-research-chat"
+        assert body["default_model_id"] == "ollama-cloud-gpt-oss-120b"
+
+
+@pytest.mark.anyio
 async def test_chat_task_metadata_includes_project_id(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:

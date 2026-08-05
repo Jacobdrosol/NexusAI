@@ -46,6 +46,26 @@ async def test_update_conversation_tool_access(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_update_conversation_route_defaults(tmp_path):
+    from control_plane.chat.chat_manager import ChatManager
+
+    mgr = ChatManager(db_path=str(tmp_path / "chat.db"))
+    convo = await mgr.create_conversation(title="Route Defaults")
+    updated = await mgr.update_conversation_route_defaults(
+        convo.id,
+        default_bot_id="personal-research-chat",
+        default_model_id="ollama-cloud-gpt-oss-120b",
+    )
+
+    assert updated.default_bot_id == "personal-research-chat"
+    assert updated.default_model_id == "ollama-cloud-gpt-oss-120b"
+
+    cleared = await mgr.update_conversation_route_defaults(convo.id, default_bot_id=" ", default_model_id="")
+    assert cleared.default_bot_id is None
+    assert cleared.default_model_id is None
+
+
+@pytest.mark.anyio
 async def test_list_conversations_project_filter_includes_bridged_membership(tmp_path):
     from control_plane.chat.chat_manager import ChatManager
 

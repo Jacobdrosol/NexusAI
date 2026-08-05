@@ -79,14 +79,14 @@ All routes are prefixed with `/v1/`. Auth: set `X-Nexus-API-Key: <token>` header
 
 | Method | Path | Description | Key Params | Errors |
 |--------|------|-------------|------------|--------|
-| `POST` | `/v1/chat/conversations` | Create conversation | `title`, `scope`, `project_id`, `default_bot_id`, `tool_access_*` | 400 |
+| `POST` | `/v1/chat/conversations` | Create conversation | `title`, `scope`, `project_id`, `default_bot_id`, `default_model_id`, `tool_access_*` | 400 |
 | `GET` | `/v1/chat/conversations` | List conversations | `project_id`, `scope`, `archived`, `limit` | — |
 | `GET` | `/v1/chat/conversations/{id}` | Get conversation | — | 404 |
-| `PUT` | `/v1/chat/conversations/{id}` | Update conversation | Conversation fields | 404 |
 | `DELETE` | `/v1/chat/conversations/{id}` | Archive conversation | — | 404 |
 | `POST` | `/v1/chat/conversations/{id}/messages` | Post message (streaming SSE) | `content`, `bot_id`, `context_items`, `include_project_context`, `use_workspace_tools`, `attachments`, `is_assign` | 404, 400 |
 | `GET` | `/v1/chat/conversations/{id}/messages` | List messages | `limit` | 404 |
 | `POST` | `/v1/chat/conversations/{id}/assign` | @assign orchestration | `instruction`, `pm_bot_id`, `context_items`, `conversation_brief` | 404, 400 |
+| `PUT` | `/v1/chat/conversations/{id}/route-defaults` | Update default bot/model | `default_bot_id`, `default_model_id` | 404 |
 | `PUT` | `/v1/chat/conversations/{id}/tool-access` | Update tool access flags | `enabled`, `filesystem`, `repo_search` | 404 |
 | `GET` | `/v1/chat/conversations/{id}/memory` | Semantic search in conv memory | `query`, `limit` | 404 |
 

@@ -482,6 +482,35 @@ class ChatManager:
                 await db.commit()
         return await self.get_conversation(conversation_id)
 
+    async def update_conversation_route_defaults(
+        self,
+        conversation_id: str,
+        *,
+        default_bot_id: Optional[str] = None,
+        default_model_id: Optional[str] = None,
+    ) -> ChatConversation:
+        await self.get_conversation(conversation_id)
+        now = datetime.now(timezone.utc).isoformat()
+        bot_id = str(default_bot_id or "").strip() or None
+        model_id = str(default_model_id or "").strip() or None
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                await db.execute(
+                    """
+                    UPDATE conversations
+                    SET default_bot_id = ?, default_model_id = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        bot_id,
+                        model_id,
+                        now,
+                        conversation_id,
+                    ),
+                )
+                await db.commit()
+        return await self.get_conversation(conversation_id)
+
     async def add_message(
         self,
         conversation_id: str,

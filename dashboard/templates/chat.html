@@ -514,6 +514,19 @@
           </option>
           {% endfor %}
         </select>
+        <select id="chat-default-model-selector" class="form-control chat-bot-selector" aria-label="Conversation default model">
+          <option value="">Bot default model</option>
+          {% for model in model_catalog %}
+          {% set model_value = model.id or model.name %}
+          {% set model_label = model.name or model.id %}
+          {% if model_value %}
+          <option value="{{ model_value }}" {% if selected_conversation.default_model_id and selected_conversation.default_model_id == model_value %}selected{% endif %} {% if model.enabled is defined and model.enabled == false %}disabled{% endif %}>
+            {% if model.provider %}{{ model.provider }} - {% endif %}{{ model_label }}{% if model.enabled is defined and model.enabled == false %} - disabled{% endif %}
+          </option>
+          {% endif %}
+          {% endfor %}
+        </select>
+        <button class="btn btn-sm" type="button" onclick="saveConversationRouteDefaults()">Save Defaults</button>
         <details class="chat-overflow-menu">
           <summary class="btn btn-sm chat-overflow-trigger" aria-label="Message actions">...</summary>
           <div class="chat-overflow-menu-items">
@@ -2401,6 +2414,31 @@ async function saveConversationMemoryProfile() {
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     alert(data.error || 'Failed to update chat memory profile.');
+    return;
+  }
+  window.location.reload();
+}
+
+async function saveConversationRouteDefaults() {
+  if (!selectedConversationId) return;
+  const botId = activeChatBotId();
+  const modelId = String(document.getElementById('chat-default-model-selector')?.value || '').trim();
+  const readinessBlocker = activeBotReadinessBlocker();
+  if (readinessBlocker) {
+    showChatComposerStatus(readinessBlocker);
+    return;
+  }
+  const res = await fetch('/api/chat/conversations/' + encodeURIComponent(selectedConversationId) + '/route-defaults', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({
+      default_bot_id: botId || null,
+      default_model_id: modelId || null,
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Failed to update chat defaults.');
     return;
   }
   window.location.reload();
