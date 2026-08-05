@@ -724,9 +724,16 @@
         <label>Scope</label>
         <select class="form-control" name="scope" id="create-convo-scope">
           <option value="global" {% if not active_project_filter or active_project_filter == unscoped_project_filter %}selected{% endif %}>Unscoped chat</option>
-          <option value="project" {% if active_project_filter and active_project_filter != unscoped_project_filter %}selected{% endif %}>project</option>
-          <option value="bridged">bridged</option>
+          <option value="project" {% if active_project_filter and active_project_filter != unscoped_project_filter %}selected{% endif %}>Project chat</option>
+          <option value="bridged">Bridged project chat</option>
         </select>
+        <p class="mini-note" id="create-convo-scope-summary">
+          {% if active_project_filter and active_project_filter != unscoped_project_filter %}
+          This chat will be scoped to the selected project.
+          {% else %}
+          This chat is not scoped to a project.
+          {% endif %}
+        </p>
       </div>
       <div class="form-group" id="create-convo-project-wrap" style="display:none;">
         <label>Project</label>
@@ -1233,6 +1240,7 @@ function syncConversationScopeFields() {
   const projectSelect = document.getElementById('create-convo-project-id');
   const bridgedPrimary = document.getElementById('create-convo-bridged-primary');
   const bridgeProjects = document.getElementById('create-convo-bridge-project-ids');
+  const summary = document.getElementById('create-convo-scope-summary');
 
   if (projectWrap) projectWrap.style.display = scope === 'project' ? '' : 'none';
   if (bridgedPrimaryWrap) bridgedPrimaryWrap.style.display = scope === 'bridged' ? '' : 'none';
@@ -1245,6 +1253,21 @@ function syncConversationScopeFields() {
   if (scope !== 'bridged' && bridgedPrimary) bridgedPrimary.value = '';
   if (scope !== 'bridged' && bridgeProjects) {
     Array.from(bridgeProjects.options).forEach((opt) => { opt.selected = false; });
+  }
+  if (summary) {
+    const projectLabel = projectSelect?.selectedOptions?.[0]?.textContent?.trim() || '';
+    const bridgedLabel = bridgedPrimary?.selectedOptions?.[0]?.textContent?.trim() || '';
+    if (scope === 'project') {
+      summary.textContent = projectSelect?.value
+        ? `This chat will be scoped to ${projectLabel}.`
+        : 'Select a project before creating this scoped chat.';
+    } else if (scope === 'bridged') {
+      summary.textContent = bridgedPrimary?.value
+        ? `This chat will bridge from ${bridgedLabel}.`
+        : 'Select a primary bridged project before creating this chat.';
+    } else {
+      summary.textContent = 'This chat is not scoped to a project.';
+    }
   }
 }
 
@@ -2971,8 +2994,16 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
   let bridgeProjectIds = [];
   if (scope === 'project') {
     projectId = (fd.get('project_id') || '').toString() || null;
+    if (!projectId) {
+      alert('Select a project before creating this scoped chat.');
+      return;
+    }
   } else if (scope === 'bridged') {
     projectId = (fd.get('bridged_primary_project_id') || '').toString() || null;
+    if (!projectId) {
+      alert('Select a primary bridged project before creating this chat.');
+      return;
+    }
     bridgeProjectIds = Array.from(document.getElementById('create-convo-bridge-project-ids')?.selectedOptions || [])
       .map((opt) => opt.value)
       .filter((value) => value && value !== projectId);
@@ -3000,7 +3031,7 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
     return;
   }
   const created = await res.json();
-  const targetProjectFilter = scope === 'global' ? unscopedProjectFilter : (projectId || activeProjectFilter);
+  const targetProjectFilter = scope === 'global' ? unscopedProjectFilter : projectId;
   window.location = buildChatUrl({
     conversation_id: created.id,
     project_id: targetProjectFilter,
@@ -3889,6 +3920,8 @@ document.getElementById('chat-project-filter')?.addEventListener('change', funct
   window.location = buildChatUrl({project_id: this.value});
 });
 document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
+document.getElementById('create-convo-project-id')?.addEventListener('change', syncConversationScopeFields);
+document.getElementById('create-convo-bridged-primary')?.addEventListener('change', syncConversationScopeFields);
 document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
 document.getElementById('chat-tool-enabled')?.addEventListener('change', () => {
   syncConversationToolAccessEditor();

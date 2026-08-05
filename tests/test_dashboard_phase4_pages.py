@@ -896,6 +896,11 @@ def test_chat_page_project_filter_limits_conversation_list(dashboard_client):
     assert b"Bridged Project Chat" in resp.data
     assert b"Other Project Chat" not in resp.data
     assert b'option value="globeiq" selected' in resp.data
+    assert b"Unscoped chats" in resp.data
+    assert b"This chat will be scoped to the selected project." in resp.data
+    assert b"Select a project before creating this scoped chat." in resp.data
+    assert b"create-convo-project-id" in resp.data
+    assert b"addEventListener('change', syncConversationScopeFields)" in resp.data
     assert b"conversation_id=c-primary" in resp.data
     assert b"project_id=globeiq" in resp.data
 
