@@ -539,6 +539,23 @@ def api_work_overview():
     return jsonify(_load_work_overview())
 
 
+@bp.get("/api/work/brief")
+@login_required
+def api_work_brief():
+    _require_admin()
+    overview = _load_work_overview()
+    return jsonify(
+        {
+            "operations_brief": overview.get("operations_brief") or {},
+            "attention": overview.get("attention") or {},
+            "snapshot_health": overview.get("snapshot_health") or {},
+            "usage_health": overview.get("usage_health") or {},
+            "data_degraded": bool(overview.get("data_degraded", False)),
+            "data_warnings": overview.get("data_warnings") or [],
+        }
+    )
+
+
 def _stoppable_work_matches(
     task: dict[str, Any],
     *,

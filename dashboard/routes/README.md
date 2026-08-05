@@ -184,6 +184,7 @@ Blueprint: `work`. Provides the operator command-center view for active project 
 |-|-|-|-|
 | GET | `/work` | Work overview page with active-work brief, project/manager lanes, token usage, queue pressure, holds, route gaps, and stop controls | Yes |
 | GET | `/api/work/overview` | JSON work overview using the same active-work brief and lane summaries as the page | Yes |
+| GET | `/api/work/brief` | Lightweight JSON active-work brief plus attention, snapshot, usage, and degradation health | Yes |
 | GET | `/api/work/lane` | List task rows for a project or project-manager lane | Yes |
 | POST | `/api/work/stop` | Stop active or waiting work for a project or project-manager lane | Yes |
 | GET | `/api/work/orchestration` | List task rows for one orchestration run | Yes |

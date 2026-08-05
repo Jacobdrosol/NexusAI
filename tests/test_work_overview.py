@@ -604,6 +604,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
         api_resp = dashboard_client.get("/api/work/overview")
     assert api_resp.status_code == 200
     data = api_resp.get_json()
+    assert data["operations_brief"]["status_breakdown"]["active"] == 1
+    assert data["operations_brief"]["top_active_lanes"][0]["project_id"] == "globeiq"
+    assert data["operations_brief"]["top_problem_lanes"][0]["manager_id"] == "globeiq-pm"
     assert data["attention"]["problem_tasks"] == 1
     assert data["attention"]["stale_work"] == 2
     assert data["attention"]["metadata_gaps"] == 0
@@ -628,6 +631,17 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
         "missing_ratio": 0.67,
         "total_tokens": 140,
     }
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=fake):
+        brief_resp = dashboard_client.get("/api/work/brief")
+    assert brief_resp.status_code == 200
+    brief_data = brief_resp.get_json()
+    assert brief_data["operations_brief"]["status_breakdown"]["active"] == 1
+    assert brief_data["operations_brief"]["top_active_lanes"][0]["manager_id"] == "globeiq-pm"
+    assert brief_data["attention"]["total"] == 8
+    assert brief_data["snapshot_health"]["level"] == "ready"
+    assert brief_data["usage_health"]["missing_tasks"] == 2
+    assert "projects" not in brief_data
     assert data["usage_pressure_lanes"] == [
         {
             "bot_id": "lesson-writer",

@@ -85,6 +85,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 47 in progress: added dashboard API attachment payload guards so malformed, too-many, or oversized message attachments are rejected before non-streaming or streaming chat dispatch.
 - Batch 48 in progress: added browser-side default-route provider compatibility preflight so incompatible default bot/model pairs are blocked before new-chat create or route-default save.
 - Batch 49 in progress: added a compact active-work operations brief to the Work overview builder, JSON API, and page so top active, waiting, and problem project-manager lanes are visible without scanning all detailed tables.
+- Batch 50 in progress: added a lightweight Work brief API for automation monitors and future mobile views so clients can fetch active lane priority and health without pulling the full overview payload.
 
 ## Validation
 
@@ -137,3 +138,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_message_api_proxies_attachments tests/test_dashboard_phase4_pages.py::test_chat_message_api_blocks_invalid_attachment_payload tests/test_dashboard_phase4_pages.py::test_chat_message_api_blocks_attachment_count_limit tests/test_dashboard_phase4_pages.py::test_chat_stream_api_blocks_attachment_total_size_limit -q` passed for Batch 47 dashboard attachment payload guards.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots -q` passed for Batch 48 browser-side default-route provider compatibility preflight.
 - `pytest tests/test_work_overview.py::test_work_overview_groups_tasks_by_project_and_manager tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 49 active-work operations brief.
+- `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 50 lightweight Work brief API.
