@@ -183,8 +183,13 @@ def _bot_test_preflight_summary(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _bot_test_preflight(cp, bot_id: str) -> tuple[dict[str, Any] | None, tuple[dict[str, Any], int] | None]:
-    """Check whether a bot can safely run a proof task before queueing one."""
+def _bot_run_preflight(
+    cp,
+    bot_id: str,
+    *,
+    blocked_error: str = "bot test run blocked by tooling readiness",
+) -> tuple[dict[str, Any] | None, tuple[dict[str, Any], int] | None]:
+    """Check whether a bot can safely queue operator-triggered work."""
     get_bot = getattr(cp, "get_bot", None)
     if not callable(get_bot):
         return None, None
@@ -213,7 +218,7 @@ def _bot_test_preflight(cp, bot_id: str) -> tuple[dict[str, Any] | None, tuple[d
     if state in {"blocked", "disabled"}:
         return summary, (
             {
-                "error": "bot test run blocked by tooling readiness",
+                "error": blocked_error,
                 "tooling": summary,
                 "blocking_messages": row.get("blocking_messages") or row.get("disabled_activation_messages") or [],
             },
@@ -1161,7 +1166,7 @@ def api_test_run_bot(bot_id: str):
         return jsonify({"error": "payload object is required"}), 400
 
     cp = get_cp_client()
-    preflight, preflight_error = _bot_test_preflight(cp, bot_id)
+    preflight, preflight_error = _bot_run_preflight(cp, bot_id)
     if preflight_error:
         body, status = preflight_error
         return jsonify(body), status
@@ -1206,6 +1211,14 @@ def api_launch_bot(bot_id: str):
     launch_profile = normalize_launch_profile(bot)
     if launch_profile is None:
         return jsonify({"error": "bot does not have a saved launch profile"}), 400
+    preflight, preflight_error = _bot_run_preflight(
+        cp,
+        bot_id,
+        blocked_error="bot launch blocked by tooling readiness",
+    )
+    if preflight_error:
+        body, status = preflight_error
+        return jsonify(body), status
 
     data: dict[str, Any] = request.get_json(silent=True) or {}
     payload = data.get("payload")
@@ -1220,6 +1233,8 @@ def api_launch_bot(bot_id: str):
         "project_id": data.get("project_id", launch_profile.get("project_id")),
         "priority": data.get("priority", launch_profile.get("priority")),
     }
+    if preflight:
+        metadata["tooling_preflight"] = preflight
     orchestration_id = None
     if launch_profile.get("is_pipeline"):
         orchestration_id = str(uuid.uuid4())

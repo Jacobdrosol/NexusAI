@@ -2995,6 +2995,7 @@ def test_bot_launch_api_uses_saved_launch_profile(dashboard_client):
                 "id": bot_id,
                 "name": "Course Intake",
                 "role": "assistant",
+                "enabled": True,
                 "routing_rules": {
                     "launch_profile": {
                         "enabled": True,
@@ -3009,6 +3010,9 @@ def test_bot_launch_api_uses_saved_launch_profile(dashboard_client):
         def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
             return {"id": "task-launch-1", "bot_id": bot_id, "payload": payload, "metadata": metadata}
 
+        def get_bot_readiness(self, bot_id):
+            return {"bot_id": bot_id, "state": "ready", "ready": True, "checks": []}
+
     with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.post("/api/bots/course-intake/launch", json={})
 
@@ -3016,6 +3020,54 @@ def test_bot_launch_api_uses_saved_launch_profile(dashboard_client):
     body = resp.get_json()
     assert body["payload"]["topic"] == "AP World History"
     assert body["metadata"]["project_id"] == "globeiq"
+    assert body["metadata"]["tooling_preflight"]["tooling_state"] in {"ready", "unknown"}
+
+
+def test_bot_launch_api_blocks_tooling_preflight_failures(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Raw Secret Launch Bot",
+                "role": "assistant",
+                "enabled": True,
+                "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-5", "api_key_ref": "sk-live-secret"}],
+                "routing_rules": {
+                    "launch_profile": {
+                        "enabled": True,
+                        "label": "Run Unsafe Launch",
+                        "payload": {"topic": "Unsafe"},
+                    }
+                },
+            }
+
+        def get_bot_readiness(self, bot_id):
+            return {"bot_id": bot_id, "state": "ready", "ready": True, "checks": []}
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+        def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
+            raise AssertionError("blocked launch must not create a task")
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post("/api/bots/raw-secret-launch/launch", json={})
+
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["error"] == "bot launch blocked by tooling readiness"
+    assert body["tooling"]["tooling_state"] == "blocked"
+    assert body["tooling"]["blocking_category"] == "credential"
+    assert body["tooling"]["raw_credential_ref_detected"] is True
+    assert body["tooling"]["credential_refs"] == ["[redacted raw credential]"]
 
 
 def test_bot_launch_api_marks_pipeline_runs(dashboard_client):
@@ -3027,6 +3079,7 @@ def test_bot_launch_api_marks_pipeline_runs(dashboard_client):
                 "id": bot_id,
                 "name": "Course Intake",
                 "role": "assistant",
+                "enabled": True,
                 "routing_rules": {
                     "launch_profile": {
                         "enabled": True,
@@ -3041,6 +3094,9 @@ def test_bot_launch_api_marks_pipeline_runs(dashboard_client):
 
         def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
             return {"id": "task-launch-2", "bot_id": bot_id, "payload": payload, "metadata": metadata}
+
+        def get_bot_readiness(self, bot_id):
+            return {"bot_id": bot_id, "state": "ready", "ready": True, "checks": []}
 
     with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.post("/api/bots/course-intake/launch", json={})
@@ -3063,6 +3119,7 @@ def test_bot_launch_api_applies_deterministic_launch_transform(dashboard_client)
                 "id": bot_id,
                 "name": "Course Intake",
                 "role": "assistant",
+                "enabled": True,
                 "routing_rules": {
                     "launch_profile": {
                         "enabled": True,
@@ -3087,6 +3144,9 @@ def test_bot_launch_api_applies_deterministic_launch_transform(dashboard_client)
 
         def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
             return {"id": "task-launch-3", "bot_id": bot_id, "payload": payload, "metadata": metadata}
+
+        def get_bot_readiness(self, bot_id):
+            return {"bot_id": bot_id, "state": "ready", "ready": True, "checks": []}
 
     with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.post("/api/bots/course-intake/launch", json={})

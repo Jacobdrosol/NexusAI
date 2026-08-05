@@ -96,7 +96,7 @@ Blueprint: `bots`.
 | PUT | `/api/bots/<bot_id>` | Update bot (CP first, then local fallback) | Yes |
 | DELETE | `/api/bots/<bot_id>` | Delete bot (CP first, then local fallback) | Yes |
 | POST | `/api/bots/<bot_id>/test-run` | Submit a one-off test task to CP with source=`bot_test`; blocks disabled or tooling-blocked bots before queueing and stores safe tooling preflight metadata on queued tasks | Yes |
-| POST | `/api/bots/<bot_id>/launch` | Launch bot via its saved launch profile | Yes |
+| POST | `/api/bots/<bot_id>/launch` | Launch bot via its saved launch profile; blocks disabled or tooling-blocked bots before queueing and stores safe tooling preflight metadata on queued tasks | Yes |
 | GET | `/api/bots/<bot_id>/artifacts/<artifact_id>` | Get a single artifact JSON | Yes |
 | GET | `/api/bots/<bot_id>/artifacts/<artifact_id>/download` | Download artifact as attachment | Yes |
 
