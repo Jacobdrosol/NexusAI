@@ -225,7 +225,23 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
             ]
 
         def list_bots(self):
-            return [{"id": "bot-1", "name": "Research Bot", "project_id": "globeiq", "enabled": True}]
+            return [
+                {
+                    "id": "bot-1",
+                    "name": "Research Bot",
+                    "role": "researcher",
+                    "project_id": "globeiq",
+                    "enabled": True,
+                    "execution_policy": {
+                        "required_worker_tools": ["browser-ui"],
+                        "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
+                        "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                        "browser_action_allowlist": ["lesson_preview.read"],
+                        "browser_action_owner_approval_required": ["lesson_preview.read"],
+                        "repo_output_mode": "allow",
+                    },
+                }
+            ]
 
         def list_bot_artifacts(self, bot_id, limit=20):
             return []
@@ -263,6 +279,13 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert b"AI Workspace Readiness" in resp.data
     assert b"Ready for AI work" in resp.data
     assert b"1 enabled / 1 total" in resp.data
+    assert b"Assigned Bot Scope" in resp.data
+    assert b"Research Bot" in resp.data
+    assert b"Tools: browser-ui" in resp.data
+    assert b"Site/API actions: globeiq-agent-api.updateLesson" in resp.data
+    assert b"Browser actions: lesson_preview.read" in resp.data
+    assert b"Repo output: allow" in resp.data
+    assert b"2 approval gates" in resp.data
     assert b"Enabled for filesystem, repo search." in resp.data
     assert b"managed workspace enabled; default branch main; command runner allowed." in resp.data
     assert b"context namespace project:globeiq:github" in resp.data

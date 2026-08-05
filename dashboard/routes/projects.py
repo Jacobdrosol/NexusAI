@@ -252,6 +252,40 @@ def _build_project_ai_readiness(
     }
 
 
+def _project_bot_scope_view(bot: dict[str, Any]) -> dict[str, Any]:
+    policy = bot.get("execution_policy") if isinstance(bot.get("execution_policy"), dict) else {}
+
+    def policy_list(key: str) -> list[str]:
+        values = policy.get(key)
+        if not isinstance(values, list):
+            return []
+        result = []
+        for value in values:
+            label = str(value or "").strip()
+            if label and label not in result:
+                result.append(label)
+        return result
+
+    return {
+        "required_tools": policy_list("required_worker_tools"),
+        "connection_actions": policy_list("connection_action_allowlist"),
+        "connection_owner_approvals": policy_list("connection_action_owner_approval_required"),
+        "browser_actions": policy_list("browser_action_allowlist"),
+        "browser_owner_approvals": policy_list("browser_action_owner_approval_required"),
+        "repo_output_mode": str(policy.get("repo_output_mode") or "deny").strip().lower() or "deny",
+        "can_apply_db_actions": bool(policy.get("can_apply_db_actions", False)),
+    }
+
+
+def _with_project_bot_scope_views(bots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched = []
+    for bot in bots:
+        row = dict(bot)
+        row["scope_view"] = _project_bot_scope_view(row)
+        enriched.append(row)
+    return enriched
+
+
 def _cp_error_response(cp, fallback: str = "control plane unavailable") -> tuple[Any, int]:
     err = cp.last_error() if hasattr(cp, "last_error") else {}
     detail = ""
@@ -493,6 +527,7 @@ def project_detail_page(project_id: str):
         if str(bot.get("id") or "") in project_bot_ids
         or str(bot.get("project_id") or "") == str(project_id)
     ]
+    project_bots = _with_project_bot_scope_views(project_bots)
     project_reports: list[dict[str, Any]] = []
     for bot in project_bots:
         bot_id = str(bot.get("id") or "")

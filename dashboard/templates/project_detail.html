@@ -90,6 +90,43 @@
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Assigned Bot Scope</h2>
+  <table>
+    <thead><tr><th>Bot</th><th>Status</th><th>Work Scope</th><th>Approval Gates</th></tr></thead>
+    <tbody>
+      {% for bot in bots %}
+      {% set scope = bot.scope_view or {} %}
+      {% set approval_count = (scope.connection_owner_approvals | length) + (scope.browser_owner_approvals | length) %}
+      <tr>
+        <td>
+          <a href="{{ url_for('bots.bot_detail_page', bot_id=bot.id) }}">{{ bot.name or bot.id }}</a>
+          <div class="mini-note">{{ bot.role or 'bot' }}{% if bot.id %} · {{ bot.id }}{% endif %}</div>
+        </td>
+        <td><span class="badge badge-{{ 'enabled' if bot.enabled else 'disabled' }}">{{ 'enabled' if bot.enabled else 'disabled' }}</span></td>
+        <td class="metrics">
+          {% if scope.required_tools %}<div>Tools: {{ scope.required_tools | join(', ') }}</div>{% endif %}
+          {% if scope.connection_actions %}<div>Site/API actions: {{ scope.connection_actions | join(', ') }}</div>{% endif %}
+          {% if scope.browser_actions %}<div>Browser actions: {{ scope.browser_actions | join(', ') }}</div>{% endif %}
+          {% if scope.repo_output_mode == 'allow' %}<div>Repo output: allow</div>{% endif %}
+          {% if scope.can_apply_db_actions %}<div>Database actions: allowed</div>{% endif %}
+          {% if not scope.required_tools and not scope.connection_actions and not scope.browser_actions and scope.repo_output_mode != 'allow' and not scope.can_apply_db_actions %}Chat/planning only{% endif %}
+        </td>
+        <td class="metrics">
+          {% if approval_count %}
+          {{ approval_count }} approval gate{{ '' if approval_count == 1 else 's' }}
+          {% else %}
+          none
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No bots are assigned to this project.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Personal Memory</h2>
     <button class="btn btn-primary" type="button" onclick="saveProjectMemoryProfile()">Save Memory Gate</button>
