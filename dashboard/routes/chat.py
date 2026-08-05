@@ -1311,7 +1311,16 @@ def _humanize_bot_id(bot_id: str) -> str:
 
 
 def _is_failed_pm_run_message(message: dict[str, Any]) -> bool:
-    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+    raw_metadata = message.get("metadata")
+    metadata: dict[str, Any] = {}
+    if isinstance(raw_metadata, dict):
+        metadata = raw_metadata
+    elif isinstance(raw_metadata, str):
+        try:
+            parsed = json.loads(raw_metadata)
+            metadata = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            metadata = {}
     if str(metadata.get("mode") or "").strip() not in {"pm_run_report", "assign_summary", "assign_pending"}:
         return False
     run_status = str(metadata.get("run_status") or "").strip().lower()
@@ -2430,9 +2439,10 @@ def api_ingest_chat():
         if c.get("id") == conversation_id:
             conversation = c
             break
-    messages = cp.list_messages(conversation_id)
-    if not conversation or messages is None:
+    raw_messages = cp.list_messages(conversation_id)
+    if not conversation or raw_messages is None:
         return jsonify({"error": "conversation or messages unavailable"}), 502
+    messages = _normalize_message_rows(raw_messages)
 
     lines = []
     for m in messages:

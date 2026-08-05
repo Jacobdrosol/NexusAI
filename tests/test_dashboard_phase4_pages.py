@@ -3504,6 +3504,31 @@ def test_chat_message_to_vault_blocks_failed_pm_reports(dashboard_client):
     assert b"failed PM run reports cannot be ingested" in resp.data
 
 
+def test_chat_message_to_vault_blocks_failed_pm_reports_with_json_metadata(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def ingest_vault_item(self, body):
+            raise AssertionError("failed PM run report should not be ingested")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/message-to-vault",
+            json={
+                "conversation_id": "c1",
+                "message": {
+                    "id": "m-failed",
+                    "role": "assistant",
+                    "content": "failed output",
+                    "metadata": '{"mode":"pm_run_report","run_status":"failed"}',
+                },
+            },
+        )
+
+    assert resp.status_code == 400
+    assert b"failed PM run reports cannot be ingested" in resp.data
+
+
 def test_chat_ingest_api_excludes_failed_pm_reports(dashboard_client):
     _login_admin(dashboard_client)
     seen: dict[str, object] = {}
@@ -3539,6 +3564,44 @@ def test_chat_ingest_api_excludes_failed_pm_reports(dashboard_client):
     body = seen["body"]
     assert body["title"] == "Chat: Project Chat"
     assert body["namespace"] == "project:globeiq"
+    assert "build this" in body["content"]
+    assert "safe summary" in body["content"]
+    assert "failed implementation output" not in body["content"]
+
+
+def test_chat_ingest_api_excludes_failed_pm_reports_with_json_metadata(dashboard_client):
+    _login_admin(dashboard_client)
+    seen: dict[str, object] = {}
+
+    class FakeCP:
+        def list_conversations(self):
+            return [{"id": "c1", "title": "Project Chat"}]
+
+        def list_messages(self, conversation_id):
+            assert conversation_id == "c1"
+            return [
+                {"id": "m1", "role": "user", "content": "build this"},
+                {
+                    "id": "m2",
+                    "role": "assistant",
+                    "content": "failed implementation output",
+                    "metadata": '{"mode":"pm_run_report","run_status":"failed"}',
+                },
+                {"id": "m3", "role": "assistant", "content": "safe summary"},
+            ]
+
+        def ingest_vault_item(self, body):
+            seen["body"] = body
+            return {"id": "vault-1", **body}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/ingest",
+            json={"conversation_id": "c1", "namespace": "project:globeiq"},
+        )
+
+    assert resp.status_code == 201
+    body = seen["body"]
     assert "build this" in body["content"]
     assert "safe summary" in body["content"]
     assert "failed implementation output" not in body["content"]
