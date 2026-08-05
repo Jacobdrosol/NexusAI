@@ -1589,6 +1589,20 @@ function workspaceToolRequestBlocker() {
   return state.effectiveTools ? '' : `Workspace tools are not available: ${state.reasons.join(', ') || 'gate off'}.`;
 }
 
+function inlineCodingRequestBlocker() {
+  const requested = _chatGateCheckboxValue('enable-inline-coding-message', false);
+  if (!requested) return '';
+  const bot = activeChatBot();
+  const profile = bot?.chat_profile && typeof bot.chat_profile === 'object' ? bot.chat_profile : {};
+  const repoOutputMode = String(profile.repo_output_mode || 'deny').trim().toLowerCase();
+  if (!bot) return 'Inline coding is not available: no selected coding-capable bot.';
+  if (!selectedConversationProjectId) return 'Inline coding is not available: no scoped project.';
+  if (repoOutputMode !== 'allow') {
+    return `Inline coding is not available: ${bot.name || bot.id} repo output is ${repoOutputMode || 'deny'}.`;
+  }
+  return '';
+}
+
 function renderChatEffectiveContextSummary() {
   const summary = document.getElementById('chat-effective-context-summary');
   if (!summary) return;
@@ -2433,6 +2447,11 @@ async function sendMessage(streamMode) {
   if (toolBlocker) {
     showChatComposerStatus(toolBlocker);
     renderChatEffectiveContextSummary();
+    return;
+  }
+  const codingBlocker = inlineCodingRequestBlocker();
+  if (codingBlocker) {
+    showChatComposerStatus(codingBlocker);
     return;
   }
   setChatComposerBusy(true);

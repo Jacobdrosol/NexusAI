@@ -1021,7 +1021,9 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"chat-effective-context-summary" in resp.data
     assert b"function renderChatEffectiveContextSummary" in resp.data
     assert b"function workspaceToolRequestBlocker" in resp.data
+    assert b"function inlineCodingRequestBlocker" in resp.data
     assert b"Workspace tools are not available:" in resp.data
+    assert b"Inline coding is not available:" in resp.data
     assert b"const selectedConversationProjectId = \"globeiq\";" in resp.data
     assert b"const selectedProjectMemoryProfilesEnabled = true;" in resp.data
     assert b"\"repo_search\": true" in resp.data
@@ -2039,6 +2041,15 @@ def test_chat_message_api_proxies_attachments(dashboard_client):
     seen = {}
 
     class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "project_id": "globeiq", "default_bot_id": "coding-bot"}]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [{"id": "coding-bot", "execution_policy": {"repo_output_mode": "allow"}}]
+
         def post_message(self, conversation_id, body):
             seen["conversation_id"] = conversation_id
             seen["body"] = body
@@ -2431,6 +2442,33 @@ def test_chat_message_api_allows_workspace_tools_when_all_gates_overlap(dashboar
     assert seen["body"]["use_workspace_tools"] is True
 
 
+def test_chat_message_api_blocks_inline_coding_for_repo_output_denied_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "project_id": "globeiq", "default_bot_id": "read-only-bot"}]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [{"id": "read-only-bot", "execution_policy": {"repo_output_mode": "deny"}}]
+
+        def post_message(self, conversation_id, body):
+            raise AssertionError("inline coding should not dispatch for repo-output denied bot")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "change the repo", "inline_coding_enabled": True},
+        )
+
+    assert resp.status_code == 409
+    assert b"Inline coding is not available" in resp.data
+    assert b"repo output is deny" in resp.data
+
+
 def test_chat_assignment_create_api_blocks_unavailable_pm_bot(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -2630,6 +2668,36 @@ def test_chat_stream_api_blocks_workspace_tools_without_shared_mode(dashboard_cl
     assert resp.status_code == 409
     assert b"Workspace tools are not available" in resp.data
     assert b"no shared tool mode" in resp.data
+
+
+def test_chat_stream_api_blocks_inline_coding_for_unscoped_chat(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "project_id": None, "default_bot_id": "coding-bot"}]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [{"id": "coding-bot", "execution_policy": {"repo_output_mode": "allow"}}]
+
+    def _fake_post(*args, **kwargs):
+        raise AssertionError("inline coding stream should not dispatch for unscoped chat")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={"conversation_id": "c1", "content": "change the repo", "inline_coding_enabled": True},
+        )
+
+    assert resp.status_code == 409
+    assert b"Inline coding is not available" in resp.data
+    assert b"no scoped project" in resp.data
 
 
 def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):

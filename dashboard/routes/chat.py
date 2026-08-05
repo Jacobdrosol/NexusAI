@@ -327,6 +327,41 @@ def _workspace_tool_request_blocker_from_cp(cp: Any, conversation_id: str, reque
     return ", ".join(reasons)
 
 
+def _bot_from_cp(cp: Any, bot_id: str) -> dict[str, Any] | None:
+    safe_bot_id = str(bot_id or "").strip()
+    if not safe_bot_id:
+        return None
+    try:
+        bots = cp.list_bots() if hasattr(cp, "list_bots") else []
+    except Exception:
+        bots = []
+    return next(
+        (row for row in bots if isinstance(row, dict) and str(row.get("id") or "").strip() == safe_bot_id),
+        None,
+    )
+
+
+def _inline_coding_request_blocker_from_cp(cp: Any, conversation_id: str, requested_bot_id: str) -> str:
+    conversation = _conversation_from_cp(cp, conversation_id)
+    if not conversation:
+        return "conversation unavailable"
+    if not str(conversation.get("project_id") or "").strip():
+        return "no scoped project"
+
+    effective_bot_id = str(requested_bot_id or conversation.get("default_bot_id") or "").strip()
+    if not effective_bot_id:
+        return "no selected coding-capable bot"
+    bot = _bot_from_cp(cp, effective_bot_id)
+    if not bot:
+        return f"bot {effective_bot_id} unavailable"
+
+    policy = bot.get("execution_policy") if isinstance(bot.get("execution_policy"), dict) else {}
+    repo_output_mode = str(policy.get("repo_output_mode") or "deny").strip().lower()
+    if repo_output_mode != "allow":
+        return f"bot {effective_bot_id} repo output is {repo_output_mode or 'deny'}"
+    return ""
+
+
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
@@ -1162,6 +1197,11 @@ def api_send_message():
         tool_blocker = _workspace_tool_request_blocker_from_cp(cp, conversation_id, bot_id)
         if tool_blocker:
             return jsonify({"error": f"Workspace tools are not available: {tool_blocker}"}), 409
+    inline_coding_enabled = _request_bool(data.get("inline_coding_enabled", False))
+    if inline_coding_enabled:
+        coding_blocker = _inline_coding_request_blocker_from_cp(cp, conversation_id, bot_id)
+        if coding_blocker:
+            return jsonify({"error": f"Inline coding is not available: {coding_blocker}"}), 409
 
     resp = cp.post_message(
         conversation_id,
@@ -1174,7 +1214,7 @@ def api_send_message():
             "context_item_ids": data.get("context_item_ids"),
             "include_project_context": data.get("include_project_context", False),
             "use_workspace_tools": use_workspace_tools,
-            "inline_coding_enabled": data.get("inline_coding_enabled", False),
+            "inline_coding_enabled": inline_coding_enabled,
         },
     )
     if resp is None:
@@ -1378,6 +1418,11 @@ def api_send_message_stream():
         tool_blocker = _workspace_tool_request_blocker_from_cp(cp, conversation_id, bot_id)
         if tool_blocker:
             return jsonify({"error": f"Workspace tools are not available: {tool_blocker}"}), 409
+    inline_coding_enabled = _request_bool(data.get("inline_coding_enabled", False))
+    if inline_coding_enabled:
+        coding_blocker = _inline_coding_request_blocker_from_cp(cp, conversation_id, bot_id)
+        if coding_blocker:
+            return jsonify({"error": f"Inline coding is not available: {coding_blocker}"}), 409
     cp_base = (
         cp.base_url
         if hasattr(cp, "base_url")
@@ -1393,7 +1438,7 @@ def api_send_message_stream():
         "context_item_ids": data.get("context_item_ids"),
         "include_project_context": data.get("include_project_context", False),
         "use_workspace_tools": use_workspace_tools,
-        "inline_coding_enabled": data.get("inline_coding_enabled", False),
+        "inline_coding_enabled": inline_coding_enabled,
     }
 
     heartbeat_seconds = os.environ.get("CHAT_STREAM_HEARTBEAT_SECONDS", "15")
