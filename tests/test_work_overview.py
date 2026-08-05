@@ -589,6 +589,30 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                 },
             }
 
+        def list_platform_ai_quality_suites_global(self, **kwargs):
+            return {
+                "suites": [
+                    {
+                        "id": "suite-globeiq-lessons",
+                        "name": "GlobeIQ Lesson Quality",
+                        "pipeline_bot_id": "globeiq-pm",
+                        "suite": {"tests": [{"name": "Browser reader"}, {"name": "LLM content review"}]},
+                    }
+                ]
+            }
+
+        def list_platform_ai_quality_suite_runs(self, suite_id, **kwargs):
+            assert suite_id == "suite-globeiq-lessons"
+            return {
+                "runs": [
+                    {
+                        "status": "failed",
+                        "score": 0.74,
+                        "completed_at": "2026-08-05T02:03:04+00:00",
+                    }
+                ]
+            }
+
     fake = FakeCP()
     with patch("dashboard.routes.work.get_cp_client", return_value=fake):
         resp = dashboard_client.get("/work")
@@ -693,6 +717,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"No chat token usage" not in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
+    assert b"Quality Gates" in resp.data
+    assert b"GlobeIQ Lesson Quality" in resp.data
+    assert b"review failed gates" in resp.data
     assert b"Stale Work" in resp.data
     assert b"Latest Update" in resp.data
     assert b"Latest update" in resp.data
@@ -779,6 +806,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["chat_usage_pressure_lanes"][0]["usage_ratio"] == 0.8
     assert brief_data["chat_usage_pressure_lanes"][0]["cap_source"] == "override"
     assert brief_data["chat_usage_pressure_lanes"][0]["last_message_at"] == "2026-08-05T01:02:03+00:00"
+    assert brief_data["quality_gates"]["status_counts"]["failed"] == 1
+    assert brief_data["quality_gates"]["rows"][0]["suite_id"] == "suite-globeiq-lessons"
+    assert brief_data["quality_gates"]["rows"][0]["recommended_action"]["label"] == "review failed gates"
     assert brief_data["usage_brief"]["top_bots"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["project_id"] == "globeiq"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["manager_id"] == "globeiq-pm"

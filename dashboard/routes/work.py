@@ -761,6 +761,7 @@ def api_work_brief():
             "usage_pressure_lanes": overview.get("usage_pressure_lanes") or [],
             "chat_usage_pressure_lanes": overview.get("chat_usage_pressure_lanes") or [],
             "token_governor_queue_pressure": overview.get("token_governor_queue_pressure") or [],
+            "quality_gates": overview.get("quality_gates") or {},
             "capacity": overview.get("capacity") or {},
             "workers": overview.get("workers") or {},
             "data_degraded": bool(overview.get("data_degraded", False)),
