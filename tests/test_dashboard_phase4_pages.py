@@ -4967,6 +4967,7 @@ def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client
                         "name": "Course Repair Bot",
                         "project_id": "globeiq",
                         "enabled": True,
+                        "backends": [{"type": "browser", "provider": "browser", "model": "browser-ui", "worker_id": "globeiq-worker"}],
                         "routing_rules": {
                             "worker_profile": {
                                 "can_edit": False,
@@ -4995,6 +4996,7 @@ def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client
 
     assert resp.status_code == 200
     assert b"Worker Scope" in resp.data
+    assert b"Routes: browser / browser-ui on globeiq-worker" in resp.data
     assert b"published-lesson-quality-audit" in resp.data
     assert b"Site: GlobeIQ" in resp.data
     assert b"Courses: 101, 102" in resp.data

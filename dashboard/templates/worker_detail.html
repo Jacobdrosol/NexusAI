@@ -175,11 +175,12 @@
         <td>{{ bot.project_id or 'Global' }}</td>
         <td class="metrics">
           {% set profile = bot.worker_profile_view or {} %}
+          {% if profile.backend_routes %}<div>Routes: {{ profile.backend_routes | join(', ') }}</div>{% endif %}
           {% if profile.task_scope %}<div>{{ profile.task_scope }}</div>{% endif %}
           {% if profile.site_scope %}<div>Site: {{ profile.site_scope }}</div>{% endif %}
           {% if profile.course_scope %}<div>Courses: {{ profile.course_scope | join(', ') }}</div>{% endif %}
           {% if profile.can_edit is not none %}<div>{{ 'can edit' if profile.can_edit else 'read only' }}</div>{% endif %}
-          {% if not profile.task_scope and not profile.site_scope and not profile.course_scope and profile.can_edit is none %}Not declared{% endif %}
+          {% if not profile.backend_routes and not profile.task_scope and not profile.site_scope and not profile.course_scope and profile.can_edit is none %}Not declared{% endif %}
         </td>
         <td class="metrics">
           {% set action_policy = bot.action_policy_view or {} %}

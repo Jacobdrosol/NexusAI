@@ -152,6 +152,21 @@ def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:
         routing = row.get("routing_rules") if isinstance(row.get("routing_rules"), dict) else {}
         worker_profile = routing.get("worker_profile") if isinstance(routing.get("worker_profile"), dict) else {}
         policy = row.get("execution_policy") if isinstance(row.get("execution_policy"), dict) else {}
+        backend_routes = []
+        for backend in row.get("backends") or []:
+            if not isinstance(backend, dict):
+                continue
+            backend_type = str(backend.get("type") or "").strip()
+            provider = str(backend.get("provider") or "").strip()
+            model = str(backend.get("model") or "").strip()
+            worker_id = str(backend.get("worker_id") or "").strip()
+            route = provider or backend_type or "backend"
+            if model:
+                route += f" / {model}"
+            if worker_id:
+                route += f" on {worker_id}"
+            if route and route not in backend_routes:
+                backend_routes.append(route)
         raw_course_scope = worker_profile.get("course_scope")
         if isinstance(raw_course_scope, list):
             course_scope = [str(value).strip() for value in raw_course_scope if str(value).strip()]
@@ -163,6 +178,7 @@ def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:
             "task_scope": str(worker_profile.get("task_scope") or "").strip(),
             "site_scope": str(worker_profile.get("site_scope") or worker_profile.get("site") or "").strip(),
             "course_scope": course_scope,
+            "backend_routes": backend_routes,
         }
         row["action_policy_view"] = {
             "required_tools": _policy_list(policy, "required_worker_tools"),
