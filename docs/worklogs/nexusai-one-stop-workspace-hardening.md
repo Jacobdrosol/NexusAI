@@ -95,6 +95,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 64 in progress: surfaced bot-scoped HTTP connection action metadata on the tooling API and bots page without exposing credentials, including allowlisted actions, owner-approval counts, connection-context labels, and HTTP connection backend counts.
 - Batch 65 in progress: surfaced dependent-bot worker profile scope on worker detail pages so worker owners can see read-only/edit status, task scope, site scope, and course scope before disabling or reassigning a worker.
 - Batch 66 in progress: expanded the chat effective-context API with normalized bot chat profile and non-secret connection-action metadata so chat clients can preflight selected bot role, tooling posture, and owner-approval requirements.
+- Batch 67 in progress: surfaced effective bot context in the chat composer summary, including use label, connection-action counts, owner-approval counts, and HTTP connection backend counts.
 
 ## Validation
 
@@ -164,3 +165,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_bot_tooling_status.py tests/test_dashboard_phase4_pages.py::test_bots_page_surfaces_bot_scoped_chat_profiles -q` passed for Batch 64 connection-action visibility.
 - `pytest tests/test_dashboard_phase4_pages.py::test_worker_detail_page_loads_when_logged_in tests/test_dashboard_phase4_pages.py::test_worker_detail_page_surfaces_dependent_bot_worker_scope tests/test_dashboard_phase4_pages.py::test_workers_page_surfaces_runtime_tool_evidence tests/test_dashboard_phase4_pages.py::test_worker_probe_view_exposes_attested_runtime_tool_evidence tests/test_dashboard_phase4_pages.py::test_worker_probe_view_marks_unavailable_browser_session_degraded -q` passed for Batch 65 worker scope visibility.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_reports_active_memory_tools_and_coding tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_uses_explicit_bot_backend_model tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_explains_blocked_gates -q` passed for Batch 66 effective-context bot tooling metadata.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_reports_active_memory_tools_and_coding -q` passed for Batch 67 chat composer bot-context summary.

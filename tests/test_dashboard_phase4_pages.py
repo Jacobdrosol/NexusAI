@@ -1167,6 +1167,10 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"image_attachments_supported" in resp.data
     assert b"refreshServerEffectiveContextSummary" in resp.data
     assert b"effective model:" in resp.data
+    assert b"bot context:" in resp.data
+    assert b"connection action" in resp.data
+    assert b"owner approval" in resp.data
+    assert b"HTTP connection backend" in resp.data
     assert b"function routeDefaultDraftState" in resp.data
     assert b"route draft unsaved:" in resp.data
     assert b"route saved:" in resp.data

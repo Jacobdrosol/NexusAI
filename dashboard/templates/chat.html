@@ -1880,11 +1880,29 @@ function renderChatEffectiveContextSummary() {
   const modelClass = modelBlocker ? 'attention' : (modelProvider || modelName ? 'ready' : 'disabled');
   const modelLabel = [modelProvider, modelName].filter(Boolean).join(' / ') || 'model unknown';
   const modelText = `effective model: ${modelSource} ${modelLabel}; ${modelImageSupported ? 'images supported' : 'text only'}${modelBlocker ? '; ' + modelBlocker : ''}`;
+  const serverBot = lastServerEffectiveContext?.bot && typeof lastServerEffectiveContext.bot === 'object'
+    ? lastServerEffectiveContext.bot
+    : null;
+  const serverProfile = serverBot?.chat_profile && typeof serverBot.chat_profile === 'object'
+    ? serverBot.chat_profile
+    : null;
+  const useLabel = String(serverProfile?.use_label || serverProfile?.label || '').trim();
+  const connectionActions = Array.isArray(serverBot?.connection_actions) ? serverBot.connection_actions.length : 0;
+  const ownerApprovalActions = Array.isArray(serverBot?.owner_approval_actions) ? serverBot.owner_approval_actions.length : 0;
+  const httpConnectionBackends = Number(serverBot?.http_connection_backend_count || 0);
+  const botContextParts = [];
+  if (useLabel) botContextParts.push(useLabel);
+  if (connectionActions) botContextParts.push(`${connectionActions} connection action${connectionActions === 1 ? '' : 's'}`);
+  if (ownerApprovalActions) botContextParts.push(`${ownerApprovalActions} owner approval${ownerApprovalActions === 1 ? '' : 's'}`);
+  if (httpConnectionBackends) botContextParts.push(`${httpConnectionBackends} HTTP connection backend${httpConnectionBackends === 1 ? '' : 's'}`);
+  const botContextText = botContextParts.length ? `bot context: ${botContextParts.join('; ')}` : 'bot context: standard chat';
+  const botContextClass = ownerApprovalActions || connectionActions ? 'attention' : 'ready';
   const routeDraft = routeDefaultDraftState();
   const routeClass = routeDraft.changed ? 'attention' : 'ready';
   summary.innerHTML = `
     <span class="badge badge-${routeClass}">${esc(routeDraft.text)}</span>
     <span class="badge badge-${modelClass}">${esc(modelText)}</span>
+    <span class="badge badge-${botContextClass}">${esc(botContextText)}</span>
     <span class="badge badge-${memoryClass}">${esc(memoryText)}</span>
     <span class="badge badge-${toolsClass}">${esc(toolText)}</span>
     <span class="badge badge-${codingClass}">${esc(codingText)}</span>
