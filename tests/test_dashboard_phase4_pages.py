@@ -6189,6 +6189,55 @@ def test_chat_stream_api_blocks_workspace_tools_without_shared_mode(dashboard_cl
     assert b"no shared tool mode" in resp.data
 
 
+def test_chat_stream_api_blocks_workspace_tools_with_mode_less_chat_policy(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c1",
+                    "project_id": "globeiq",
+                    "default_bot_id": "tool-bot",
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "tool-bot",
+                    "routing_rules": {
+                        "chat_tool_access": {"enabled": True, "filesystem": True, "repo_search": False}
+                    },
+                }
+            ]
+
+        def get_project_chat_tool_access(self, project_id):
+            return {"enabled": True, "filesystem": True, "repo_search": False}
+
+    def _fake_post(*args, **kwargs):
+        raise AssertionError("mode-less chat tool policy should not open an upstream stream")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={"conversation_id": "c1", "content": "hello", "use_workspace_tools": True},
+        )
+
+    assert resp.status_code == 409
+    assert b"Workspace tools are not available" in resp.data
+    assert b"chat: no enabled tool mode" in resp.data
+
+
 def test_chat_stream_api_blocks_inline_coding_for_unscoped_chat(dashboard_client):
     _login_admin(dashboard_client)
 
