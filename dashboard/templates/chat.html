@@ -692,7 +692,8 @@
           <div class="message-attachment-list">
             {% for attachment in m.metadata.get('attachments') %}
             <div class="message-attachment">
-              {% if attachment.get('kind') == 'image' and attachment.get('data_url') %}
+              {% set attachment_data_url = (attachment.get('data_url') or '') | string %}
+              {% if attachment.get('kind') == 'image' and attachment_data_url.startswith('data:image/') %}
               <img class="message-attachment-preview" src="{{ attachment.get('data_url') }}" alt="{{ attachment.get('name') }}">
               {% endif %}
               <div class="message-attachment-meta">
@@ -1639,7 +1640,7 @@ function renderMessageAttachmentsHtml(meta) {
         const kind = String(attachment?.kind || '').trim().toLowerCase();
         const dataUrl = String(attachment?.data_url || '').trim();
         const sizeText = esc(formatAttachmentBytes(attachment?.size_bytes || 0));
-        const preview = kind === 'image' && dataUrl
+        const preview = kind === 'image' && dataUrl.startsWith('data:image/')
           ? `<img class="message-attachment-preview" src="${esc(dataUrl)}" alt="${name}">`
           : '';
         const detail = [mime, sizeText].filter(Boolean).join(' · ');

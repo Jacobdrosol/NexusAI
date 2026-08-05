@@ -1368,6 +1368,26 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _sanitize_attachment_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    safe = _json_safe(metadata)
+    if not isinstance(safe, dict):
+        return {}
+    attachments = safe.get("attachments")
+    if not isinstance(attachments, list):
+        return safe
+    cleaned_attachments = []
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        row = dict(attachment)
+        data_url = str(row.get("data_url") or "").strip()
+        if data_url and not data_url.startswith("data:image/"):
+            row.pop("data_url", None)
+        cleaned_attachments.append(row)
+    safe["attachments"] = cleaned_attachments
+    return safe
+
+
 def _normalize_bridge_project_ids(raw: Any) -> list[str]:
     if raw is None:
         return []
@@ -1581,11 +1601,11 @@ def _normalize_message_row(raw: Any) -> dict[str, Any] | None:
     }
     metadata = raw.get("metadata")
     if isinstance(metadata, dict):
-        normalized["metadata"] = _json_safe(metadata)
+        normalized["metadata"] = _sanitize_attachment_metadata(metadata)
     elif isinstance(metadata, str):
         try:
             parsed = json.loads(metadata)
-            normalized["metadata"] = _json_safe(parsed) if isinstance(parsed, dict) else None
+            normalized["metadata"] = _sanitize_attachment_metadata(parsed) if isinstance(parsed, dict) else None
         except Exception:
             normalized["metadata"] = None
     return normalized

@@ -3612,6 +3612,13 @@ def test_chat_page_formats_saved_attachment_sizes(dashboard_client):
                                 "size_bytes": 2_097_152,
                                 "data_url": "data:image/png;base64,aGVsbG8=",
                             },
+                            {
+                                "name": "unsafe.svg",
+                                "mime_type": "image/svg+xml",
+                                "kind": "image",
+                                "size_bytes": 512,
+                                "data_url": "javascript:alert(1)",
+                            },
                         ]
                     },
                 }
@@ -3639,6 +3646,9 @@ def test_chat_page_formats_saved_attachment_sizes(dashboard_client):
     assert b"diagram.png" in resp.data
     assert b"image/png" in resp.data
     assert b"2.0 MB" in resp.data
+    assert b"unsafe.svg" in resp.data
+    assert b"javascript:alert(1)" not in resp.data
+    assert b"dataUrl.startsWith('data:image/')" in resp.data
     assert b"2097152 bytes" not in resp.data
 
 
