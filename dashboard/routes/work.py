@@ -747,6 +747,10 @@ def _attach_attention_summary(overview: dict[str, Any]) -> None:
     route_evidence = overview.get("route_evidence") if isinstance(overview.get("route_evidence"), dict) else {}
     usage = overview.get("usage") if isinstance(overview.get("usage"), dict) else {}
     usage_totals = usage.get("totals") if isinstance(usage.get("totals"), dict) else {}
+    chat_usage = overview.get("chat_usage") if isinstance(overview.get("chat_usage"), dict) else {}
+    chat_usage_totals = chat_usage.get("totals") if isinstance(chat_usage.get("totals"), dict) else {}
+    quality_gates = overview.get("quality_gates") if isinstance(overview.get("quality_gates"), dict) else {}
+    quality_status_counts = quality_gates.get("status_counts") if isinstance(quality_gates.get("status_counts"), dict) else {}
 
     problem_tasks = _safe_count(totals, "problem")
     stale_work = _safe_count(totals, "stale_active") + _safe_count(totals, "stale_waiting")
@@ -754,7 +758,21 @@ def _attach_attention_summary(overview: dict[str, Any]) -> None:
     route_gaps = _safe_count(route_evidence, "missing_active_problem_count")
     worker_issues = _safe_count(workers, "issue_count")
     usage_gaps = _safe_count(usage_totals, "tasks_without_usage")
-    total = problem_tasks + stale_work + metadata_gaps + route_gaps + worker_issues + usage_gaps
+    chat_usage_gaps = _safe_count(chat_usage_totals, "messages_without_usage")
+    quality_gate_alerts = sum(
+        _safe_count(quality_status_counts, key)
+        for key in ("failed", "error", "running", "queued", "not_run")
+    )
+    cap_alerts = 0
+    critical_cap_alerts = 0
+    for key in ("usage_cap_pressure", "usage_global_cap_pressure", "chat_cap_pressure", "chat_global_cap_pressure"):
+        signal = overview.get(key) if isinstance(overview.get(key), dict) else {}
+        level = str(signal.get("level") or "").strip().lower()
+        if level in {"critical", "warning"}:
+            cap_alerts += 1
+        if level == "critical":
+            critical_cap_alerts += 1
+    total = problem_tasks + stale_work + metadata_gaps + route_gaps + worker_issues + usage_gaps + chat_usage_gaps + quality_gate_alerts + cap_alerts
     overview["attention"] = {
         "total": total,
         "problem_tasks": problem_tasks,
@@ -763,7 +781,10 @@ def _attach_attention_summary(overview: dict[str, Any]) -> None:
         "route_gaps": route_gaps,
         "worker_issues": worker_issues,
         "usage_gaps": usage_gaps,
-        "level": "critical" if problem_tasks or stale_work or worker_issues else ("warning" if total else "ready"),
+        "chat_usage_gaps": chat_usage_gaps,
+        "cap_alerts": cap_alerts,
+        "quality_gate_alerts": quality_gate_alerts,
+        "level": "critical" if problem_tasks or stale_work or worker_issues or critical_cap_alerts else ("warning" if total else "ready"),
     }
 
 

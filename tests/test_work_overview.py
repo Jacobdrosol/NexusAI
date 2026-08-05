@@ -646,6 +646,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Attention Lanes" in resp.data
     assert b"Problem tasks" in resp.data
     assert b"Usage gaps" in resp.data
+    assert b"Chat usage gaps" in resp.data
+    assert b"Cap alerts" in resp.data
+    assert b"Quality gate alerts" in resp.data
     assert b"Route gaps" in resp.data
     assert b"Route Coverage" in resp.data
     assert b"1 active/problem unknown" in resp.data
@@ -813,7 +816,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert data["attention"]["route_gaps"] == 1
     assert data["attention"]["worker_issues"] == 2
     assert data["attention"]["usage_gaps"] == 2
-    assert data["attention"]["total"] == 8
+    assert data["attention"]["chat_usage_gaps"] == 1
+    assert data["attention"]["cap_alerts"] == 3
+    assert data["attention"]["quality_gate_alerts"] == 1
+    assert data["attention"]["total"] == 13
     assert data["attention"]["level"] == "critical"
     assert data["snapshot_health"]["level"] == "ready"
     assert data["snapshot_health"]["reason"] == "task snapshot loaded within configured windows"
@@ -838,7 +844,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     brief_data = brief_resp.get_json()
     assert brief_data["operations_brief"]["status_breakdown"]["active"] == 1
     assert brief_data["operations_brief"]["top_active_lanes"][0]["manager_id"] == "globeiq-pm"
-    assert brief_data["attention"]["total"] == 8
+    assert brief_data["attention"]["total"] == 13
+    assert brief_data["attention"]["chat_usage_gaps"] == 1
+    assert brief_data["attention"]["cap_alerts"] == 3
+    assert brief_data["attention"]["quality_gate_alerts"] == 1
     assert brief_data["snapshot_health"]["level"] == "ready"
     assert brief_data["usage_health"]["missing_tasks"] == 2
     assert brief_data["usage_cap_pressure"]["label"] == "near cap"
