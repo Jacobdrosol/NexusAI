@@ -5653,6 +5653,12 @@ def test_chat_message_api_blocks_workspace_tools_without_project_policy(dashboar
     assert resp.status_code == 409
     assert b"Workspace tools are not available" in resp.data
     assert b"project off" in resp.data
+    payload = resp.get_json()
+    assert payload["code"] == "workspace_tools_unavailable"
+    assert payload["effective_context"]["workspace_tools"]["requested"] is True
+    assert payload["effective_context"]["workspace_tools"]["available"] is False
+    assert "project off" in payload["effective_context"]["workspace_tools"]["reasons"]
+    assert payload["effective_context"]["project_id"] == "globeiq"
 
 
 def test_chat_message_api_blocks_workspace_tools_with_mode_less_chat_policy(dashboard_client):
@@ -6322,6 +6328,12 @@ def test_chat_stream_api_blocks_workspace_tools_without_shared_mode(dashboard_cl
     assert resp.status_code == 409
     assert b"Workspace tools are not available" in resp.data
     assert b"no shared tool mode" in resp.data
+    payload = resp.get_json()
+    assert payload["code"] == "workspace_tools_unavailable"
+    assert payload["effective_context"]["workspace_tools"]["requested"] is True
+    assert payload["effective_context"]["workspace_tools"]["available"] is False
+    assert payload["effective_context"]["workspace_tools"]["modes"] == []
+    assert "no shared tool mode" in payload["effective_context"]["workspace_tools"]["reasons"]
 
 
 def test_chat_stream_api_blocks_workspace_tools_with_mode_less_chat_policy(dashboard_client):

@@ -2272,6 +2272,19 @@ def _validated_chat_send_payload(
     content: str,
     attachments: list[Any],
 ) -> tuple[Any | None, dict[str, Any]]:
+    def _gate_error_response(code: str, message: str, *, use_tools: bool = False, inline_coding: bool = False) -> Any:
+        context = _effective_chat_context_from_cp(
+            cp,
+            conversation_id,
+            requested_bot_id=bot_id,
+            use_workspace_tools=use_tools,
+            inline_coding_enabled=inline_coding,
+        )
+        body: dict[str, Any] = {"error": message, "code": code}
+        if context is not None:
+            body["effective_context"] = context
+        return jsonify(body)
+
     bot_id = str(data.get("bot_id") or "").strip()
     readiness_bot_id = bot_id or _conversation_default_bot_id_from_cp(cp, conversation_id)
     readiness_blocker = _chat_bot_availability_blocker_from_cp(cp, readiness_bot_id)
@@ -2279,17 +2292,28 @@ def _validated_chat_send_payload(
         return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), {}
     image_model_blocker = _image_attachment_model_blocker_from_cp(cp, conversation_id, bot_id, attachments)
     if image_model_blocker:
-        return jsonify({"error": f"Image attachments are not available: {image_model_blocker}"}), {}
+        return _gate_error_response(
+            "image_attachments_unavailable",
+            f"Image attachments are not available: {image_model_blocker}",
+        ), {}
     use_workspace_tools = _request_bool(data.get("use_workspace_tools", False))
     if use_workspace_tools:
         tool_blocker = _workspace_tool_request_blocker_from_cp(cp, conversation_id, bot_id)
         if tool_blocker:
-            return jsonify({"error": f"Workspace tools are not available: {tool_blocker}"}), {}
+            return _gate_error_response(
+                "workspace_tools_unavailable",
+                f"Workspace tools are not available: {tool_blocker}",
+                use_tools=True,
+            ), {}
     inline_coding_enabled = _request_bool(data.get("inline_coding_enabled", False))
     if inline_coding_enabled:
         coding_blocker = _inline_coding_request_blocker_from_cp(cp, conversation_id, bot_id)
         if coding_blocker:
-            return jsonify({"error": f"Inline coding is not available: {coding_blocker}"}), {}
+            return _gate_error_response(
+                "inline_coding_unavailable",
+                f"Inline coding is not available: {coding_blocker}",
+                inline_coding=True,
+            ), {}
 
     return None, {
         "content": content,
