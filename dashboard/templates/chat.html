@@ -1483,7 +1483,23 @@ function activeChatBot() {
   return Array.isArray(availableBots) ? availableBots.find((bot) => String(bot?.id || '') === botId) : null;
 }
 
-function modelSupportsImages(provider, modelName) {
+function modelCatalogCapabilities(entry) {
+  return Array.isArray(entry?.capabilities)
+    ? entry.capabilities.map((item) => String(item || '').trim().toLowerCase())
+    : [];
+}
+
+function modelCatalogEntryById(modelId) {
+  const safeId = String(modelId || '').trim();
+  if (!safeId || !Array.isArray(availableModels)) return null;
+  return availableModels.find((item) => String(item?.id || item?.name || '').trim() === safeId && item?.enabled !== false) || null;
+}
+
+function modelSupportsImages(provider, modelName, capabilities = null) {
+  const caps = Array.isArray(capabilities)
+    ? capabilities.map((item) => String(item || '').trim().toLowerCase())
+    : [];
+  if (caps.some((item) => ['image', 'images', 'vision', 'multimodal'].includes(item))) return true;
   const providerKey = String(provider || '').trim().toLowerCase();
   const name = String(modelName || '').trim();
   const catalogEntry = Array.isArray(availableModels)
@@ -1494,10 +1510,7 @@ function modelSupportsImages(provider, modelName) {
     ))
     : null;
   if (catalogEntry) {
-    const caps = Array.isArray(catalogEntry.capabilities)
-      ? catalogEntry.capabilities.map((item) => String(item || '').trim().toLowerCase())
-      : [];
-    return caps.some((item) => ['image', 'images', 'vision', 'multimodal'].includes(item));
+    return modelCatalogCapabilities(catalogEntry).some((item) => ['image', 'images', 'vision', 'multimodal'].includes(item));
   }
   const lowered = name.toLowerCase();
   if (providerKey === 'gemini') return true;
@@ -1509,10 +1522,46 @@ function modelSupportsImages(provider, modelName) {
   return false;
 }
 
-function activeBotSupportsImages() {
+function selectedChatDefaultModelId() {
+  const selector = document.getElementById('chat-default-model-selector');
+  return String((selector && selector.value) || selectedConversation.default_model_id || '').trim();
+}
+
+function routeUsesConversationDefaultModel() {
+  const modelId = selectedChatDefaultModelId();
+  if (!modelId) return false;
+  const requestedBotId = activeChatBotId();
+  const defaultBotId = String(selectedConversation.default_bot_id || '').trim();
+  if (!requestedBotId) return true;
+  if (!defaultBotId) return true;
+  return requestedBotId === defaultBotId;
+}
+
+function effectiveChatModelInfo() {
   const bot = activeChatBot();
   const backend = Array.isArray(bot?.backends) && bot.backends.length ? bot.backends[0] : null;
-  return !!backend && modelSupportsImages(backend.provider, backend.model);
+  if (routeUsesConversationDefaultModel()) {
+    const catalogEntry = modelCatalogEntryById(selectedChatDefaultModelId());
+    if (catalogEntry) {
+      return {
+        provider: catalogEntry.provider,
+        model: catalogEntry.name || catalogEntry.id,
+        capabilities: modelCatalogCapabilities(catalogEntry),
+        source: 'conversation model',
+      };
+    }
+  }
+  return {
+    provider: backend?.provider,
+    model: backend?.model,
+    capabilities: [],
+    source: 'bot backend',
+  };
+}
+
+function activeBotSupportsImages() {
+  const modelInfo = effectiveChatModelInfo();
+  return modelSupportsImages(modelInfo.provider, modelInfo.model, modelInfo.capabilities);
 }
 
 function activeBotReadinessBlocker() {
@@ -1558,14 +1607,15 @@ function updateChatBotCapabilitySummary() {
     ? bot.chat_profile
     : (rules.chat_profile && typeof rules.chat_profile === 'object' ? rules.chat_profile : {});
   const tools = chatBotToolAccess(bot);
-  const backend = Array.isArray(bot.backends) && bot.backends.length ? bot.backends[0] : {};
   const toolParts = [];
   if (tools.filesystem) toolParts.push('filesystem');
   if (tools.repo_search) toolParts.push('repo search');
   const toolLabel = profile.tool_label || (tools.enabled ? (toolParts.length ? toolParts.join(', ') : 'enabled') : 'off');
   const memoryLabel = bot.memory_profiles_enabled === true ? 'memory on' : 'memory off';
+  const effectiveModel = effectiveChatModelInfo();
   const imageLabel = activeBotSupportsImages() ? 'images supported' : 'text only';
-  const modelLabel = [backend.provider, backend.model].filter(Boolean).join(' / ') || 'model unknown';
+  const modelLabel = [effectiveModel.provider, effectiveModel.model].filter(Boolean).join(' / ') || 'model unknown';
+  const routeLabel = effectiveModel.source || 'bot backend';
   const profileLabel = String(profile.label || profile.mode || bot.role || 'chat').trim();
   const readiness = bot.readiness && typeof bot.readiness === 'object' ? bot.readiness : {};
   const readinessState = String(readiness.state || 'unknown').trim() || 'unknown';
@@ -1573,7 +1623,7 @@ function updateChatBotCapabilitySummary() {
   const readinessLabel = readinessDetail
     ? `readiness ${readinessState} (${readinessDetail})`
     : `readiness ${readinessState}`;
-  summary.textContent = `${bot.name || bot.id}: ${profileLabel}; ${modelLabel}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}.`;
+  summary.textContent = `${bot.name || bot.id}: ${profileLabel}; ${routeLabel} ${modelLabel}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}.`;
 }
 
 function _chatGateCheckboxValue(id, fallback) {
@@ -3667,6 +3717,12 @@ document.getElementById('chat-tool-filesystem')?.addEventListener('change', rend
 document.getElementById('chat-tool-repo-search')?.addEventListener('change', renderChatEffectiveContextSummary);
 document.getElementById('chat-memory-enabled')?.addEventListener('change', renderChatEffectiveContextSummary);
 document.getElementById('use-workspace-tools-message')?.addEventListener('change', renderChatEffectiveContextSummary);
+document.getElementById('chat-default-model-selector')?.addEventListener('change', () => {
+  updateChatBotCapabilitySummary();
+  if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
+    alert('The newly selected conversation model does not support image attachments. Remove the screenshots or switch to a vision-capable model.');
+  }
+});
 document.getElementById('chat-bot-selector')?.addEventListener('change', () => {
   syncSendBotSelection();
   updateChatBotCapabilitySummary();

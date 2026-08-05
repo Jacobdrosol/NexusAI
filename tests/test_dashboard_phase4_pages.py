@@ -2218,6 +2218,69 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b"Response stream finished without a saved assistant message." in resp.data
 
 
+def test_chat_page_image_preflight_uses_effective_default_model(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c-default-vision",
+                    "title": "Default Vision",
+                    "scope": "global",
+                    "default_bot_id": "bot-text",
+                    "default_model_id": "vision-model",
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "bot-text",
+                    "name": "Text Bot",
+                    "backends": [{"provider": "ollama_cloud", "model": "gpt-oss:120b"}],
+                }
+            ]
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return [
+                {
+                    "id": "vision-model",
+                    "name": "qwen2.5-vl",
+                    "provider": "ollama_cloud",
+                    "capabilities": ["vision"],
+                    "enabled": True,
+                },
+                {
+                    "id": "text-model",
+                    "name": "gpt-oss:120b",
+                    "provider": "ollama_cloud",
+                    "capabilities": ["chat"],
+                    "enabled": True,
+                },
+            ]
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-default-vision")
+
+    assert resp.status_code == 200
+    assert b"function effectiveChatModelInfo" in resp.data
+    assert b"function routeUsesConversationDefaultModel" in resp.data
+    assert b"function modelCatalogEntryById" in resp.data
+    assert b"conversation model" in resp.data
+    assert b"The newly selected conversation model does not support image attachments" in resp.data
+    assert b'value="vision-model" selected' in resp.data
+
+
 def test_chat_message_api_surfaces_control_plane_error(dashboard_client):
     _login_admin(dashboard_client)
 

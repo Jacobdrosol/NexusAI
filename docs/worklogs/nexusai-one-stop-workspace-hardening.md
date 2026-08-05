@@ -80,6 +80,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 42 in progress: added control-plane default bot/model provider compatibility validation so saved route defaults cannot pair a catalog model with a bot that has no matching LLM backend provider.
 - Batch 43 in progress: scoped conversation default-model hints to the default chat route so one-off explicit bot overrides do not inherit an incompatible conversation model.
 - Batch 44 in progress: aligned image-attachment validation with effective chat model routing so preferred vision/text defaults control whether screenshots are accepted.
+- Batch 45 in progress: aligned the chat composer capability summary and image preflight with effective chat model routing so the browser UI matches backend attachment validation.
 
 ## Validation
 
@@ -127,3 +128,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_chat_api.py::test_create_conversation_blocks_disabled_catalog_default_model tests/test_chat_api.py::test_update_conversation_route_defaults_blocks_unknown_catalog_default_model tests/test_chat_api.py::test_create_conversation_blocks_default_model_provider_mismatch -q` passed for Batch 42 default route provider compatibility.
 - `pytest tests/test_chat_api.py::test_chat_default_model_id_is_attached_to_scheduled_task tests/test_chat_api.py::test_chat_default_model_id_is_not_attached_to_explicit_bot_override tests/test_chat_api.py::test_stream_default_model_id_is_attached_to_scheduled_task tests/test_chat_api.py::test_stream_default_model_id_is_not_attached_to_explicit_bot_override -q` passed for Batch 43 explicit-bot model override routing.
 - `pytest tests/test_chat_api.py::test_chat_message_rejects_image_attachment_for_non_vision_bot tests/test_chat_api.py::test_chat_message_accepts_image_attachment_for_ollama_cloud_qwen35_bot tests/test_chat_api.py::test_chat_message_uses_default_model_capabilities_for_image_attachment tests/test_chat_api.py::test_chat_message_rejects_image_when_default_model_is_text_only tests/test_chat_api.py::test_chat_default_model_id_is_attached_to_scheduled_task tests/test_chat_api.py::test_chat_default_model_id_is_not_attached_to_explicit_bot_override -q` passed for Batch 44 effective-model image attachment validation.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_supports_attachment_picker tests/test_dashboard_phase4_pages.py::test_chat_page_image_preflight_uses_effective_default_model -q` passed for Batch 45 dashboard effective-model attachment preflight.

@@ -126,7 +126,7 @@ Blueprint: `chat`.
 | GET | `/api/chat/orchestrations/<orchestration_id>/graph` | Build DAG graph of all tasks in an orchestration | Yes |
 | GET | `/api/chat/orchestrations/<orchestration_id>/recap` | Full text recap of all task results in an orchestration | Yes |
 
-Conversation create and route-default endpoints validate default bot readiness and default model catalog state before proxying changes to the control plane. Disabled or unknown catalog model IDs return `409` instead of being saved as stale chat routing defaults.
+Conversation create and route-default endpoints validate default bot readiness and default model catalog state before proxying changes to the control plane. Disabled or unknown catalog model IDs return `409` instead of being saved as stale chat routing defaults. The chat composer capability summary and image-attachment preflight use the effective route model: a conversation default model applies to the default chat route, while an explicit different bot uses that bot's own backend.
 
 ---
 
