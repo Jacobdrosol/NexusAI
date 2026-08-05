@@ -53,8 +53,11 @@
       <div class="list">
         {% for group in tooling.blocked_groups or [] %}
         <div class="list-item">
-          <strong>{{ group.category | replace('_', ' ') }}</strong>
+          <strong>{{ group.label or (group.category | replace('_', ' ')) }}</strong>
           <small><span class="badge badge-blocked">{{ group.count }} bot(s)</span></small>
+          {% if group.detail %}
+          <small>{{ group.detail }}</small>
+          {% endif %}
           {% for bot in group.bots[:4] %}
           <small>
             <code>{{ bot.bot_id }}</code>

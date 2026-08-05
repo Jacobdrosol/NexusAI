@@ -92,6 +92,32 @@ def _blocking_category(messages: list[str], required_tools: list[str], worker_id
     return "unknown"
 
 
+def _blocking_category_view(category: str) -> dict[str, str]:
+    labels = {
+        "browser_session": "Authenticated browser session",
+        "cli_auth": "CLI authentication",
+        "credential": "Vault credential",
+        "worker_runtime": "Worker runtime",
+        "model": "Model availability",
+        "readiness": "Readiness check",
+        "unknown": "Unknown blocker",
+    }
+    details = {
+        "browser_session": (
+            "The worker and site account can exist, but browser-backed tools still need a live "
+            "authenticated browser profile for rendered UI work."
+        ),
+        "cli_auth": "A configured CLI tool is installed but needs a local login or token refresh.",
+        "credential": "A required key-vault credential reference is missing or unavailable.",
+        "worker_runtime": "The configured worker is missing, disabled, offline, or not exposing the required capability.",
+        "model": "The configured model or provider backend is not currently usable.",
+        "readiness": "One or more readiness checks are failing.",
+        "unknown": "The control plane did not provide a specific blocker category.",
+    }
+    normalized = category if category in labels else "unknown"
+    return {"label": labels[normalized], "detail": details[normalized]}
+
+
 def _probe_status(worker_id: str, probes: dict[str, dict[str, Any]]) -> str:
     probe = probes.get(worker_id) or {}
     status = str(probe.get("probe_status") or "").strip().lower()
@@ -189,7 +215,13 @@ def build_bot_tooling_status(
             for tool, count in sorted(tool_counts.items(), key=lambda item: (-item[1], item[0]))
         ],
         "blocked_groups": [
-            {"category": category, "count": len(group), "bots": group[:8]}
+            {
+                "category": category,
+                "label": _blocking_category_view(category)["label"],
+                "detail": _blocking_category_view(category)["detail"],
+                "count": len(group),
+                "bots": group[:8],
+            }
             for category, group in sorted(blocked_groups.items(), key=lambda item: (-len(item[1]), item[0]))
         ],
         "blocker_counts": dict(blocker_counts),

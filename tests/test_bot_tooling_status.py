@@ -83,6 +83,8 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert status["summary"]["tooling_bot_count"] == 1
     assert status["required_tools"] == [{"tool": "browser-ui", "bot_count": 1}]
     assert status["blocked_groups"][0]["category"] == "browser_session"
+    assert status["blocked_groups"][0]["label"] == "Authenticated browser session"
+    assert "site account can exist" in status["blocked_groups"][0]["detail"]
     assert status["blocked_groups"][0]["bots"][0]["workers"][0]["probe_status"] == "degraded"
 
 
@@ -141,9 +143,11 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
 
     assert page.status_code == 200
     assert b"Bot Tooling Readiness" in page.data
-    assert b"browser session" in page.data
+    assert b"Authenticated browser session" in page.data
+    assert b"site account can exist" in page.data
     assert b"browser-ui" in page.data
     assert api.status_code == 200
     payload = api.get_json()
     assert payload["summary"]["blocked"] == 1
     assert payload["blocked_groups"][0]["category"] == "browser_session"
+    assert payload["blocked_groups"][0]["label"] == "Authenticated browser session"
