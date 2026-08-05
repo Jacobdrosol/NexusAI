@@ -231,6 +231,48 @@ def _usage_pressure_lanes(usage: dict[str, Any], *, limit: int = 10) -> list[dic
     return rows[: max(1, int(limit or 10))]
 
 
+def _provider_model_attribution_health(summary: dict[str, Any], *, unit_label: str) -> dict[str, Any]:
+    totals = summary.get("totals") if isinstance(summary.get("totals"), dict) else {}
+    total_tokens = _safe_count(totals, "total_tokens")
+    rows = [row for row in summary.get("by_provider_model") or [] if isinstance(row, dict)]
+    if not total_tokens:
+        return {
+            "level": "idle",
+            "reason": f"no {unit_label} token usage recorded in this window",
+            "unknown_tokens": 0,
+            "unknown_ratio": 0.0,
+        }
+    if not rows:
+        return {
+            "level": "critical",
+            "reason": f"{unit_label} token usage exists but no provider/model attribution was reported",
+            "unknown_tokens": total_tokens,
+            "unknown_ratio": 1.0,
+        }
+    unknown_tokens = 0
+    for row in rows:
+        provider = str(row.get("provider") or "").strip().lower()
+        model = str(row.get("model") or "").strip().lower()
+        if not provider or not model or provider == "unknown" or model == "unknown":
+            unknown_tokens += _safe_count(row, "total_tokens")
+    unknown_ratio = round(unknown_tokens / total_tokens, 2) if total_tokens else 0.0
+    if unknown_ratio >= 0.5:
+        level = "critical"
+        reason = f"most {unit_label} token usage is missing provider/model attribution"
+    elif unknown_tokens:
+        level = "warning"
+        reason = f"some {unit_label} token usage is missing provider/model attribution"
+    else:
+        level = "ready"
+        reason = f"{unit_label} provider/model attribution is complete"
+    return {
+        "level": level,
+        "reason": reason,
+        "unknown_tokens": unknown_tokens,
+        "unknown_ratio": unknown_ratio,
+    }
+
+
 def _chat_usage_pressure_lanes(chat_usage: dict[str, Any], *, limit: int = 10) -> list[dict[str, Any]]:
     governor = chat_usage.get("chat_token_governor") if isinstance(chat_usage.get("chat_token_governor"), dict) else {}
     if not governor.get("enabled"):
@@ -300,6 +342,7 @@ def _usage_brief(usage: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
         "top_projects": _top_rows("by_project"),
         "top_managers": _top_rows("by_manager"),
         "top_project_manager_bots": _top_rows("by_project_manager_bot"),
+        "provider_model_attribution": _provider_model_attribution_health(usage, unit_label="worker"),
     }
 
 
@@ -323,6 +366,7 @@ def _chat_usage_brief(chat_usage: dict[str, Any], *, limit: int = 5) -> dict[str
         "top_conversations": _top_rows("by_conversation"),
         "top_bots": _top_rows("by_bot"),
         "top_provider_models": _top_rows("by_provider_model"),
+        "provider_model_attribution": _provider_model_attribution_health(chat_usage, unit_label="chat"),
     }
 
 

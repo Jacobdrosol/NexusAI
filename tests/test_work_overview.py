@@ -649,6 +649,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Total pressure" in resp.data
     assert b"Usage Health" in resp.data
     assert b"Chat Usage Health" in resp.data
+    assert b"Provider/model attribution:" in resp.data
+    assert b"worker provider/model attribution is complete" in resp.data
+    assert b"Chat provider/model attribution:" in resp.data
+    assert b"chat provider/model attribution is complete" in resp.data
     assert b"token usage telemetry is incomplete for most measured tasks" in resp.data
     assert b"chat token usage telemetry is incomplete for most assistant messages" in resp.data
     assert b"Missing ratio" in resp.data
@@ -817,6 +821,18 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["manager_id"] == "globeiq-pm"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_brief"]["top_provider_models"][0]["provider"] == "ollama_cloud"
+    assert brief_data["usage_brief"]["provider_model_attribution"] == {
+        "level": "ready",
+        "reason": "worker provider/model attribution is complete",
+        "unknown_tokens": 0,
+        "unknown_ratio": 0.0,
+    }
+    assert brief_data["chat_usage_brief"]["provider_model_attribution"] == {
+        "level": "ready",
+        "reason": "chat provider/model attribution is complete",
+        "unknown_tokens": 0,
+        "unknown_ratio": 0.0,
+    }
     assert brief_data["usage_pressure_lanes"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_pressure_lanes"][0]["usage_ratio"] == 0.93
     assert brief_data["usage_pressure_lanes"][0]["recommended_action"]["label"] == "watch spend"
@@ -1198,6 +1214,72 @@ def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
         "total_messages": 0,
         "missing_ratio": 0.0,
         "total_tokens": 0,
+    }
+    assert data["usage_brief"]["provider_model_attribution"] == {
+        "level": "idle",
+        "reason": "no worker token usage recorded in this window",
+        "unknown_tokens": 0,
+        "unknown_ratio": 0.0,
+    }
+    assert data["chat_usage_brief"]["provider_model_attribution"] == {
+        "level": "idle",
+        "reason": "no chat token usage recorded in this window",
+        "unknown_tokens": 0,
+        "unknown_ratio": 0.0,
+    }
+
+
+def test_work_overview_flags_missing_provider_model_attribution(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_projects(self, **kwargs):
+            return []
+
+        def list_bots(self, **kwargs):
+            return []
+
+        def list_workers(self, **kwargs):
+            return []
+
+        def list_work_dispatch_holds(self, **kwargs):
+            return {"holds": []}
+
+        def task_usage(self, **kwargs):
+            return {
+                "totals": {"total_tokens": 200, "tasks_with_usage": 1, "tasks_without_usage": 0},
+                "by_bot": [{"bot_id": "worker-bot", "total_tokens": 200, "tasks_with_usage": 1}],
+                "by_provider_model": [],
+                "token_governor": {"enabled": False, "limits": {}},
+            }
+
+        def chat_usage(self, **kwargs):
+            return {
+                "totals": {"total_tokens": 100, "messages_with_usage": 1, "messages_without_usage": 0},
+                "by_bot": [{"bot_id": "chat-bot", "total_tokens": 100, "messages_with_usage": 1}],
+                "by_provider_model": [{"provider": "unknown", "model": "", "total_tokens": 100, "messages_with_usage": 1}],
+                "chat_token_governor": {"enabled": False, "limits": {}},
+            }
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/work/brief")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["usage_brief"]["provider_model_attribution"] == {
+        "level": "critical",
+        "reason": "worker token usage exists but no provider/model attribution was reported",
+        "unknown_tokens": 200,
+        "unknown_ratio": 1.0,
+    }
+    assert data["chat_usage_brief"]["provider_model_attribution"] == {
+        "level": "critical",
+        "reason": "most chat token usage is missing provider/model attribution",
+        "unknown_tokens": 100,
+        "unknown_ratio": 1.0,
     }
 
 
