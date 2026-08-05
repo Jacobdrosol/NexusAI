@@ -28,6 +28,7 @@ _CHAT_SELECTABLE_ROLES = {
 _ALLOWED_CONVERSATION_SCOPES = {"global", "project", "bridged"}
 _CHAT_CONTEXT_ITEM_MAX_CHARS = 12000
 _CHAT_CONTEXT_ITEM_ID_MAX_CHARS = 256
+_CHAT_MESSAGE_CONTENT_MAX_CHARS = 120000
 
 
 def _bot_value(bot: Any, key: str, default: Any = None) -> Any:
@@ -491,6 +492,12 @@ def _context_payload_blocker(raw_context_items: Any, raw_context_item_ids: Any) 
                 return "context_item_ids must contain non-empty strings"
             if len(item_id) > _CHAT_CONTEXT_ITEM_ID_MAX_CHARS:
                 return f"context_item_ids entries are limited to {_CHAT_CONTEXT_ITEM_ID_MAX_CHARS} characters"
+    return ""
+
+
+def _message_content_blocker(content: str) -> str:
+    if len(str(content or "")) > _CHAT_MESSAGE_CONTENT_MAX_CHARS:
+        return f"message content is limited to {_CHAT_MESSAGE_CONTENT_MAX_CHARS} characters"
     return ""
 
 
@@ -1694,6 +1701,9 @@ def api_send_message():
     attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
     if not conversation_id or (not content and not attachments):
         return jsonify({"error": "conversation_id and either content or attachments are required"}), 400
+    content_blocker = _message_content_blocker(content)
+    if content_blocker:
+        return jsonify({"error": f"Invalid message content: {content_blocker}"}), 400
     attachment_blocker = _attachment_payload_blocker(data.get("attachments"))
     if attachment_blocker:
         return jsonify({"error": f"Invalid attachments: {attachment_blocker}"}), 400
@@ -1928,6 +1938,9 @@ def api_send_message_stream():
     attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
     if not conversation_id or (not content and not attachments):
         return jsonify({"error": "conversation_id and either content or attachments are required"}), 400
+    content_blocker = _message_content_blocker(content)
+    if content_blocker:
+        return jsonify({"error": f"Invalid message content: {content_blocker}"}), 400
     attachment_blocker = _attachment_payload_blocker(data.get("attachments"))
     if attachment_blocker:
         return jsonify({"error": f"Invalid attachments: {attachment_blocker}"}), 400

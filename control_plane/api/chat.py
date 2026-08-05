@@ -184,8 +184,10 @@ _MEMORY_PROFILE_RECALL_RE = re.compile(
 _ALLOWED_CONVERSATION_SCOPES = {"global", "project", "bridged"}
 _CHAT_CONTEXT_ITEM_MAX_CHARS = 12000
 _CHAT_CONTEXT_ITEM_ID_MAX_CHARS = 256
+_CHAT_MESSAGE_CONTENT_MAX_CHARS = 120000
 ChatContextItem = Annotated[str, Field(max_length=_CHAT_CONTEXT_ITEM_MAX_CHARS)]
 ChatContextItemId = Annotated[str, Field(min_length=1, max_length=_CHAT_CONTEXT_ITEM_ID_MAX_CHARS)]
+ChatMessageContent = Annotated[str, Field(max_length=_CHAT_MESSAGE_CONTENT_MAX_CHARS)]
 
 
 class CreateConversationRequest(BaseModel):
@@ -350,7 +352,7 @@ class UpdateConversationRouteDefaultsRequest(BaseModel):
 
 
 class PostMessageRequest(BaseModel):
-    content: str
+    content: ChatMessageContent
     bot_id: Optional[str] = None
     user_id: Optional[str] = None
     context_items: Optional[List[ChatContextItem]] = Field(default=None, max_length=50)

@@ -2791,6 +2791,24 @@ def test_chat_message_api_blocks_attachment_count_limit(dashboard_client):
     assert b"maximum is 15 files per message" in resp.data
 
 
+def test_chat_message_api_blocks_oversized_content(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def post_message(self, conversation_id, body):
+            raise AssertionError("oversized content should not reach control plane message send")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "x" * 120001},
+        )
+
+    assert resp.status_code == 400
+    assert b"Invalid message content" in resp.data
+    assert b"limited to 120000 characters" in resp.data
+
+
 def test_chat_message_api_blocks_invalid_context_payload(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -3128,6 +3146,27 @@ def test_chat_stream_api_blocks_attachment_total_size_limit(dashboard_client):
     assert resp.status_code == 400
     assert b"Invalid attachments" in resp.data
     assert b"attachments exceed 1073741824 bytes total" in resp.data
+
+
+def test_chat_stream_api_blocks_oversized_content(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+    def _fake_post(*args, **kwargs):
+        raise AssertionError("oversized stream content should not open an upstream stream request")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={"conversation_id": "c1", "content": "x" * 120001},
+        )
+
+    assert resp.status_code == 400
+    assert b"Invalid message content" in resp.data
+    assert b"limited to 120000 characters" in resp.data
 
 
 def test_chat_stream_api_blocks_invalid_context_payload(dashboard_client):

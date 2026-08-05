@@ -1084,6 +1084,21 @@ async def test_stream_message_blocks_oversized_context_item_id(cp_app):
 
 
 @pytest.mark.anyio
+async def test_stream_message_blocks_oversized_content(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Stream Content Limit"})
+        conversation_id = create_resp.json()["id"]
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "x" * 120001},
+        )
+
+    assert stream_resp.status_code == 422
+    assert "content" in stream_resp.text
+
+
+@pytest.mark.anyio
 async def test_stream_default_model_id_is_attached_to_scheduled_task(cp_app):
     captured_tasks = []
 
@@ -2175,6 +2190,21 @@ async def test_chat_message_blocks_oversized_context_item_text(cp_app):
 
     assert resp.status_code == 422
     assert "context_items" in resp.text
+
+
+@pytest.mark.anyio
+async def test_chat_message_blocks_oversized_content(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        convo = await client.post("/v1/chat/conversations", json={"title": "Content Limit"})
+        conversation_id = convo.json()["id"]
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "x" * 120001},
+        )
+
+    assert resp.status_code == 422
+    assert "content" in resp.text
 
 
 @pytest.mark.anyio
