@@ -3773,6 +3773,47 @@ def test_chat_assignment_preview_api_blocks_unavailable_pm_bot(dashboard_client)
     assert b"PM schedule disabled" in resp.data
 
 
+def test_chat_assignment_create_blocks_invalid_context_payload(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def create_assignment(self, body):
+            raise AssertionError("invalid assignment context should not reach control plane")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/assignments",
+            json={
+                "conversation_id": "c1",
+                "instruction": "Do work",
+                "pm_bot_id": "pm-bot",
+                "context_items": [{"id": "vault-1"}],
+            },
+        )
+
+    assert resp.status_code == 400
+    assert b"Invalid context payload" in resp.data
+    assert b"context_items must contain strings" in resp.data
+
+
+def test_chat_assignment_splice_blocks_invalid_context_payload(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def splice_assignment(self, *args, **kwargs):
+            raise AssertionError("invalid splice context should not reach control plane")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/assignments/assignment-1/splice",
+            json={"from_node_id": "node-1", "context_items": {"id": "vault-1"}},
+        )
+
+    assert resp.status_code == 400
+    assert b"Invalid context payload" in resp.data
+    assert b"context_items must be a list" in resp.data
+
+
 def test_chat_message_api_blocks_unavailable_explicit_bot(dashboard_client):
     _login_admin(dashboard_client)
 

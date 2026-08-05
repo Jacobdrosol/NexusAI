@@ -1793,6 +1793,9 @@ def api_assignment_preview():
         return jsonify({"error": "instruction is required"}), 400
     if not pm_bot_id:
         return jsonify({"error": "pm_bot_id is required"}), 400
+    context_blocker = _context_payload_blocker(data.get("context_items"), None)
+    if context_blocker:
+        return jsonify({"error": f"Invalid context payload: {context_blocker}"}), 400
     cp = get_cp_client()
     readiness_blocker = _bot_readiness_blocker_from_cp(cp, pm_bot_id)
     if readiness_blocker:
@@ -1823,6 +1826,9 @@ def api_create_assignment():
         return jsonify({"error": "instruction is required"}), 400
     if not pm_bot_id:
         return jsonify({"error": "pm_bot_id is required"}), 400
+    context_blocker = _context_payload_blocker(data.get("context_items"), None)
+    if context_blocker:
+        return jsonify({"error": f"Invalid context payload: {context_blocker}"}), 400
     cp = get_cp_client()
     readiness_blocker = _bot_readiness_blocker_from_cp(cp, pm_bot_id)
     if readiness_blocker:
@@ -1859,6 +1865,9 @@ def api_assignment_splice(assignment_id: str):
     from_node_id = str(data.get("from_node_id") or "").strip()
     if not from_node_id:
         return jsonify({"error": "from_node_id is required"}), 400
+    context_blocker = _context_payload_blocker(data.get("context_items"), None)
+    if context_blocker:
+        return jsonify({"error": f"Invalid context payload: {context_blocker}"}), 400
     cp = get_cp_client()
     result = cp.splice_assignment(
         assignment_id,
