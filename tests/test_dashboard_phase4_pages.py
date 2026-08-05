@@ -801,6 +801,8 @@ def test_chat_mobile_layout_uses_a_conversation_drawer():
     assert "function setConversationPanelOpen" in template
     assert "chat-settings-toggle')?.addEventListener" in template
     assert "--chat-font-scale" in css
+    assert "#modal-chat-settings" in css
+    assert "max-height: calc(100dvh - 2rem);" in css
     assert "window.requestAnimationFrame(scrollMessagesToLatest);" in template
     assert "window.addEventListener('load'" in template
 

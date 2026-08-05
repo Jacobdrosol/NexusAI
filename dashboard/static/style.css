@@ -959,6 +959,15 @@ select.form-control {
 
 .chat-settings-modal {
   width: min(100%, 620px);
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+#modal-chat-settings {
+  padding: 1rem;
+  overflow-y: auto;
 }
 
 .chat-font-size-row {
