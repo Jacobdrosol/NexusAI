@@ -131,6 +131,15 @@
             {% if bot.worker_ids %}worker: {{ bot.worker_ids | join(', ') }}{% endif %}
             {% if bot.missing_credential_refs %}missing credentials: {{ bot.missing_credential_refs | join(', ') }}{% endif %}
           </small>
+          {% for worker in bot.workers or [] %}
+          {% if worker.detail or worker.browser_reason %}
+          <small>
+            <code>{{ worker.worker_id }}</code>
+            probe: {{ worker.probe_status }}
+            {% if worker.detail %}{{ worker.detail }}{% elif worker.browser_reason %}Browser session unavailable: {{ worker.browser_reason }}{% endif %}
+          </small>
+          {% endif %}
+          {% endfor %}
           {% if bot.blocking_messages %}
           <small>{{ bot.blocking_messages[0] }}</small>
           {% endif %}
@@ -227,6 +236,16 @@
         {% if b.readiness.state != 'disabled' and b.readiness.failed %}<div class="metrics">{{ b.readiness.failed }} check(s)</div>{% endif %}
         {% if bot_tooling and bot_tooling.recommended_action %}
         <div class="metrics">Action: {{ bot_tooling.recommended_action.label }}</div>
+        {% endif %}
+        {% if bot_tooling and bot_tooling.workers %}
+        {% for worker in bot_tooling.workers[:2] %}
+        {% if worker.detail or worker.browser_reason %}
+        <div class="metrics">
+          {{ worker.worker_id }}: {{ worker.probe_status }}
+          {% if worker.detail %}{{ worker.detail }}{% elif worker.browser_reason %}Browser session unavailable: {{ worker.browser_reason }}{% endif %}
+        </div>
+        {% endif %}
+        {% endfor %}
         {% endif %}
         {% if bot_tooling and bot_tooling.disabled_activation_messages %}
         <div class="metrics">Enable blockers:</div>

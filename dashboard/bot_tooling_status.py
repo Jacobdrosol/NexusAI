@@ -317,6 +317,23 @@ def _probe_status(worker_id: str, probes: dict[str, dict[str, Any]]) -> str:
     return status or "unknown"
 
 
+def _worker_probe_detail(worker_id: str, probes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    probe = probes.get(worker_id) or {}
+    evidence = _as_dict(probe.get("runtime_evidence"))
+    browser = _as_dict(evidence.get("browser"))
+    detail = str(probe.get("detail") or probe.get("message") or probe.get("reason") or "").strip()
+    browser_reason = str(browser.get("reason") or "").strip()
+    if not detail and browser_reason:
+        detail = f"Browser session unavailable: {browser_reason}"
+    return {
+        "detail": detail,
+        "browser_configured": bool(browser.get("configured")),
+        "browser_ready": bool(browser.get("ready")),
+        "browser_name": str(browser.get("browser") or "").strip(),
+        "browser_reason": browser_reason,
+    }
+
+
 def build_bot_tooling_status(
     *,
     bots: list[dict[str, Any]] | None,
@@ -383,12 +400,14 @@ def build_bot_tooling_status(
         worker_statuses = []
         for worker_id in worker_ids:
             worker = workers_lookup.get(worker_id, {})
+            probe_detail = _worker_probe_detail(worker_id, probe_lookup)
             worker_statuses.append(
                 {
                     "worker_id": worker_id,
                     "status": str(worker.get("status") or "missing").strip().lower(),
                     "enabled": bool(worker.get("enabled", False)) if worker else False,
                     "probe_status": _probe_status(worker_id, probe_lookup),
+                    **probe_detail,
                 }
             )
         row_action = _blocking_category_recommended_action(category) if category else {

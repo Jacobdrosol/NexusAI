@@ -142,7 +142,19 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
         ],
         worker_probes_payload={
             "probes": [
-                {"worker_id": "browser-worker", "probe_status": "degraded"},
+                {
+                    "worker_id": "browser-worker",
+                    "probe_status": "degraded",
+                    "detail": "Browser profile exists but site auth check failed.",
+                    "runtime_evidence": {
+                        "browser": {
+                            "configured": True,
+                            "ready": False,
+                            "browser": "chromium",
+                            "reason": "browser_session_check_failed",
+                        }
+                    },
+                },
                 {"worker_id": "llm-worker", "probe_status": "ready"},
             ]
         },
@@ -198,6 +210,8 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert "site account can exist" in groups["browser_session"]["detail"]
     assert groups["browser_session"]["recommended_action"]["label"] == "restore browser session"
     assert groups["browser_session"]["bots"][0]["workers"][0]["probe_status"] == "degraded"
+    assert groups["browser_session"]["bots"][0]["workers"][0]["detail"] == "Browser profile exists but site auth check failed."
+    assert groups["browser_session"]["bots"][0]["workers"][0]["browser_reason"] == "browser_session_check_failed"
     assert groups["bot_policy"]["label"] == "Bot tool policy"
     assert "bot configuration" in groups["bot_policy"]["detail"]
     assert groups["bot_policy"]["recommended_action"]["label"] == "review bot policy"
@@ -318,7 +332,22 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
             return [{"id": "browser-worker", "name": "Browser Worker", "status": "online", "enabled": True}]
 
         def list_worker_probes(self):
-            return {"probes": [{"worker_id": "browser-worker", "probe_status": "degraded"}]}
+            return {
+                "probes": [
+                    {
+                        "worker_id": "browser-worker",
+                        "probe_status": "degraded",
+                        "runtime_evidence": {
+                            "browser": {
+                                "configured": True,
+                                "ready": False,
+                                "browser": "chromium",
+                                "reason": "browser_session_check_failed",
+                            }
+                        },
+                    }
+                ]
+            }
 
         def list_schedules(self, limit=200):
             return {"schedules": []}
@@ -357,6 +386,8 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Recommended action:" in page.data
     assert b"restore browser session" in page.data
     assert b"Action: restore browser session" in page.data
+    assert b"browser-worker: degraded" in page.data
+    assert b"Browser session unavailable: browser_session_check_failed" in page.data
     assert b"Open the worker browser profile" in page.data
     assert b"Missing Workers" in page.data
     assert b"Offline Workers" in page.data
@@ -395,6 +426,8 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert payload["blocked_groups"][0]["label"] == "Authenticated browser session"
     assert payload["blocked_groups"][0]["recommended_action"]["label"] == "restore browser session"
     assert payload["rows"][0]["recommended_action"]["label"] == "restore browser session"
+    assert payload["rows"][0]["workers"][0]["browser_reason"] == "browser_session_check_failed"
+    assert payload["rows"][0]["workers"][0]["detail"] == "Browser session unavailable: browser_session_check_failed"
 
 
 def test_bots_tooling_status_surfaces_partial_control_plane_data(dashboard_client):
