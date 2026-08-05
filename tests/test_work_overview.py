@@ -569,6 +569,14 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                         "last_message_at": "2026-08-05T01:02:03+00:00",
                     }
                 ],
+                "chat_token_governor": {
+                    "enabled": True,
+                    "limits": {
+                        "global_hourly_tokens": 90000,
+                        "bot_hourly_tokens": 12000,
+                        "estimated_tokens_per_message": 3500,
+                    },
+                },
             }
 
     fake = FakeCP()
@@ -663,6 +671,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Planning Chat" in resp.data
     assert b"general-chat" in resp.data
     assert b"2026-08-05T01:02:03+00:00" in resp.data
+    assert b"Chat governor:" in resp.data
+    assert b"global cap 90,000" in resp.data
+    assert b"estimate 3,500" in resp.data
     assert b"No chat token usage" not in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
@@ -746,6 +757,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["chat_usage_brief"]["totals"]["prompt_tokens"] == 30
     assert brief_data["chat_usage_brief"]["top_conversations"][0]["conversation_id"] == "chat-1"
     assert brief_data["chat_usage_brief"]["top_conversations"][0]["last_message_at"] == "2026-08-05T01:02:03+00:00"
+    assert brief_data["chat_token_governor"]["enabled"] is True
+    assert brief_data["chat_token_governor"]["limits"]["global_hourly_tokens"] == 90000
     assert brief_data["usage_brief"]["top_bots"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["project_id"] == "globeiq"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["manager_id"] == "globeiq-pm"

@@ -62,6 +62,7 @@ def _empty_chat_usage_summary() -> dict[str, Any]:
         "by_conversation": [],
         "by_bot": [],
         "by_provider_model": [],
+        "chat_token_governor": {"enabled": False, "limits": {}},
     }
 
 
@@ -94,6 +95,8 @@ def _normalize_chat_usage_summary(summary: Any) -> dict[str, Any]:
     for key in ("by_conversation", "by_bot", "by_provider_model"):
         value = summary.get(key)
         normalized[key] = value if isinstance(value, list) else []
+    governor = summary.get("chat_token_governor")
+    normalized["chat_token_governor"] = governor if isinstance(governor, dict) else {"enabled": False, "limits": {}}
     return normalized
 
 
@@ -678,6 +681,7 @@ def api_work_brief():
             "usage_brief": overview.get("usage_brief") or {},
             "chat_usage_health": overview.get("chat_usage_health") or {},
             "chat_usage_brief": overview.get("chat_usage_brief") or {},
+            "chat_token_governor": (overview.get("chat_usage") or {}).get("chat_token_governor") or {},
             "usage_pressure_lanes": overview.get("usage_pressure_lanes") or [],
             "token_governor_queue_pressure": overview.get("token_governor_queue_pressure") or [],
             "capacity": overview.get("capacity") or {},

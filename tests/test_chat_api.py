@@ -59,6 +59,8 @@ async def test_create_conversation_and_post_message(cp_app):
         assert usage["by_bot"][0]["bot_id"] == "bot-chat"
         assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"
         assert usage["by_provider_model"][0]["model"] == "qwen3.5:397b"
+        assert isinstance(usage["chat_token_governor"]["enabled"], bool)
+        assert "estimated_tokens_per_message" in usage["chat_token_governor"]["limits"]
 
 
 @pytest.mark.anyio
@@ -134,6 +136,80 @@ async def test_chat_default_model_id_is_not_attached_to_explicit_bot_override(cp
         task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
         assert task_arg.metadata is not None
         assert task_arg.metadata.preferred_model_id is None
+
+
+@pytest.mark.anyio
+async def test_chat_token_governor_blocks_global_hourly_limit(cp_app, monkeypatch):
+    from control_plane.api import chat as chat_module
+
+    monkeypatch.setattr(
+        chat_module,
+        "_chat_token_governor_config",
+        lambda: {
+            "enabled": True,
+            "global_hourly_limit": 10,
+            "bot_hourly_limit": 0,
+            "bot_hourly_limits": {},
+            "estimated_tokens_per_message": 20,
+        },
+    )
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "should not run"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Governor"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "hello"},
+        )
+
+        assert post_resp.status_code == 429
+        assert "chat token governor rejected message" in post_resp.text
+        cp_app.state.scheduler.schedule.assert_not_awaited()
+        messages = await cp_app.state.chat_manager.list_messages(conversation_id)
+        assert messages == []
+
+
+@pytest.mark.anyio
+async def test_chat_token_governor_blocks_bot_hourly_limit(cp_app, monkeypatch):
+    from control_plane.api import chat as chat_module
+
+    monkeypatch.setattr(
+        chat_module,
+        "_chat_token_governor_config",
+        lambda: {
+            "enabled": True,
+            "global_hourly_limit": 0,
+            "bot_hourly_limit": 15,
+            "bot_hourly_limits": {"bot-chat-budget": 5},
+            "estimated_tokens_per_message": 8,
+        },
+    )
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "should not run"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Bot Governor"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-chat-budget",
+                "name": "Budgeted Chat Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "hello", "bot_id": "bot-chat-budget"},
+        )
+
+        assert post_resp.status_code == 429
+        assert "bot 'bot-chat-budget'" in post_resp.text
+        cp_app.state.scheduler.schedule.assert_not_awaited()
 
 
 @pytest.mark.anyio

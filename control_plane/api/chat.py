@@ -30,7 +30,7 @@ from shared.chat_attachments import (
 )
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage, Task, TaskMetadata
-from shared.settings_manager import get_context_limits_for_model
+from shared.settings_manager import SettingsManager, get_context_limits_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +218,100 @@ def _normalize_conversation_scope(scope: str) -> str:
     if normalized_scope not in _ALLOWED_CONVERSATION_SCOPES:
         raise HTTPException(status_code=400, detail="scope must be one of: global, project, bridged")
     return normalized_scope
+
+
+def _settings_int(mgr: SettingsManager, key: str) -> int:
+    try:
+        return max(0, int(mgr.get(key, 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _settings_json_dict(mgr: SettingsManager, key: str) -> Dict[str, Any]:
+    raw = mgr.get(key, {})
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _chat_token_governor_config() -> Dict[str, Any]:
+    mgr = SettingsManager()
+    enabled = bool(mgr.get("token_governor_enabled", False))
+    return {
+        "enabled": enabled,
+        "global_hourly_limit": _settings_int(mgr, "token_governor_chat_global_hourly_limit"),
+        "bot_hourly_limit": _settings_int(mgr, "token_governor_chat_bot_hourly_limit"),
+        "bot_hourly_limits": _settings_json_dict(mgr, "token_governor_chat_bot_hourly_limits"),
+        "estimated_tokens_per_message": max(1, _settings_int(mgr, "token_governor_estimated_tokens_per_chat_message") or 4000),
+    }
+
+
+def _chat_bot_hourly_limit(config: Dict[str, Any], bot_id: str) -> int:
+    default_limit = max(0, int(config.get("bot_hourly_limit") or 0))
+    overrides = config.get("bot_hourly_limits") if isinstance(config.get("bot_hourly_limits"), dict) else {}
+    if bot_id in overrides:
+        try:
+            return max(0, int(overrides.get(bot_id) or 0))
+        except (TypeError, ValueError):
+            return default_limit
+    return default_limit
+
+
+async def _validate_chat_token_governor_admission(request: Request, *, bot_id: Optional[str]) -> None:
+    config = _chat_token_governor_config()
+    if not bool(config.get("enabled")):
+        return
+    estimated = max(1, int(config.get("estimated_tokens_per_message") or 4000))
+    global_limit = int(config.get("global_hourly_limit") or 0)
+    bot_key = str(bot_id or "unknown").strip() or "unknown"
+    bot_limit = _chat_bot_hourly_limit(config, bot_key)
+    if global_limit <= 0 and bot_limit <= 0:
+        return
+    chat_manager = request.app.state.chat_manager
+    usage = await chat_manager.summarize_message_usage(hours=1, limit_conversations=250)
+    totals = usage.get("totals") if isinstance(usage.get("totals"), dict) else {}
+    global_used = int(totals.get("total_tokens") or 0)
+    if global_limit > 0 and global_used + estimated > global_limit:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "chat token governor rejected message: hourly chat usage "
+                f"{global_used} plus estimate {estimated} would exceed global limit {global_limit}"
+            ),
+        )
+    if bot_limit > 0:
+        bot_used = 0
+        for row in usage.get("by_bot") or []:
+            if isinstance(row, dict) and str(row.get("bot_id") or "").strip() == bot_key:
+                bot_used = int(row.get("total_tokens") or 0)
+                break
+        if bot_used + estimated > bot_limit:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "chat token governor rejected message for bot "
+                    f"'{bot_key}': hourly chat usage {bot_used} plus estimate {estimated} would exceed limit {bot_limit}"
+                ),
+            )
+
+
+def _chat_token_governor_status() -> Dict[str, Any]:
+    config = _chat_token_governor_config()
+    return {
+        "enabled": bool(config.get("enabled")),
+        "limits": {
+            "global_hourly_tokens": int(config.get("global_hourly_limit") or 0),
+            "bot_hourly_tokens": int(config.get("bot_hourly_limit") or 0),
+            "bot_hourly_token_overrides": dict(config.get("bot_hourly_limits") or {}),
+            "estimated_tokens_per_message": int(config.get("estimated_tokens_per_message") or 4000),
+        },
+    }
 
 
 class UpdateConversationRouteDefaultsRequest(BaseModel):
@@ -3799,7 +3893,9 @@ async def chat_usage_summary(
     limit_conversations: int = Query(default=25, ge=1, le=250),
 ) -> Dict[str, Any]:
     chat_manager = request.app.state.chat_manager
-    return await chat_manager.summarize_message_usage(hours=hours, limit_conversations=limit_conversations)
+    summary = await chat_manager.summarize_message_usage(hours=hours, limit_conversations=limit_conversations)
+    summary["chat_token_governor"] = _chat_token_governor_status()
+    return summary
 
 
 @router.get("/conversations", response_model=List[ChatConversation])
@@ -4118,6 +4214,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         conversation = await chat_manager.get_conversation(conversation_id)
         target_bot_id = body.bot_id or conversation.default_bot_id
         preferred_model_id = _chat_turn_preferred_model_id(conversation, body.bot_id)
+        await _validate_chat_token_governor_admission(request, bot_id=target_bot_id)
         attachments = _attachment_payload_dicts(body.attachments)
         if any(str(item.get("kind") or "") == "image" for item in attachments):
             if not target_bot_id:
@@ -4925,6 +5022,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             conversation = await chat_manager.get_conversation(conversation_id)
             target_bot_id = body.bot_id or conversation.default_bot_id
             preferred_model_id = _chat_turn_preferred_model_id(conversation, body.bot_id)
+            await _validate_chat_token_governor_admission(request, bot_id=target_bot_id)
             attachments = _attachment_payload_dicts(body.attachments)
             if any(str(item.get("kind") or "") == "image" for item in attachments):
                 if not target_bot_id:

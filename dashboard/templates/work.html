@@ -31,6 +31,8 @@
 {% set chat_usage = overview.chat_usage or {} %}
 {% set chat_usage_totals = chat_usage.totals or {} %}
 {% set chat_usage_health = overview.chat_usage_health or {} %}
+{% set chat_governor = chat_usage.chat_token_governor or {} %}
+{% set chat_governor_limits = chat_governor.limits or {} %}
 {% set holds = overview.holds or [] %}
 {% set task_snapshot = overview.task_snapshot or {} %}
 {% set snapshot_health = overview.snapshot_health or {} %}
@@ -382,6 +384,14 @@
         {{ "{:,}".format(chat_usage_totals.messages_without_usage or 0) }} missing usage,
         {{ "{:,}".format(chat_usage_totals.total_tokens or 0) }} total tokens.
         {{ chat_usage_health.reason or "chat usage health unavailable" }}
+        Chat governor:
+        {% if chat_governor.enabled %}
+        enabled, global cap {{ "{:,}".format(chat_governor_limits.global_hourly_tokens or 0) }},
+        bot cap {{ "{:,}".format(chat_governor_limits.bot_hourly_tokens or 0) }},
+        estimate {{ "{:,}".format(chat_governor_limits.estimated_tokens_per_message or 0) }}.
+        {% else %}
+        disabled.
+        {% endif %}
       </div>
       <div class="table-wrap" style="margin-top:0.75rem;">
         <table>

@@ -4794,6 +4794,7 @@ def test_settings_page_loads_for_admin(dashboard_client):
     assert b'data-target="section-token-governor"' in resp.data
     assert b"Token Governor Project Hourly Limit" in resp.data
     assert b"Token Governor Bot Hourly Limits" in resp.data
+    assert b"Token Governor Chat Global Hourly Limit" in resp.data
 
 
 def test_settings_token_governor_api_reports_settings_and_live_status(dashboard_client):
@@ -4827,6 +4828,10 @@ def test_settings_token_governor_api_reports_settings_and_live_status(dashboard_
     assert "token_governor_project_hourly_limit" in keys
     assert "token_governor_manager_hourly_limit" in keys
     assert "token_governor_bot_hourly_limits" in keys
+    assert "token_governor_chat_global_hourly_limit" in keys
+    assert "token_governor_chat_bot_hourly_limit" in keys
+    assert "token_governor_chat_bot_hourly_limits" in keys
+    assert "token_governor_estimated_tokens_per_chat_message" in keys
     assert data["status"]["limits"]["project_hourly_tokens"] == 500
     assert data["status"]["current"]["running_llm_tasks"] == 1
 
@@ -4846,6 +4851,10 @@ def test_settings_token_governor_api_updates_whitelisted_values(dashboard_client
                 "token_governor_project_hourly_limit": "120000",
                 "token_governor_manager_hourly_limit": 30000,
                 "token_governor_bot_hourly_limits": {"audit-reader": "50000"},
+                "token_governor_chat_global_hourly_limit": "90000",
+                "token_governor_chat_bot_hourly_limit": 12000,
+                "token_governor_chat_bot_hourly_limits": {"general-chat": "8000"},
+                "token_governor_estimated_tokens_per_chat_message": "3500",
                 "token_governor_bot_estimates": {"audit-reader": "2500"},
             },
         )
@@ -4857,6 +4866,10 @@ def test_settings_token_governor_api_updates_whitelisted_values(dashboard_client
     assert settings["token_governor_project_hourly_limit"] == "120000"
     assert settings["token_governor_manager_hourly_limit"] == "30000"
     assert json.loads(settings["token_governor_bot_hourly_limits"]) == {"audit-reader": 50000}
+    assert settings["token_governor_chat_global_hourly_limit"] == "90000"
+    assert settings["token_governor_chat_bot_hourly_limit"] == "12000"
+    assert json.loads(settings["token_governor_chat_bot_hourly_limits"]) == {"general-chat": 8000}
+    assert settings["token_governor_estimated_tokens_per_chat_message"] == "3500"
     assert json.loads(settings["token_governor_bot_estimates"]) == {"audit-reader": 2500}
 
 
