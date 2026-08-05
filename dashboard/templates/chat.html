@@ -2192,8 +2192,9 @@ function renderComposerAttachments() {
     const mime = esc(String(attachment?.mime_type || ''));
     const kind = String(attachment?.kind || '').trim().toLowerCase();
     const sizeText = esc(formatAttachmentBytes(attachment?.size_bytes || 0));
-    const preview = kind === 'image' && attachment?.data_url
-      ? `<img class="chat-attachment-chip-preview" src="${esc(String(attachment.data_url))}" alt="${name}">`
+    const dataUrl = String(attachment?.data_url || '').trim();
+    const preview = kind === 'image' && isSafeAttachmentPreviewDataUrl(dataUrl)
+      ? `<img class="chat-attachment-chip-preview" src="${esc(dataUrl)}" alt="${name}">`
       : '';
     return `
       <div class="chat-attachment-chip" title="${name}">

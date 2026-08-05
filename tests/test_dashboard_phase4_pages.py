@@ -3675,6 +3675,7 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b"persistChatComposerStatus(data.memory_effective_warning, 'info')" in resp.data
     assert b"persistChatComposerStatus(created.memory_effective_warning, 'info')" in resp.data
     assert b"replayPersistedChatComposerStatus()" in resp.data
+    assert b"kind === 'image' && isSafeAttachmentPreviewDataUrl(dataUrl)" in resp.data
     assert b"clearAcceptedComposerDraft(form)" in resp.data
     assert b"Response stream finished without a saved assistant message." in resp.data
 
