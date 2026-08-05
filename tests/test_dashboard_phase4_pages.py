@@ -1100,6 +1100,7 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     assert b"Unscoped chat" in resp.data
     assert b"Unscoped" in resp.data
     assert b"project_id=__unscoped__" in resp.data
+    assert b"targetProjectFilter = scope === 'global' ? unscopedProjectFilter" in resp.data
 
 
 def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client):

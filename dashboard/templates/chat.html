@@ -2637,9 +2637,10 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
     return;
   }
   const created = await res.json();
+  const targetProjectFilter = scope === 'global' ? unscopedProjectFilter : (projectId || activeProjectFilter);
   window.location = buildChatUrl({
     conversation_id: created.id,
-    project_id: projectId || activeProjectFilter,
+    project_id: targetProjectFilter,
   });
 });
 
