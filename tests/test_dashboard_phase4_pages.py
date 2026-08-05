@@ -803,6 +803,8 @@ def test_chat_mobile_layout_uses_a_conversation_drawer():
     assert "--chat-font-scale" in css
     assert "#modal-chat-settings" in css
     assert "max-height: calc(100dvh - 2rem);" in css
+    assert "width: min(420px, calc(100vw - 1.5rem));" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
     assert "window.requestAnimationFrame(scrollMessagesToLatest);" in template
     assert "window.addEventListener('load'" in template
 

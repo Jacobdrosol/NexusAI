@@ -2971,6 +2971,7 @@ select.form-control {
 
 .page-chat .app-sidebar {
   flex: 0 0 auto;
+  position: sticky;
   background: #171717;
   border-color: #303030;
 }
@@ -2997,12 +2998,21 @@ select.form-control {
 }
 
 .page-chat .nav-menu {
+  position: absolute;
+  top: calc(100% - 0.35rem);
+  right: 0.75rem;
   display: none;
-  flex: 1 0 100%;
-  width: 100%;
-  align-items: stretch;
-  gap: 0.75rem;
-  padding: 0.25rem 0 0.4rem;
+  width: min(420px, calc(100vw - 1.5rem));
+  max-height: calc(100dvh - 5rem);
+  padding: 0.65rem;
+  overflow-y: auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  background: #1c1c1c;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
+  z-index: 30;
 }
 
 .page-chat .nav-menu.nav-menu-open {
@@ -3011,7 +3021,7 @@ select.form-control {
 
 .page-chat .app-sidebar .nav-section {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.25rem;
 }
 
@@ -3028,10 +3038,17 @@ select.form-control {
 
 .page-chat .app-sidebar .nav-account {
   display: grid;
+  grid-column: 1 / -1;
   margin-left: 0;
   padding: 0.6rem 0.2rem 0;
   border-left: 0;
   border-top: 1px solid var(--line);
+}
+
+@media (max-width: 460px) {
+  .page-chat .nav-menu {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 1050px) {
