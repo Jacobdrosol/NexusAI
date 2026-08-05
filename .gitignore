@@ -40,6 +40,8 @@ worker_node/
 tmp_pm_probe*/
 android/.gradle/
 android/.kotlin/
+android/keystore.properties
+*.jks
 
 # Personal bot configurations — import via UI, never commit
 *.bot.json

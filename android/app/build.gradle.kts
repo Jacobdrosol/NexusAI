@@ -3,6 +3,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val signingStoreFile = providers.environmentVariable("NEXUSAI_ANDROID_STORE_FILE").orNull
+val signingStorePassword = providers.environmentVariable("NEXUSAI_ANDROID_STORE_PASSWORD").orNull
+val signingKeyAlias = providers.environmentVariable("NEXUSAI_ANDROID_KEY_ALIAS").orNull
+val signingKeyPassword = providers.environmentVariable("NEXUSAI_ANDROID_KEY_PASSWORD").orNull
+
 android {
     namespace = "org.nexusai.mobile"
     compileSdk = 36
@@ -22,6 +27,14 @@ android {
 
     buildTypes {
         release {
+            if (signingStoreFile != null && signingStorePassword != null && signingKeyAlias != null && signingKeyPassword != null) {
+                signingConfig = signingConfigs.create("release") {
+                    storeFile = file(signingStoreFile)
+                    storePassword = signingStorePassword
+                    keyAlias = signingKeyAlias
+                    keyPassword = signingKeyPassword
+                }
+            }
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

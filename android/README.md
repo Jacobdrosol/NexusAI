@@ -27,6 +27,16 @@ The app compares these version codes with its installed version. When an update 
 
 Keep the APK URL on HTTPS and retain the same release signing key. A mismatched signature is rejected by Android rather than replacing the app.
 
+## Self-Hosted Release Publishing
+
+The persistent signing material is intentionally stored outside the repository at `%USERPROFILE%\.nexusai\android-release`. Publish without GitHub Actions:
+
+```powershell
+.\scripts\publish-android-release.ps1 -ReleaseTarget 'jacob@your-server:/srv/nexusai/releases/nexusai.apk'
+```
+
+Point `NEXUSAI_MOBILE_ANDROID_RELEASE_URL` at that HTTPS-served file and increase `NEXUSAI_MOBILE_ANDROID_LATEST_VERSION_CODE` for every published build. The app checks after sign-in and on launch, downloads an available update automatically, and asks Android for the one-time NexusAI installer permission if needed.
+
 ## Build
 
 Install Android SDK platform 36 and JDK 17. On Windows PowerShell:

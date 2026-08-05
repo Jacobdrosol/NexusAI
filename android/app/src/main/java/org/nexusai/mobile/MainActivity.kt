@@ -68,6 +68,7 @@ private fun NexusMobileApp(store: InstanceStore) {
             val update = withContext(Dispatchers.IO) { runCatching { apiClient.fetchBootstrap().androidUpdate }.getOrNull() }
             availableUpdate = update?.takeIf { it.latestVersionCode > BuildConfig.VERSION_CODE && it.releaseUrl.isNotBlank() }
             updateRequired = update?.minimumVersionCode?.let { it > BuildConfig.VERSION_CODE } == true
+            availableUpdate?.let { UpdateInstaller(store.context).downloadAndPrompt(it.releaseUrl) }
         }
     }
 
@@ -96,7 +97,14 @@ private fun NexusMobileApp(store: InstanceStore) {
                     loading = true
                     scope.launch {
                         runCatching { withContext(Dispatchers.IO) { apiClient.signIn(email, password) } }
-                            .onSuccess { session = it; status = "" }
+                            .onSuccess {
+                                session = it
+                                status = ""
+                                val update = withContext(Dispatchers.IO) { runCatching { apiClient.fetchBootstrap().androidUpdate }.getOrNull() }
+                                availableUpdate = update?.takeIf { row -> row.latestVersionCode > BuildConfig.VERSION_CODE && row.releaseUrl.isNotBlank() }
+                                updateRequired = update?.minimumVersionCode?.let { row -> row > BuildConfig.VERSION_CODE } == true
+                                availableUpdate?.let { row -> UpdateInstaller(store.context).downloadAndPrompt(row.releaseUrl) }
+                            }
                             .onFailure { status = it.message ?: "Unable to sign in." }
                         loading = false
                     }
