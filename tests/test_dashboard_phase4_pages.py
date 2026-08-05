@@ -2809,6 +2809,40 @@ def test_chat_message_api_blocks_oversized_content(dashboard_client):
     assert b"limited to 120000 characters" in resp.data
 
 
+def test_chat_page_embeds_message_content_client_guard(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "title": "Chat", "project_id": None, "archived": False}]
+
+        def get_conversation(self, conversation_id):
+            return {"id": conversation_id, "title": "Chat", "project_id": None, "archived": False}
+
+        def list_messages(self, conversation_id):
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c1")
+
+    assert resp.status_code == 200
+    assert b"CHAT_MESSAGE_CONTENT_MAX_CHARS = 120000" in resp.data
+    assert b"function chatMessageContentBlocker" in resp.data
+    assert b"Messages are limited to" in resp.data
+
+
 def test_chat_message_api_blocks_invalid_context_payload(dashboard_client):
     _login_admin(dashboard_client)
 

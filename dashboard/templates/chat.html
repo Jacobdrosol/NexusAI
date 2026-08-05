@@ -955,6 +955,7 @@ const chatAttachmentLimits = {{ chat_attachment_limits|tojson }};
 const CHAT_ATTACHMENT_MAX_FILES = Number(chatAttachmentLimits?.max_files || 15);
 const CHAT_ATTACHMENT_MAX_TOTAL_BYTES = Number(chatAttachmentLimits?.max_total_bytes || 1073741824);
 const CHAT_ATTACHMENT_MAX_TEXT_BYTES = 120000;
+const CHAT_MESSAGE_CONTENT_MAX_CHARS = 120000;
 let pendingComposerAttachments = [];
 const taskEventMap = new Map();
 const messageMap = new Map((initialMessages || []).map((m) => [String(m.id), m]));
@@ -1002,6 +1003,13 @@ function showChatComposerStatus(message, kind = 'error') {
 
 function clearChatComposerStatus() {
   showChatComposerStatus('', 'info');
+}
+
+function chatMessageContentBlocker(content) {
+  if (String(content || '').length > CHAT_MESSAGE_CONTENT_MAX_CHARS) {
+    return `Messages are limited to ${CHAT_MESSAGE_CONTENT_MAX_CHARS.toLocaleString()} characters. Attach large text as a file or split it into smaller messages.`;
+  }
+  return '';
 }
 
 function setChatComposerBusy(isBusy) {
@@ -2851,6 +2859,11 @@ async function sendMessage(streamMode) {
   const fd = new FormData(form);
   const content = (fd.get('content') || '').toString().trim();
   if (!content && !pendingComposerAttachments.length) return;
+  const contentBlocker = chatMessageContentBlocker(content);
+  if (contentBlocker) {
+    showChatComposerStatus(contentBlocker);
+    return;
+  }
   const readinessBlocker = activeBotReadinessBlocker();
   if (readinessBlocker) {
     showChatComposerStatus(readinessBlocker);
