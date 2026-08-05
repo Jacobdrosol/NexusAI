@@ -20,7 +20,15 @@ data class AndroidUpdate(
     val releaseUrl: String,
 )
 data class MobileBootstrap(val apiVersion: Int, val androidUpdate: AndroidUpdate)
-data class ChatConversation(val id: String, val title: String, val projectId: String?, val updatedAt: String)
+data class ChatConversation(
+    val id: String,
+    val title: String,
+    val projectId: String?,
+    val memoryEnabled: Boolean,
+    val defaultBotId: String?,
+    val defaultModelId: String?,
+    val updatedAt: String,
+)
 data class ChatMessage(val id: String, val role: String, val content: String, val createdAt: String)
 data class ChatProject(val id: String, val name: String)
 data class ChatRouteOption(val id: String, val name: String)
@@ -293,6 +301,9 @@ private fun JSONObject.toChatConversation() = ChatConversation(
     id = optString("id"),
     title = optString("title", "Untitled chat"),
     projectId = optString("project_id").takeIf { it.isNotBlank() },
+    memoryEnabled = optBoolean("memory_profiles_enabled", true),
+    defaultBotId = optString("default_bot_id").takeIf { it.isNotBlank() },
+    defaultModelId = optString("default_model_id").takeIf { it.isNotBlank() },
     updatedAt = optString("updated_at"),
 )
 

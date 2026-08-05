@@ -21,6 +21,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -125,6 +126,8 @@ private fun ChatApp(
     var loading by remember { mutableStateOf(true) }
     var projectPickerOpen by remember { mutableStateOf(false) }
     var newChatOpen by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    var chatBootstrap by remember { mutableStateOf<ChatBootstrap?>(null) }
 
     fun loadMessages(conversation: ChatConversation) {
         scope.launch {
@@ -186,6 +189,13 @@ private fun ChatApp(
                 status = status,
                 onBack = { selectedConversation = null; messages = emptyList() },
                 onRefresh = { loadMessages(selectedConversation!!) },
+                onSettings = {
+                    scope.launch {
+                        runCatching { withContext(Dispatchers.IO) { api.chatBootstrap() } }
+                            .onSuccess { chatBootstrap = it; settingsOpen = true }
+                            .onFailure { status = it.message ?: "Chat settings are unavailable." }
+                    }
+                },
                 onSend = { content ->
                     loading = true
                     scope.launch {
@@ -215,16 +225,52 @@ private fun ChatApp(
             loading = false
         }
     }
+    if (settingsOpen && selectedConversation != null && chatBootstrap != null) ChatSettingsDialog(
+        conversation = selectedConversation!!,
+        bootstrap = chatBootstrap!!,
+        onDismiss = { settingsOpen = false },
+        onSave = { memoryEnabled, botId, modelId ->
+            scope.launch {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        api.updateMemory(selectedConversation!!.id, memoryEnabled)
+                        api.updateRoute(selectedConversation!!.id, botId, modelId)
+                    }
+                }.onSuccess { updated ->
+                    selectedConversation = updated
+                    conversations = conversations.map { if (it.id == updated.id) updated else it }
+                    settingsOpen = false
+                }.onFailure { status = it.message ?: "Could not save chat settings." }
+            }
+        },
+        onArchive = {
+            scope.launch {
+                runCatching { withContext(Dispatchers.IO) { api.archiveConversation(selectedConversation!!.id) } }
+                    .onSuccess { selectedConversation = null; messages = emptyList(); settingsOpen = false; loadConversations() }
+                    .onFailure { status = it.message ?: "Could not archive chat." }
+            }
+        },
+        onDelete = {
+            scope.launch {
+                runCatching { withContext(Dispatchers.IO) { api.deleteConversation(selectedConversation!!.id) } }
+                    .onSuccess { selectedConversation = null; messages = emptyList(); settingsOpen = false; loadConversations() }
+                    .onFailure { status = it.message ?: "Could not delete chat." }
+            }
+        },
+    )
 }
 
 @Composable
-private fun ConversationScreen(modifier: Modifier, conversation: ChatConversation, messages: List<ChatMessage>, loading: Boolean, status: String, onBack: () -> Unit, onRefresh: () -> Unit, onSend: (String) -> Unit) {
+private fun ConversationScreen(modifier: Modifier, conversation: ChatConversation, messages: List<ChatMessage>, loading: Boolean, status: String, onBack: () -> Unit, onRefresh: () -> Unit, onSettings: () -> Unit, onSend: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Button(onClick = onBack) { Text("Chats") }
         Text(conversation.title, style = MaterialTheme.typography.titleMedium)
-        Button(onClick = onRefresh) { Text("Refresh") }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Button(onClick = onRefresh) { Text("Refresh") }
+            Button(onClick = onSettings) { Text("Settings") }
+        }
     }
     LazyColumn(Modifier.fillMaxWidth().height(360.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(messages) { message ->
@@ -238,6 +284,39 @@ private fun ConversationScreen(modifier: Modifier, conversation: ChatConversatio
     Button(enabled = !loading && draft.isNotBlank(), onClick = { onSend(draft.trim()); draft = "" }, modifier = Modifier.fillMaxWidth()) { Text(if (loading) "Sending…" else "Send") }
     if (status.isNotBlank()) Text(status, color = MaterialTheme.colorScheme.error)
     }
+}
+
+@Composable
+private fun ChatSettingsDialog(conversation: ChatConversation, bootstrap: ChatBootstrap, onDismiss: () -> Unit, onSave: (Boolean, String?, String?) -> Unit, onArchive: () -> Unit, onDelete: () -> Unit) {
+    var memoryEnabled by remember { mutableStateOf(conversation.memoryEnabled) }
+    var botId by remember { mutableStateOf(conversation.defaultBotId.orEmpty()) }
+    var modelId by remember { mutableStateOf(conversation.defaultModelId.orEmpty()) }
+    var deleteConfirmation by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Chat settings") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Use memory")
+                    Switch(checked = memoryEnabled, onCheckedChange = { memoryEnabled = it })
+                }
+                Text("Bot ID", style = MaterialTheme.typography.labelMedium)
+                OutlinedTextField(value = botId, onValueChange = { botId = it }, modifier = Modifier.fillMaxWidth(), supportingText = { Text(bootstrap.bots.joinToString { it.id }) })
+                Text("Model ID", style = MaterialTheme.typography.labelMedium)
+                OutlinedTextField(value = modelId, onValueChange = { modelId = it }, modifier = Modifier.fillMaxWidth(), supportingText = { Text(bootstrap.models.joinToString { it.id }) })
+                Button(onClick = onArchive, modifier = Modifier.fillMaxWidth()) { Text("Archive chat") }
+                Button(onClick = { deleteConfirmation = true }, modifier = Modifier.fillMaxWidth()) { Text("Delete chat") }
+                if (deleteConfirmation) Text("Delete is permanent. Tap Delete chat again to confirm.", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (deleteConfirmation) onDelete() else onSave(memoryEnabled, botId.ifBlank { null }, modelId.ifBlank { null })
+            }) { Text(if (deleteConfirmation) "Delete chat" else "Save") }
+        },
+        dismissButton = { Button(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
