@@ -3031,3 +3031,18 @@ select.form-control {
     padding-left: 0;
   }
 }
+
+/* Keep the chat transcript inside the mobile viewport. This follows the
+ * application-shell responsive rules above, which otherwise reset its height
+ * to auto and let a long conversation expand the whole document. */
+@media (max-width: 900px) {
+  .page-chat .app-shell {
+    height: 100dvh;
+  }
+
+  .page-chat .app-main {
+    height: auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+}

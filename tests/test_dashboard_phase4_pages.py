@@ -781,6 +781,11 @@ def test_chat_mobile_layout_uses_a_conversation_drawer():
     assert ".page-chat .chat-panel-side" in css
     assert "chat-mobile-conversations-open" in css
     assert "transform: translateX(-105%);" in css
+    final_mobile_rules = css[css.rfind("@media (max-width: 900px)"):]
+    assert ".page-chat .app-shell" in final_mobile_rules
+    assert "height: 100dvh;" in final_mobile_rules
+    assert ".page-chat .app-main" in final_mobile_rules
+    assert "overflow: hidden;" in final_mobile_rules
     assert "height: 100dvh;" in css
 
     template = Path("dashboard/templates/chat.html").read_text(encoding="utf-8")
