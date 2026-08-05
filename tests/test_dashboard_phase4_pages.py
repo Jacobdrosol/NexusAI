@@ -989,9 +989,11 @@ def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_cli
     assert b'id="create-convo-default-bot-id"' in resp.data
     assert b'id="create-convo-default-model-id"' in resp.data
     assert b'id="create-convo-bot-summary"' in resp.data
+    assert b'id="create-convo-model-summary"' in resp.data
     assert b'id="create-convo-tool-summary"' in resp.data
     assert b"Vision Math Tutor (personal-vision-math-tutor)" in resp.data
     assert b"function botCapabilitySummaryText" in resp.data
+    assert b"function createConversationModelSummaryText" in resp.data
     assert b"updateCreateConversationBotSummary" in resp.data
     assert b"function botCapabilityLabelText" in resp.data
     assert b"Homework and engineering help" in resp.data
@@ -999,6 +1001,7 @@ def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_cli
     assert b"physics reasoning" in resp.data
     assert b"engineering reasoning" in resp.data
     assert b"route warning" in resp.data
+    assert b"Selected model:" in resp.data
     assert b"Default model provider" in resp.data
     assert b"Workspace tools require a project-scoped chat." in resp.data
     assert b"scopedToolAccessAllowed" in resp.data

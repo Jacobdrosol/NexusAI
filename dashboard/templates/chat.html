@@ -860,7 +860,7 @@
           {% endif %}
           {% endfor %}
         </select>
-        <p class="mini-note">Leave as bot default unless this chat needs a specific backend model.</p>
+        <p class="mini-note" id="create-convo-model-summary">Bot default model. Select a model only when this chat needs a specific backend route.</p>
       </div>
       <div class="form-group">
         <label>Personal Memory</label>
@@ -1960,12 +1960,26 @@ function botCapabilitySummaryText(bot, modelId = '') {
   return `${bot.name || bot.id}: ${usePrefix}${profileLabel}; ${capabilityLabel}; ${modelSource} ${[provider, model].filter(Boolean).join(' / ') || 'model unknown'}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}${routeWarning}.`;
 }
 
+function createConversationModelSummaryText(modelId = '') {
+  const safeModelId = String(modelId || '').trim();
+  if (!safeModelId) return 'Bot default model. Select a model only when this chat needs a specific backend route.';
+  const model = modelCatalogEntryById(safeModelId);
+  if (!model) return 'Selected model is not available. Pick an enabled model or leave this as bot default.';
+  const provider = String(model.provider || '').trim() || 'provider unknown';
+  const modelName = String(model.name || model.id || '').trim() || safeModelId;
+  const capabilities = modelCatalogCapabilities(model);
+  const capabilityLabel = capabilities.length ? `capabilities ${capabilities.join(', ')}` : 'capabilities unspecified';
+  const imageLabel = modelSupportsImages(provider, modelName, capabilities) ? 'images supported' : 'text only';
+  return `Selected model: ${provider} / ${modelName}; ${capabilityLabel}; ${imageLabel}.`;
+}
+
 function updateCreateConversationBotSummary() {
   const summary = document.getElementById('create-convo-bot-summary');
-  if (!summary) return;
   const botId = String(document.getElementById('create-convo-default-bot-id')?.value || '').trim();
   const modelId = String(document.getElementById('create-convo-default-model-id')?.value || '').trim();
-  summary.textContent = botCapabilitySummaryText(chatBotById(botId), modelId);
+  if (summary) summary.textContent = botCapabilitySummaryText(chatBotById(botId), modelId);
+  const modelSummary = document.getElementById('create-convo-model-summary');
+  if (modelSummary) modelSummary.textContent = createConversationModelSummaryText(modelId);
 }
 
 function _chatGateCheckboxValue(id, fallback) {
