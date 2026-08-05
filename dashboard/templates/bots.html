@@ -215,6 +215,9 @@
         {% if b.readiness %}
         <span class="badge badge-{{ b.readiness.state }}" title="{{ b.readiness.detail }}">{{ b.readiness.state }}</span>
         {% if b.readiness.state != 'disabled' and b.readiness.failed %}<div class="metrics">{{ b.readiness.failed }} check(s)</div>{% endif %}
+        {% if bot_tooling and bot_tooling.recommended_action %}
+        <div class="metrics">Action: {{ bot_tooling.recommended_action.label }}</div>
+        {% endif %}
         {% if bot_tooling and bot_tooling.disabled_activation_messages %}
         <div class="metrics">Enable blockers:</div>
         {% for message in bot_tooling.disabled_activation_messages[:2] %}

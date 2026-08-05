@@ -174,6 +174,8 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     browser_row = next(row for row in status["rows"] if row["bot_id"] == "browser-bot")
     assert browser_row["browser_actions"] == ["question_bank.patch_existing"]
     assert browser_row["browser_owner_approval_actions"] == ["question_bank.patch_existing"]
+    assert browser_row["blocking_category_view"]["label"] == "Authenticated browser session"
+    assert browser_row["recommended_action"]["label"] == "restore browser session"
     connection_row = next(row for row in status["rows"] if row["bot_id"] == "connection-bot")
     assert connection_row["connection_actions"] == ["globeiq-agent-api.updateLesson"]
     assert connection_row["owner_approval_actions"] == ["globeiq-agent-api.updateLesson"]
@@ -182,6 +184,7 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert connection_row["credential_refs"] == ["GLOBEIQ_AGENT_TOKEN"]
     raw_secret_row = next(row for row in status["rows"] if row["bot_id"] == "raw-secret-bot")
     assert raw_secret_row["credential_refs"] == ["[redacted raw credential]"]
+    assert raw_secret_row["recommended_action"]["label"] == "continue"
     disabled_row = next(row for row in status["rows"] if row["bot_id"] == "disabled-bot")
     assert disabled_row["disabled_activation_messages"] == ["Model 'offline-model' is not present/enabled in the model catalog."]
     groups = {group["category"]: group for group in status["blocked_groups"]}
@@ -306,6 +309,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"setBotTableFilter('disabled-needs-fix')" in page.data
     assert b"Recommended action:" in page.data
     assert b"restore browser session" in page.data
+    assert b"Action: restore browser session" in page.data
     assert b"Open the worker browser profile" in page.data
     assert b"Missing Workers" in page.data
     assert b"Offline Workers" in page.data
@@ -342,6 +346,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert payload["blocked_groups"][0]["category"] == "browser_session"
     assert payload["blocked_groups"][0]["label"] == "Authenticated browser session"
     assert payload["blocked_groups"][0]["recommended_action"]["label"] == "restore browser session"
+    assert payload["rows"][0]["recommended_action"]["label"] == "restore browser session"
 
 
 def test_bots_tooling_status_surfaces_partial_control_plane_data(dashboard_client):

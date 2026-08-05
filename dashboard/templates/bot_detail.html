@@ -94,10 +94,21 @@
     </div>
     <span class="badge badge-{{ tooling.state or 'unknown' }}">{{ tooling.state or 'unknown' }}</span>
   </div>
+  {% set tooling_action = tooling.recommended_action or {} %}
+  <div class="state-info" style="margin-bottom:0.75rem;">
+    Recommended action:
+    <span class="badge {% if tooling_action.level == 'critical' %}badge-failed{% elif tooling_action.level == 'warning' %}badge-yellow{% elif tooling_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
+      {{ tooling_action.label or 'inspect bot' }}
+    </span>
+    {{ tooling_action.detail or 'Open readiness checks before assigning work.' }}
+  </div>
   <div class="split-grid" style="grid-template-columns:repeat(auto-fit, minmax(13rem, 1fr)); gap:0.75rem;">
     <div>
       <div class="mini-note">Blocker Category</div>
-      <strong>{{ tooling.blocking_category | replace('_', ' ') if tooling.blocking_category else 'none' }}</strong>
+      <strong>{{ tooling.blocking_category_view.label if tooling.blocking_category_view else (tooling.blocking_category | replace('_', ' ') if tooling.blocking_category else 'none') }}</strong>
+      {% if tooling.blocking_category_view and tooling.blocking_category_view.detail %}
+      <div class="mini-note">{{ tooling.blocking_category_view.detail }}</div>
+      {% endif %}
     </div>
     <div>
       <div class="mini-note">Required Worker Tools</div>

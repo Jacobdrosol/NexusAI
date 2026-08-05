@@ -354,6 +354,12 @@ def build_bot_tooling_status(
                     "probe_status": _probe_status(worker_id, probe_lookup),
                 }
             )
+        row_action = _blocking_category_recommended_action(category) if category else {
+            "label": "continue",
+            "level": "ready",
+            "detail": "No blocking tooling readiness issue is currently reported for this bot.",
+        }
+        row_category_view = _blocking_category_view(category) if category else {"label": "None", "detail": ""}
 
         row = {
             "bot_id": bot_id,
@@ -373,6 +379,8 @@ def build_bot_tooling_status(
             "worker_ids": worker_ids,
             "workers": worker_statuses,
             "blocking_category": category,
+            "blocking_category_view": row_category_view,
+            "recommended_action": row_action,
             "blocking_messages": messages[:4],
             "disabled_activation_messages": disabled_activation_messages[:4],
         }

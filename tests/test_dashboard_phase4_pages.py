@@ -2276,6 +2276,9 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"Chat Profile" in resp.data
     assert b"Operating Summary" in resp.data
     assert b"Tooling Readiness" in resp.data
+    assert b"Recommended action:" in resp.data
+    assert b"continue" in resp.data
+    assert b"No blocking tooling readiness issue is currently reported for this bot." in resp.data
     assert b"scheduled" in resp.data
     assert b"ready" in resp.data
     assert b"1 active / 0 paused" in resp.data
