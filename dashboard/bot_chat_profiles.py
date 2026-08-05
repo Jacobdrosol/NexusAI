@@ -30,10 +30,15 @@ def bot_chat_tool_access(bot: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = routing.get("tool_access") if isinstance(routing, dict) else None
     cfg = raw if isinstance(raw, dict) else {}
+    enabled = bool(cfg.get("enabled", False))
+    filesystem = bool(cfg.get("filesystem", False)) if enabled else False
+    repo_search = bool(cfg.get("repo_search", False)) if enabled else False
+    mode_error = "no enabled tool mode" if enabled and not (filesystem or repo_search) else ""
     return {
-        "enabled": bool(cfg.get("enabled", False)),
-        "filesystem": bool(cfg.get("filesystem", False)),
-        "repo_search": bool(cfg.get("repo_search", False)),
+        "enabled": enabled,
+        "filesystem": filesystem,
+        "repo_search": repo_search,
+        "mode_error": mode_error,
     }
 
 
@@ -108,6 +113,8 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         use_label = "Workflow worker"
     elif autonomy == "scheduled_worker":
         use_label = "Scheduled worker"
+    elif bool(tool_access.get("mode_error")):
+        use_label = "Tool policy incomplete"
     elif bool(tool_access.get("enabled", False)) or str(policy.get("repo_output_mode") or "").strip().lower() == "allow":
         use_label = "Tool-enabled chat"
     elif autonomy == "manual_chat_only":
@@ -120,7 +127,11 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         "description": str(profile.get("description") or "").strip(),
         "capabilities": capabilities,
         "tool_access": tool_access,
-        "tool_label": ", ".join(tool_labels) if bool(tool_access.get("enabled", False)) else "off",
+        "tool_label": (
+            ", ".join(tool_labels)
+            if bool(tool_access.get("enabled", False)) and tool_labels
+            else (str(tool_access.get("mode_error") or "").strip() or "off")
+        ),
         "autonomy": autonomy,
         "use_label": use_label,
         "repo_output_mode": str(policy.get("repo_output_mode") or "deny").strip().lower(),

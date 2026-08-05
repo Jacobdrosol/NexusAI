@@ -491,7 +491,7 @@ def _bot_detail_operating_summary(
         "chat_tool_label": (
             ", ".join(tool_modes)
             if bool(chat_tools.get("enabled", False)) and tool_modes
-            else ("enabled" if bool(chat_tools.get("enabled", False)) else "off")
+            else (str(chat_tools.get("mode_error") or "").strip() or "off")
         ),
         "memory_enabled": bool(bot.get("memory_profiles_enabled", False)),
     }

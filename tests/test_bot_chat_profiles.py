@@ -25,6 +25,39 @@ def test_bot_chat_profile_identifies_manual_coding_tool_gates():
     assert "inline_coding_default" in profile["capabilities"]
 
 
+def test_bot_chat_profile_normalizes_disabled_and_mode_less_tool_access():
+    disabled = bot_chat_profile(
+        {
+            "routing_rules": {
+                "chat_tool_access": {"enabled": False, "filesystem": True, "repo_search": True},
+                "operator_profile": {"autonomy": "manual_chat_only"},
+            }
+        }
+    )
+    incomplete = bot_chat_profile(
+        {
+            "routing_rules": {
+                "chat_tool_access": {"enabled": True, "filesystem": False, "repo_search": False},
+                "operator_profile": {"autonomy": "manual_chat_only"},
+            }
+        }
+    )
+
+    assert disabled["tool_access"] == {
+        "enabled": False,
+        "filesystem": False,
+        "repo_search": False,
+        "mode_error": "",
+    }
+    assert disabled["tool_label"] == "off"
+    assert "filesystem" not in disabled["capabilities"]
+    assert "repo_search" not in disabled["capabilities"]
+    assert incomplete["tool_access"]["enabled"] is True
+    assert incomplete["tool_access"]["mode_error"] == "no enabled tool mode"
+    assert incomplete["tool_label"] == "no enabled tool mode"
+    assert incomplete["use_label"] == "Tool policy incomplete"
+
+
 def test_with_bot_chat_profiles_preserves_bot_fields_and_adds_profile():
     rows = with_bot_chat_profiles(
         [

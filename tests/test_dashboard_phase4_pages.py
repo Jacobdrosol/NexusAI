@@ -7512,6 +7512,22 @@ def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
                     },
                 },
                 {
+                    "id": "incomplete-tool-bot",
+                    "name": "Incomplete Tool Bot",
+                    "role": "assistant",
+                    "enabled": True,
+                    "backends": [],
+                    "routing_rules": {
+                        "chat_tool_access": {
+                            "enabled": True,
+                            "filesystem": False,
+                            "repo_search": False,
+                        },
+                        "operator_profile": {"autonomy": "manual_chat_only"},
+                    },
+                    "execution_policy": {"repo_output_mode": "deny"},
+                },
+                {
                     "id": "scheduled-worker",
                     "name": "Scheduled Worker",
                     "role": "worker",
@@ -7561,10 +7577,12 @@ def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
     assert b"repo_output" in resp.data
     assert b"Use: Manual chat" in resp.data
     assert b"Use: Tool-enabled chat" in resp.data
+    assert b"Use: Tool policy incomplete" in resp.data
     assert b"Use: Scheduled worker" in resp.data
     assert b"Use: Project manager" in resp.data
     assert b"Autonomy: manual_chat_only" in resp.data
     assert b"Chat tools: off" in resp.data
+    assert b"Chat tools: no enabled tool mode" in resp.data
     assert b"Chat tools: filesystem, repo_search" in resp.data
     assert b"Repo output: allow" in resp.data
 
