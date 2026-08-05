@@ -1140,6 +1140,10 @@ def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client)
                             "model": "qwen3.5:397b",
                             "source": "bot_config",
                         },
+                        "usage": {
+                            "prompt_tokens": 1234,
+                            "completion_tokens": 456,
+                        },
                     },
                 }
             ]
@@ -1163,7 +1167,9 @@ def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client)
     assert b"message-provenance" in resp.data
     assert b"Personal General Chat" in resp.data
     assert b"ollama_cloud / qwen3.5:397b" in resp.data
+    assert b"1,690 tokens (1,234 in / 456 out)" in resp.data
     assert b"bot updated 2026-08-04 12:34:56" in resp.data
+    assert b"function formatMessageUsageLabel" in resp.data
 
 
 def test_chat_page_handles_conversation_list_error_gracefully(dashboard_client):

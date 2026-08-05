@@ -487,10 +487,15 @@
         {% set bot_label = bot_meta.get('name') or bot_meta.get('id') or m.bot_id %}
         {% set provider_label = model_meta.get('provider') or m.provider %}
         {% set model_label = model_meta.get('model') or m.model %}
-        {% if m.role == 'assistant' and (bot_label or provider_label or model_label) %}
+        {% set usage_meta = m.metadata.get('usage') if m.metadata and m.metadata.get('usage') else {} %}
+        {% set usage_prompt = usage_meta.get('prompt_tokens') or 0 %}
+        {% set usage_completion = usage_meta.get('completion_tokens') or 0 %}
+        {% set usage_total = usage_meta.get('total_tokens') or (usage_prompt + usage_completion) %}
+        {% if m.role == 'assistant' and (bot_label or provider_label or model_label or usage_total) %}
         <div class="message-provenance">
           {% if bot_label %}<span>{{ bot_label }}</span>{% endif %}
           {% if provider_label or model_label %}<span>{{ provider_label }}{% if provider_label and model_label %} / {% endif %}{{ model_label }}</span>{% endif %}
+          {% if usage_total %}<span>{{ "{:,}".format(usage_total) }} tokens{% if usage_prompt or usage_completion %} ({{ "{:,}".format(usage_prompt) }} in / {{ "{:,}".format(usage_completion) }} out){% endif %}</span>{% endif %}
           {% if bot_meta.get('updated_at') %}<span>bot updated {{ (bot_meta.get('updated_at')[:19]) | replace('T', ' ') }}</span>{% endif %}
         </div>
         {% endif %}
@@ -1286,9 +1291,25 @@ function renderMessageProvenanceHtml(message) {
     const providerModel = provider && modelName ? `${provider} / ${modelName}` : (provider || modelName);
     parts.push(`<span>${esc(providerModel)}</span>`);
   }
+  const usageLabel = formatMessageUsageLabel(meta.usage);
+  if (usageLabel) parts.push(`<span>${esc(usageLabel)}</span>`);
   if (botUpdatedAt) parts.push(`<span>bot updated ${esc(botUpdatedAt.slice(0, 19).replace('T', ' '))}</span>`);
   if (!parts.length) return '';
   return `<div class="message-provenance">${parts.join('')}</div>`;
+}
+
+function formatMessageUsageLabel(usage) {
+  if (!usage || typeof usage !== 'object') return '';
+  const prompt = Number(usage.prompt_tokens || 0);
+  const completion = Number(usage.completion_tokens || 0);
+  const rawTotal = Number(usage.total_tokens || 0);
+  const total = rawTotal > 0 ? rawTotal : prompt + completion;
+  if (!Number.isFinite(total) || total <= 0) return '';
+  const totalLabel = `${Math.trunc(total).toLocaleString()} tokens`;
+  if ((Number.isFinite(prompt) && prompt > 0) || (Number.isFinite(completion) && completion > 0)) {
+    return `${totalLabel} (${Math.trunc(prompt || 0).toLocaleString()} in / ${Math.trunc(completion || 0).toLocaleString()} out)`;
+  }
+  return totalLabel;
 }
 
 function renderAssignmentContextHtml(meta) {
