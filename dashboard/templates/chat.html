@@ -1051,7 +1051,11 @@ let serverEffectiveContextRefreshController = null;
 function scrollMessagesToLatest() {
   const container = document.getElementById('messages');
   if (!container) return;
-  container.scrollTop = container.scrollHeight;
+  const scroll = () => {
+    container.scrollTop = container.scrollHeight;
+  };
+  scroll();
+  window.requestAnimationFrame(scroll);
 }
 
 function isMessagesNearBottom(offset = 160) {
@@ -4471,6 +4475,9 @@ document.querySelectorAll('#messages .message').forEach((messageEl) => {
 applyConversationProjectFilter();
 if (preselectedChatBotId && !selectedConversationId) showCreateConversation();
 window.requestAnimationFrame(scrollMessagesToLatest);
+window.addEventListener('load', () => {
+  window.requestAnimationFrame(scrollMessagesToLatest);
+}, {once: true});
 </script>
 {% endblock %}
 

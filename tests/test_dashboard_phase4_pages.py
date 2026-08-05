@@ -787,6 +787,8 @@ def test_chat_mobile_layout_uses_a_conversation_drawer():
     assert 'id="chat-mobile-conversations-toggle"' in template
     assert 'id="chat-conversation-panel"' in template
     assert "function setMobileConversationDrawerOpen" in template
+    assert "window.requestAnimationFrame(scrollMessagesToLatest);" in template
+    assert "window.addEventListener('load'" in template
 
 
 def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client):
