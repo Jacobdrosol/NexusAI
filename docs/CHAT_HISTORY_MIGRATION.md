@@ -68,6 +68,21 @@ Each imported message should preserve:
    - memory profile pages do not include imported messages until the owner enables memory training for selected chats
 7. Enable memory selectively only after manual review or a dedicated memory-extraction pass.
 
+## Ready-To-Import Gate
+
+Do not run a real import until every item in this gate is true:
+
+- The normalized manifest has passed `scripts/validate_chat_import_manifest.py` with zero blockers.
+- The approved project list was generated from the current NexusAI project inventory, not inferred from source chat titles alone.
+- Every conversation has an owner user, source platform, stable source conversation ID, privacy scope, and reviewed project mapping or explicit unscoped/archive decision.
+- All conversations have `memory_profiles_enabled=false` and all tool-access flags false.
+- Unsupported executable, script, shell, archive, or unknown binary attachments are marked `metadata_only` or `skip`, not `import` or `review`.
+- Secret scan findings are either resolved by redaction or the affected conversation/message is excluded from import.
+- The operator has reviewed a sample from each source platform and each destination scope before approving the batch.
+- The import plan includes a rollback identifier or import batch ID so imported conversations can be found and disabled or deleted as a group.
+
+After import, do not turn on memory in bulk. Memory candidates should be generated in a separate reviewed pass and inserted as editable memory items only after the owner accepts them.
+
 ## Operator Staging Layout
 
 Keep raw exports and generated import plans outside this repository. Recommended layout:
