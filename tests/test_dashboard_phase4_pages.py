@@ -3029,6 +3029,66 @@ def test_bot_detail_page_redacts_raw_backend_credential_refs(dashboard_client):
     assert b"configure vault key" in resp.data
 
 
+def test_bot_detail_page_disables_saved_launch_for_disabled_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Disabled Launch Bot",
+                "role": "assistant",
+                "enabled": False,
+                "backends": [],
+                "routing_rules": {
+                    "launch_profile": {
+                        "enabled": True,
+                        "label": "Run Disabled Workflow",
+                        "payload": {"instruction": "should not queue"},
+                    }
+                },
+                "execution_policy": {},
+            }
+
+        def get_bot_readiness(self, bot_id):
+            return {"bot_id": bot_id, "state": "disabled", "ready": False, "checks": []}
+
+        def get_bot_dependencies(self, bot_id):
+            return {"schedule_references": [], "workflow_references": [], "can_disable": True, "can_delete": True}
+
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_bot_runs(self, bot_id, **kwargs):
+            return []
+
+        def list_bot_artifacts(self, bot_id, **kwargs):
+            return []
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_models(self):
+            return []
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/bots/disabled-launch-bot")
+
+    assert resp.status_code == 200
+    assert b"Disabled Launch Bot" in resp.data
+    assert b"Launch gate:" in resp.data
+    assert b"Run Disabled Workflow" in resp.data
+    assert b"Payload keys: instruction" in resp.data
+    assert b'id="queue-saved-launch-btn"' in resp.data
+    assert b"disabled" in resp.data
+
+
 def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
     _login_admin(dashboard_client)
 

@@ -269,7 +269,8 @@
     {% endif %}
   </div>
   {% if readiness %}
-  <div class="mini-note" style="margin-bottom:0.75rem;">{{ readiness.summary.checks }} checks, {{ readiness.summary.blocking | default(readiness.summary.failed) }} blocking, {{ readiness.summary.warnings }} warnings.</div>
+  {% set readiness_summary = readiness.summary if readiness.summary else {} %}
+  <div class="mini-note" style="margin-bottom:0.75rem;">{{ readiness_summary.checks | default(0) }} checks, {{ readiness_summary.blocking | default(readiness_summary.failed | default(0)) }} blocking, {{ readiness_summary.warnings | default(0) }} warnings.</div>
   <table>
     <thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead>
     <tbody>
@@ -777,7 +778,7 @@
         class="btn"
         id="queue-saved-launch-btn"
         onclick="queueSavedLaunch()"
-        {% if tooling.state == 'blocked' %}disabled title="{{ (tooling_action.detail or 'Resolve tooling readiness before queueing this saved launch.')|e }}"{% endif %}
+        {% if tooling.state in ['blocked', 'disabled'] %}disabled title="{{ (tooling_action.detail or 'Resolve tooling readiness before queueing this saved launch.')|e }}"{% endif %}
       >Queue Saved Launch</button>
       <button class="btn btn-primary" onclick="saveLaunchProfile()">Save Launch Profile</button>
     </div>
