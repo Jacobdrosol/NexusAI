@@ -60,6 +60,7 @@ def _empty_chat_usage_summary() -> dict[str, Any]:
             "total_tokens": 0,
         },
         "by_conversation": [],
+        "by_project": [],
         "by_bot": [],
         "by_provider_model": [],
         "chat_token_governor": {"enabled": False, "limits": {}},
@@ -92,7 +93,7 @@ def _normalize_chat_usage_summary(summary: Any) -> dict[str, Any]:
     totals = summary.get("totals")
     if isinstance(totals, dict):
         normalized["totals"] = {**normalized["totals"], **totals}
-    for key in ("by_conversation", "by_bot", "by_provider_model"):
+    for key in ("by_conversation", "by_project", "by_bot", "by_provider_model"):
         value = summary.get(key)
         normalized[key] = value if isinstance(value, list) else []
     governor = summary.get("chat_token_governor")
@@ -479,6 +480,7 @@ def _chat_usage_brief(chat_usage: dict[str, Any], *, limit: int = 5) -> dict[str
             "total_tokens": _safe_count(totals, "total_tokens"),
         },
         "top_conversations": _top_rows("by_conversation"),
+        "top_projects": _top_rows("by_project"),
         "top_bots": _top_rows("by_bot"),
         "top_provider_models": _top_rows("by_provider_model"),
         "provider_model_attribution": _provider_model_attribution_health(chat_usage, unit_label="chat"),

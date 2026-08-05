@@ -953,6 +953,8 @@ class ChatManager:
             "unknown_total_messages": 0,
         }
         by_conversation: Dict[str, Dict[str, Any]] = {}
+        by_project: Dict[str, Dict[str, Any]] = {}
+        project_conversations: Dict[str, set[str]] = {}
         by_bot: Dict[str, Dict[str, Any]] = {}
         by_provider_model: Dict[str, Dict[str, Any]] = {}
 
@@ -1056,22 +1058,30 @@ class ChatManager:
                 if model == "unknown":
                     model = str(metadata_model.get("model") or "unknown").strip() or "unknown"
             created_at = str(row["created_at"] or "")
+            project_id = str(row["project_id"] or "").strip()
+            project_key = project_id or "unscoped"
+            scope = str(row["scope"] or "global").strip() or "global"
             conv_bucket = by_conversation.setdefault(
                 conversation_id,
                 _new_bucket(
                     conversation_id=conversation_id,
                     conversation_title=str(row["conversation_title"] or conversation_id),
-                    project_id=str(row["project_id"] or "").strip() or None,
-                    scope=str(row["scope"] or "global").strip() or "global",
+                    project_id=project_id or None,
+                    scope=scope,
                 ),
             )
+            project_bucket = by_project.setdefault(
+                project_key,
+                _new_bucket(project_id=project_id or None, scope="unscoped" if not project_id else scope),
+            )
+            project_conversations.setdefault(project_key, set()).add(conversation_id)
             bot_bucket = by_bot.setdefault(bot_id, _new_bucket(bot_id=bot_id))
             provider_model_key = f"{provider}::{model}"
             provider_model_bucket = by_provider_model.setdefault(
                 provider_model_key,
                 _new_bucket(provider=provider, model=model),
             )
-            for bucket in (conv_bucket, bot_bucket, provider_model_bucket):
+            for bucket in (conv_bucket, project_bucket, bot_bucket, provider_model_bucket):
                 bucket["messages"] += 1
                 if created_at > str(bucket.get("last_message_at") or ""):
                     bucket["last_message_at"] = created_at
@@ -1079,7 +1089,7 @@ class ChatManager:
             usage = _usage_summary(metadata)
             if not usage:
                 totals["messages_without_usage"] += 1
-                for bucket in (conv_bucket, bot_bucket, provider_model_bucket):
+                for bucket in (conv_bucket, project_bucket, bot_bucket, provider_model_bucket):
                     bucket["messages_without_usage"] += 1
                 continue
             prompt_tokens = _usage_int(usage.get("prompt_tokens")) or 0
@@ -1089,13 +1099,19 @@ class ChatManager:
                 total_tokens = prompt_tokens + completion_tokens if prompt_tokens or completion_tokens else 0
             if total_tokens == 0 and not (prompt_tokens or completion_tokens):
                 totals["unknown_total_messages"] += 1
-                for bucket in (conv_bucket, bot_bucket, provider_model_bucket):
+                for bucket in (conv_bucket, project_bucket, bot_bucket, provider_model_bucket):
                     bucket["unknown_total_messages"] += 1
-            for bucket in (totals, conv_bucket, bot_bucket, provider_model_bucket):
+            for bucket in (totals, conv_bucket, project_bucket, bot_bucket, provider_model_bucket):
                 _add_usage(bucket, prompt_tokens, completion_tokens, total_tokens)
 
         def _sort(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             return sorted(rows, key=lambda item: int(item.get("total_tokens") or 0), reverse=True)
+
+        project_rows = []
+        for key, bucket in by_project.items():
+            row = dict(bucket)
+            row["conversation_count"] = len(project_conversations.get(key, set()))
+            project_rows.append(row)
 
         return {
             "window": {
@@ -1106,6 +1122,7 @@ class ChatManager:
             "totals": totals,
             "by_conversation": _sort(list(by_conversation.values()))[:safe_limit],
             "conversation_count": len(by_conversation),
+            "by_project": _sort(project_rows),
             "by_bot": _sort(list(by_bot.values())),
             "by_provider_model": _sort(list(by_provider_model.values())),
         }

@@ -569,6 +569,17 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                         "last_message_at": "2026-08-05T01:02:03+00:00",
                     }
                 ],
+                "by_project": [
+                    {
+                        "project_id": "nexusai",
+                        "scope": "project",
+                        "conversation_count": 1,
+                        "total_tokens": 40,
+                        "messages_with_usage": 1,
+                        "messages_without_usage": 1,
+                        "last_message_at": "2026-08-05T01:02:03+00:00",
+                    }
+                ],
                 "by_bot": [
                     {
                         "bot_id": "general-chat",
@@ -737,6 +748,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"2 missing usage" in resp.data
     assert b"lesson-writer" in resp.data
     assert b"Planning Chat" in resp.data
+    assert b"Chat Project" in resp.data
+    assert b"No chat project token usage" not in resp.data
     assert b"general-chat" in resp.data
     assert b"2026-08-05T01:02:03+00:00" in resp.data
     assert b"Chat governor:" in resp.data
@@ -861,6 +874,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["chat_usage_brief"]["totals"]["prompt_tokens"] == 30
     assert brief_data["chat_usage_brief"]["top_conversations"][0]["conversation_id"] == "chat-1"
     assert brief_data["chat_usage_brief"]["top_conversations"][0]["last_message_at"] == "2026-08-05T01:02:03+00:00"
+    assert brief_data["chat_usage_brief"]["top_projects"][0]["project_id"] == "nexusai"
+    assert brief_data["chat_usage_brief"]["top_projects"][0]["conversation_count"] == 1
     assert brief_data["chat_token_governor"]["enabled"] is True
     assert brief_data["chat_token_governor"]["limits"]["global_hourly_tokens"] == 45
     assert brief_data["chat_usage_pressure_lanes"][0]["bot_id"] == "general-chat"
@@ -1273,6 +1288,7 @@ def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
     assert data["chat_usage"]["totals"]["messages_with_usage"] == 0
     assert data["chat_usage"]["totals"]["messages_without_usage"] == 0
     assert data["chat_usage"]["by_conversation"] == []
+    assert data["chat_usage"]["by_project"] == []
     assert data["chat_usage"]["by_bot"] == []
     assert data["chat_usage"]["by_provider_model"] == []
     assert data["usage_pressure_lanes"] == []

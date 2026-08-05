@@ -102,6 +102,12 @@ async def test_summarize_message_usage_groups_by_conversation_bot_and_model(tmp_
     assert usage["by_conversation"][0]["project_id"] == "nexusai"
     assert usage["by_conversation"][0]["total_tokens"] == 30
     assert usage["by_conversation"][0]["last_message_at"]
+    assert usage["by_project"][0]["project_id"] == "nexusai"
+    assert usage["by_project"][0]["conversation_count"] == 1
+    assert usage["by_project"][0]["messages_with_usage"] == 1
+    assert usage["by_project"][0]["messages_without_usage"] == 1
+    assert usage["by_project"][0]["total_tokens"] == 30
+    assert usage["by_project"][0]["last_message_at"]
     assert usage["by_bot"][0]["bot_id"] == "general-chat"
     assert usage["by_bot"][0]["last_message_at"]
     assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"

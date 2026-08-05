@@ -491,6 +491,26 @@
       </div>
       <div class="table-wrap" style="margin-top:0.75rem;">
         <table>
+          <thead><tr><th>Chat Project</th><th>Scope</th><th>Conversations</th><th>Tokens</th><th>Measured</th><th>Missing</th><th>Latest</th></tr></thead>
+          <tbody>
+            {% for row in chat_usage.by_project[:10] %}
+            <tr>
+              <td><code>{{ row.project_id or 'unscoped' }}</code></td>
+              <td>{{ row.scope or ('unscoped' if not row.project_id else 'project') }}</td>
+              <td>{{ row.conversation_count or 0 }}</td>
+              <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
+              <td>{{ row.messages_with_usage }}</td>
+              <td>{{ row.messages_without_usage }}</td>
+              <td>{{ row.last_message_at or '' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="empty">No chat project token usage in the selected window</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap" style="margin-top:0.75rem;">
+        <table>
           <thead><tr><th>Chat</th><th>Project</th><th>Scope</th><th>Tokens</th><th>Measured</th><th>Missing</th><th>Latest</th></tr></thead>
           <tbody>
             {% for row in chat_usage.by_conversation[:10] %}
