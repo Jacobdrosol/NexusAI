@@ -523,6 +523,114 @@ def _lane_sort_key(row: dict[str, Any], primary_key: str) -> tuple[int, int, int
     )
 
 
+def _lane_health(
+    *,
+    totals: dict[str, Any],
+    freshness: dict[str, Any],
+    route_evidence: dict[str, Any],
+    held: bool,
+) -> dict[str, Any]:
+    active = _safe_int(totals.get("active"))
+    waiting = _safe_int(totals.get("waiting"))
+    total = _safe_int(totals.get("total"))
+    problem = _safe_int(totals.get("problem"))
+    blocked = _safe_int(totals.get("blocked"))
+    stale_active = _safe_int(freshness.get("stale_active"))
+    stale_waiting = _safe_int(freshness.get("stale_waiting"))
+    route_gaps = _safe_int(route_evidence.get("missing_active_problem_count"))
+    missing_waiting_route = _safe_int(route_evidence.get("missing_waiting_count"))
+    reasons: list[str] = []
+
+    if problem:
+        reasons.append(f"{problem} problem task(s)")
+    if stale_active:
+        reasons.append(f"{stale_active} stale active task(s)")
+    if route_gaps:
+        reasons.append(f"{route_gaps} active/problem task(s) missing worker evidence")
+    if blocked:
+        reasons.append(f"{blocked} blocked task(s)")
+    if stale_waiting:
+        reasons.append(f"{stale_waiting} stale waiting task(s)")
+    if missing_waiting_route:
+        reasons.append(f"{missing_waiting_route} waiting task(s) missing worker evidence")
+    if held:
+        reasons.append("dispatch hold active")
+
+    if problem or stale_active or route_gaps:
+        level = "critical"
+        label = "needs intervention"
+    elif blocked or stale_waiting or missing_waiting_route:
+        level = "warning"
+        label = "watch"
+    elif held:
+        level = "paused"
+        label = "held"
+    elif active or waiting:
+        level = "ready"
+        label = "running clean"
+        reasons.append("active lane has no loaded problem, stale, or routing gap")
+    elif total:
+        level = "ready"
+        label = "recent clean"
+        reasons.append("loaded recent work has no active pressure")
+    else:
+        level = "idle"
+        label = "idle"
+        reasons.append("no loaded work")
+
+    return {
+        "level": level,
+        "label": label,
+        "reasons": reasons,
+        "problem": problem,
+        "blocked": blocked,
+        "stale_active": stale_active,
+        "stale_waiting": stale_waiting,
+        "route_gaps": route_gaps,
+        "missing_waiting_route": missing_waiting_route,
+        "active": active,
+        "waiting": waiting,
+        "held": held,
+    }
+
+
+def _project_lane_health(managers: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = Counter()
+    reasons = Counter()
+    for manager in managers:
+        if not isinstance(manager, dict):
+            continue
+        health = manager.get("lane_health") if isinstance(manager.get("lane_health"), dict) else {}
+        level = str(health.get("level") or "idle")
+        counts[level] += 1
+        for reason in health.get("reasons") or []:
+            if isinstance(reason, str) and reason:
+                reasons[reason] += 1
+
+    if counts.get("critical"):
+        level = "critical"
+        label = "needs intervention"
+    elif counts.get("warning"):
+        level = "warning"
+        label = "watch"
+    elif counts.get("paused") and not (counts.get("ready") or counts.get("idle")):
+        level = "paused"
+        label = "held"
+    elif counts.get("ready"):
+        level = "ready"
+        label = "running clean"
+    else:
+        level = "idle"
+        label = "idle"
+
+    return {
+        "level": level,
+        "label": label,
+        "counts": dict(counts),
+        "top_reasons": [{"reason": reason, "count": count} for reason, count in reasons.most_common(5)],
+    }
+
+
 def _operations_brief(
     *,
     totals: dict[str, Any],
@@ -545,6 +653,7 @@ def _operations_brief(
                 continue
             manager_totals = manager.get("totals") if isinstance(manager.get("totals"), dict) else {}
             manager_freshness = manager.get("freshness") if isinstance(manager.get("freshness"), dict) else {}
+            lane_health = manager.get("lane_health") if isinstance(manager.get("lane_health"), dict) else {}
             row = {
                 "project_id": project_id,
                 "project_name": project_name,
@@ -560,6 +669,7 @@ def _operations_brief(
                 "oldest_active_label": str(manager_freshness.get("oldest_active_label") or "none"),
                 "oldest_waiting_label": str(manager_freshness.get("oldest_waiting_label") or "none"),
                 "held": bool(manager.get("held")),
+                "lane_health": lane_health,
             }
             if row["active"]:
                 active_lanes.append(row)
@@ -580,8 +690,15 @@ def _operations_brief(
         "stale": _safe_int(totals.get("stale_active")) + _safe_int(totals.get("stale_waiting")),
         "worker_queue": _safe_int(worker_summary.get("queue_depth")),
     }
+    lane_health_counts = Counter()
+    for project in project_summaries:
+        for manager in project.get("managers") or []:
+            if isinstance(manager, dict):
+                health = manager.get("lane_health") if isinstance(manager.get("lane_health"), dict) else {}
+                lane_health_counts[str(health.get("level") or "idle")] += 1
     return {
         "status_breakdown": status_breakdown,
+        "lane_health_counts": dict(lane_health_counts),
         "capacity_level": str(capacity.get("level") or "unknown"),
         "capacity_reason": str(capacity.get("reason") or ""),
         "top_active_lanes": active_lanes[:limit],
@@ -930,6 +1047,12 @@ def build_work_overview(
             {"worker_id": worker_id, "task_count": count}
             for worker_id, count in manager_route_evidence["by_worker"].most_common(6)
         ]
+        bucket["lane_health"] = _lane_health(
+            totals=bucket["totals"],
+            freshness=bucket["freshness"],
+            route_evidence=manager_route_evidence,
+            held=bucket["held"],
+        )
         bucket["latest_tasks"] = sorted(
             bucket["latest_tasks"],
             key=lambda item: str(item.get("updated_at") or ""),
@@ -951,6 +1074,7 @@ def build_work_overview(
             ),
             reverse=True,
         )
+        bucket["lane_health"] = _project_lane_health(bucket["managers"])
         project_summaries.append(bucket)
 
     project_summaries.sort(

@@ -47,6 +47,7 @@
 {% set quality_gates = overview.quality_gates or {} %}
 {% set operations_brief = overview.operations_brief or {} %}
 {% set brief_status = operations_brief.status_breakdown or {} %}
+{% set lane_health_counts = operations_brief.lane_health_counts or {} %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Needs Attention</div>
@@ -171,6 +172,15 @@
       {% if brief_status.stale %}
       <span class="badge badge-yellow">{{ brief_status.stale }} stale</span>
       {% endif %}
+      {% if lane_health_counts.critical %}
+      <span class="badge badge-failed">{{ lane_health_counts.critical }} critical lanes</span>
+      {% endif %}
+      {% if lane_health_counts.warning %}
+      <span class="badge badge-yellow">{{ lane_health_counts.warning }} warning lanes</span>
+      {% endif %}
+      {% if lane_health_counts.ready %}
+      <span class="badge badge-completed">{{ lane_health_counts.ready }} clean lanes</span>
+      {% endif %}
       <span class="badge {% if operations_brief.capacity_level == 'critical' %}badge-failed{% elif operations_brief.capacity_level == 'warning' %}badge-yellow{% elif operations_brief.capacity_level == 'idle' %}badge-queued{% else %}badge-completed{% endif %}">
         capacity {{ operations_brief.capacity_level or "unknown" }}
       </span>
@@ -186,6 +196,9 @@
             <td>
               <strong>{{ lane.project_name }}</strong>
               <div class="mini-note"><code>{{ lane.manager_id }}</code></div>
+              {% if lane.lane_health %}
+              <div><span class="badge {% if lane.lane_health.level == 'critical' %}badge-failed{% elif lane.lane_health.level == 'warning' %}badge-yellow{% elif lane.lane_health.level == 'paused' %}badge-queued{% elif lane.lane_health.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">{{ lane.lane_health.label }}</span></div>
+              {% endif %}
             </td>
             <td>{{ lane.active }}</td>
             <td>{{ lane.oldest_active_label }}</td>
@@ -205,6 +218,9 @@
             <td>
               <strong>{{ lane.project_name }}</strong>
               <div class="mini-note"><code>{{ lane.manager_id }}</code></div>
+              {% if lane.lane_health %}
+              <div><span class="badge {% if lane.lane_health.level == 'critical' %}badge-failed{% elif lane.lane_health.level == 'warning' %}badge-yellow{% elif lane.lane_health.level == 'paused' %}badge-queued{% elif lane.lane_health.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">{{ lane.lane_health.label }}</span></div>
+              {% endif %}
             </td>
             <td>
               {{ lane.waiting }}
@@ -227,6 +243,9 @@
             <td>
               <strong>{{ lane.project_name }}</strong>
               <div class="mini-note"><code>{{ lane.manager_id }}</code></div>
+              {% if lane.lane_health %}
+              <div><span class="badge {% if lane.lane_health.level == 'critical' %}badge-failed{% elif lane.lane_health.level == 'warning' %}badge-yellow{% elif lane.lane_health.level == 'paused' %}badge-queued{% elif lane.lane_health.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">{{ lane.lane_health.label }}</span></div>
+              {% endif %}
             </td>
             <td><span class="badge badge-failed">{{ lane.problem }}</span></td>
             <td>{{ lane.latest_update_label }}</td>
@@ -470,6 +489,11 @@
           {% if (project.freshness.stale_active or 0) + (project.freshness.stale_waiting or 0) > 0 %}
           <span class="badge badge-failed">{{ (project.freshness.stale_active or 0) + (project.freshness.stale_waiting or 0) }} stale</span>
           {% endif %}
+          {% if project.lane_health %}
+          <span class="badge {% if project.lane_health.level == 'critical' %}badge-failed{% elif project.lane_health.level == 'warning' %}badge-yellow{% elif project.lane_health.level == 'paused' %}badge-queued{% elif project.lane_health.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">
+            {{ project.lane_health.label }}
+          </span>
+          {% endif %}
           <span class="badge badge-ready">latest {{ project.freshness.latest_update_label or "none" }}</span>
           {% if project.held %}
           <span class="badge badge-yellow">held</span>
@@ -503,6 +527,7 @@
           <thead>
             <tr>
               <th>Manager</th>
+              <th>Health</th>
               <th>Active</th>
               <th>Waiting</th>
               <th>Blocked</th>
@@ -525,6 +550,15 @@
               <td>
                 <strong>{{ manager.manager_name }}</strong>
                 <div class="mini-note"><code>{{ manager.manager_id }}</code></div>
+              </td>
+              <td>
+                {% set health = manager.lane_health or {} %}
+                <span class="badge {% if health.level == 'critical' %}badge-failed{% elif health.level == 'warning' %}badge-yellow{% elif health.level == 'paused' %}badge-queued{% elif health.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">
+                  {{ health.label or "unknown" }}
+                </span>
+                {% for reason in health.reasons[:3] %}
+                <div class="mini-note">{{ reason }}</div>
+                {% endfor %}
               </td>
               <td>{{ manager.totals.active or 0 }}</td>
               <td>{{ manager.totals.waiting or 0 }}</td>

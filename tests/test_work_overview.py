@@ -161,6 +161,18 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert manager["route_evidence"]["missing_active_problem_count"] == 1
     assert manager["route_evidence"]["missing_waiting_count"] == 1
     assert manager["route_evidence"]["by_worker"] == [{"worker_id": "browser-worker-01", "task_count": 1}]
+    assert manager["lane_health"]["level"] == "critical"
+    assert manager["lane_health"]["label"] == "needs intervention"
+    assert manager["lane_health"]["reasons"] == [
+        "1 problem task(s)",
+        "1 stale active task(s)",
+        "1 active/problem task(s) missing worker evidence",
+        "1 stale waiting task(s)",
+        "1 waiting task(s) missing worker evidence",
+        "dispatch hold active",
+    ]
+    assert project["lane_health"]["level"] == "critical"
+    assert project["lane_health"]["counts"]["critical"] == 1
     assert overview["route_evidence"]["task_count"] == 3
     assert overview["route_evidence"]["attributed_task_count"] == 1
     assert overview["route_evidence"]["missing_active_problem_count"] == 1
@@ -193,8 +205,10 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert brief["status_breakdown"]["problem"] == 1
     assert brief["status_breakdown"]["stale"] == 2
     assert brief["status_breakdown"]["worker_queue"] == 4
+    assert brief["lane_health_counts"]["critical"] == 1
     assert brief["capacity_level"] == "ready"
     assert brief["top_active_lanes"][0]["manager_id"] == "globeiq-pm"
+    assert brief["top_active_lanes"][0]["lane_health"]["label"] == "needs intervention"
     assert brief["top_active_lanes"][0]["active"] == 1
     assert brief["top_waiting_lanes"][0]["waiting"] == 1
     assert brief["top_problem_lanes"][0]["problem"] == 1
@@ -565,6 +579,11 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"browser_evidence_missing" in resp.data
     assert b"lesson_audit" in resp.data
     assert b"Usage By Project And Manager" in resp.data
+    assert b"<th>Manager</th>" in resp.data
+    assert b"<th>Health</th>" in resp.data
+    assert b"needs intervention" in resp.data
+    assert b"critical lanes" in resp.data
+    assert b"active/problem task(s) missing worker evidence" in resp.data
     assert b"<th>Bot</th><th>Tokens</th><th>Measured</th><th>Missing</th>" in resp.data
     assert b"Bot Usage Pressure" in resp.data
     assert b"override cap" in resp.data
@@ -612,6 +631,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     data = api_resp.get_json()
     assert data["operations_brief"]["status_breakdown"]["active"] == 1
     assert data["operations_brief"]["top_active_lanes"][0]["project_id"] == "globeiq"
+    assert data["operations_brief"]["lane_health_counts"]["critical"] == 1
+    assert data["operations_brief"]["top_active_lanes"][0]["lane_health"]["level"] == "critical"
     assert data["operations_brief"]["top_problem_lanes"][0]["manager_id"] == "globeiq-pm"
     assert data["attention"]["problem_tasks"] == 1
     assert data["attention"]["stale_work"] == 2
