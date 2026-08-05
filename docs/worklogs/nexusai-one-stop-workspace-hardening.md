@@ -224,3 +224,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 95: added direct-chat token governor live status to Settings so the cap editor shows current chat state, chat hourly remaining, chat bot cap, and per-message reserve alongside autonomous task governor status.
 - Batch 96: added operator recommendations to Work quality-gate rows so failed/error, queued/running, not-run, and passed suites each show the next safe action instead of status alone.
 - Batch 97: added enabled-bot worker assignment health counts to Bot Tooling Readiness so missing workers, offline workers, and degraded probes are visible before assigning worker-backed or browser-backed tasks.
+- Batch 98: added stream chat usage regression coverage so streamed assistant responses must persist provider/model/bot usage metadata and appear in the same `/v1/chat/usage` totals used by Work and Settings.

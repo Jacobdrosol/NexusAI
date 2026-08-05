@@ -972,6 +972,17 @@ async def test_stream_message_endpoint(cp_app):
         assert messages[-1]["metadata"]["model"]["model"] == "llama3.1:8b"
         assert messages[-1]["metadata"]["model"]["worker_id"] == "w1"
         assert messages[-1]["metadata"]["model"]["source"] == "scheduler"
+        assert messages[-1]["metadata"]["usage"] == {"prompt_tokens": 1, "completion_tokens": 2}
+
+        usage_resp = await client.get("/v1/chat/usage?hours=24&limit_conversations=5")
+        assert usage_resp.status_code == 200
+        usage = usage_resp.json()
+        assert usage["totals"]["total_tokens"] == 3
+        assert usage["totals"]["messages_with_usage"] == 1
+        assert usage["by_conversation"][0]["conversation_id"] == conversation_id
+        assert usage["by_bot"][0]["bot_id"] == "bot-stream"
+        assert usage["by_provider_model"][0]["provider"] == "ollama"
+        assert usage["by_provider_model"][0]["model"] == "llama3.1:8b"
 
 
 @pytest.mark.anyio
