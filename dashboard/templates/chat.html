@@ -410,6 +410,7 @@
           </div>
         </details>
       </div>
+      <div id="chat-bot-capability-summary" class="mini-note chat-bot-capability-summary"></div>
       {% endif %}
     </div>
     {% if selected_conversation %}
@@ -1342,6 +1343,41 @@ function activeBotSupportsImages() {
   const bot = activeChatBot();
   const backend = Array.isArray(bot?.backends) && bot.backends.length ? bot.backends[0] : null;
   return !!backend && modelSupportsImages(backend.provider, backend.model);
+}
+
+function chatBotToolAccess(bot) {
+  const rules = bot?.routing_rules && typeof bot.routing_rules === 'object' ? bot.routing_rules : {};
+  const raw = rules.chat_tool_access && typeof rules.chat_tool_access === 'object'
+    ? rules.chat_tool_access
+    : (rules.tool_access && typeof rules.tool_access === 'object' ? rules.tool_access : {});
+  return {
+    enabled: raw.enabled === true,
+    filesystem: raw.filesystem === true,
+    repo_search: raw.repo_search === true,
+  };
+}
+
+function updateChatBotCapabilitySummary() {
+  const summary = document.getElementById('chat-bot-capability-summary');
+  if (!summary) return;
+  const bot = activeChatBot();
+  if (!bot) {
+    summary.textContent = 'Using this conversation default bot.';
+    return;
+  }
+  const rules = bot.routing_rules && typeof bot.routing_rules === 'object' ? bot.routing_rules : {};
+  const profile = rules.chat_profile && typeof rules.chat_profile === 'object' ? rules.chat_profile : {};
+  const tools = chatBotToolAccess(bot);
+  const backend = Array.isArray(bot.backends) && bot.backends.length ? bot.backends[0] : {};
+  const toolParts = [];
+  if (tools.filesystem) toolParts.push('filesystem');
+  if (tools.repo_search) toolParts.push('repo search');
+  const toolLabel = tools.enabled ? (toolParts.length ? toolParts.join(', ') : 'enabled') : 'off';
+  const memoryLabel = bot.memory_profiles_enabled === true ? 'memory on' : 'memory off';
+  const imageLabel = activeBotSupportsImages() ? 'images supported' : 'text only';
+  const modelLabel = [backend.provider, backend.model].filter(Boolean).join(' / ') || 'model unknown';
+  const profileLabel = String(profile.label || profile.mode || bot.role || 'chat').trim();
+  summary.textContent = `${bot.name || bot.id}: ${profileLabel}; ${modelLabel}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}.`;
 }
 
 function formatAttachmentBytes(value) {
@@ -3237,6 +3273,7 @@ document.getElementById('create-convo-tool-enabled')?.addEventListener('change',
 document.getElementById('chat-tool-enabled')?.addEventListener('change', syncConversationToolAccessEditor);
 document.getElementById('chat-bot-selector')?.addEventListener('change', () => {
   syncSendBotSelection();
+  updateChatBotCapabilitySummary();
   if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
     alert('The newly selected chat bot model does not support image attachments. Remove the screenshots or switch back to a vision-capable bot.');
   }
@@ -3245,6 +3282,7 @@ syncConversationScopeFields();
 syncCreateConversationToolFields();
 syncConversationToolAccessEditor();
 syncSendBotSelection();
+updateChatBotCapabilitySummary();
 bindChatTextareaBehavior();
 renderComposerAttachments();
 setupChatComposerDragDrop();

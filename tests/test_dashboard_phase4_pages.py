@@ -725,6 +725,8 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"GlobeIQ Live Audit QC 02" not in resp.data
     assert b"PM Orchestrator" in resp.data
     assert b"Select a project manager bot" in resp.data
+    assert b"chat-bot-capability-summary" in resp.data
+    assert b"function updateChatBotCapabilitySummary" in resp.data
 
 
 def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):

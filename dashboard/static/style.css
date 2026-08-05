@@ -1042,6 +1042,13 @@ select.form-control {
   padding: 0.35rem 0.9rem 0;
 }
 
+.page-chat .chat-bot-capability-summary {
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: 0.28rem;
+  color: #bdbdbd;
+}
+
 .page-chat .chat-task-shell[hidden] {
   display: none !important;
 }

@@ -40,6 +40,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 2 in progress: added chat assistant provenance rendering so normal messages show the answering bot, provider, model, and bot update timestamp when stored in message metadata.
 - Batch 3 in progress: added bot-list safety details for effective chat autonomy and chat tool gates so manual chat bots and tool-enabled assistants are distinguishable without opening each bot.
 - Batch 4 in progress: added active and paused schedule counts to bot dispatch mode rows so operator activation state is visible from the main bot list.
+- Batch 5 in progress: added a selected-bot capability summary on the chat page for profile, backend model, image support, memory state, and chat tool gates.
 
 ## Validation
 
@@ -47,3 +48,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance tests/test_dashboard_phase4_pages.py::test_chat_page_unscoped_filter_limits_conversation_list tests/test_dashboard_phase4_pages.py::test_chat_page_project_filter_limits_conversation_list tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 2 chat provenance.
 - `pytest tests/test_dashboard_phase4_pages.py::test_bots_page_surfaces_bot_scoped_chat_profiles tests/test_dashboard_phase4_pages.py::test_bots_page_identifies_scheduled_and_manual_dispatch_modes tests/test_bot_tooling_status.py -q` passed for Batch 3 bot profile/tool gate visibility.
 - `pytest tests/test_dashboard_phase4_pages.py::test_bots_page_identifies_scheduled_and_manual_dispatch_modes tests/test_dashboard_phase4_pages.py::test_bots_page_surfaces_bot_scoped_chat_profiles -q` passed for Batch 4 dispatch schedule counts.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance tests/test_dashboard_phase4_pages.py::test_chat_page_unscoped_filter_limits_conversation_list -q` passed for Batch 5 chat bot capability summary.
