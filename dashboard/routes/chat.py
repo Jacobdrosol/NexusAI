@@ -1674,6 +1674,8 @@ def _sanitize_chat_stream_sse_line(line: str, current_event: str | None) -> tupl
     stripped = str(line or "")
     line_ending = "\n" if stripped.endswith("\n") else ""
     content = stripped[:-1] if line_ending else stripped
+    if content == "":
+        return stripped, None
     if content.startswith(event_prefix):
         return stripped, content[len(event_prefix):].strip()
     if current_event not in {"user_message", "assistant_message"} or not content.startswith(data_prefix):

@@ -4231,6 +4231,8 @@ def test_chat_stream_api_sanitizes_message_event_attachment_metadata(dashboard_c
                 ']}}'
             )
             yield ""
+            yield 'data: {"metadata":{"attachments":[{"name":"status.svg","kind":"image","data_url":"data:image/svg+xml;base64,UNCHANGED"}]}}'
+            yield ""
             yield "event: assistant_message"
             yield 'data: {"id":"a1","role":"assistant","content":"ok"}'
 
@@ -4254,8 +4256,9 @@ def test_chat_stream_api_sanitizes_message_event_attachment_metadata(dashboard_c
     assert resp.status_code == 200
     assert "event: user_message" in body
     assert "unsafe.svg" in body
-    assert "data:image/svg+xml" not in body
+    assert "data:image/svg+xml;base64,PHN2ZyA+" not in body
     assert "data:image/png;base64,aGVsbG8=" in body
+    assert "data:image/svg+xml;base64,UNCHANGED" in body
 
 
 def test_chat_message_api_blocks_image_attachment_for_text_only_effective_model(dashboard_client):
