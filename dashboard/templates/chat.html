@@ -1737,6 +1737,33 @@ function inlineCodingRequestBlocker() {
   return '';
 }
 
+async function serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodingEnabled}) {
+  if (!selectedConversationId || (!useWorkspaceTools && !inlineCodingEnabled)) return '';
+  const params = new URLSearchParams();
+  const botId = activeChatBotId();
+  if (botId) params.set('bot_id', botId);
+  if (useWorkspaceTools) params.set('use_workspace_tools', 'true');
+  if (inlineCodingEnabled) params.set('inline_coding_enabled', 'true');
+  const res = await fetch(
+    '/api/chat/conversations/' + encodeURIComponent(selectedConversationId) + '/effective-context?' + params.toString(),
+    {headers: {'Accept': 'application/json'}},
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return data.error || 'Unable to verify chat tool context before sending.';
+  }
+  const tools = data.workspace_tools && typeof data.workspace_tools === 'object' ? data.workspace_tools : {};
+  const coding = data.inline_coding && typeof data.inline_coding === 'object' ? data.inline_coding : {};
+  if (useWorkspaceTools && tools.request_allowed !== true) {
+    const reasons = Array.isArray(tools.reasons) ? tools.reasons.filter(Boolean).join(', ') : '';
+    return 'Workspace tools are not available: ' + (reasons || 'server gate off') + '.';
+  }
+  if (inlineCodingEnabled && coding.request_allowed !== true) {
+    return 'Inline coding is not available: ' + (coding.blocker || 'server gate off') + '.';
+  }
+  return '';
+}
+
 function renderChatEffectiveContextSummary() {
   const summary = document.getElementById('chat-effective-context-summary');
   if (!summary) return;
@@ -2625,6 +2652,14 @@ async function sendMessage(streamMode) {
     showChatComposerStatus(codingBlocker);
     return;
   }
+  const useWorkspaceTools = !!document.getElementById('use-workspace-tools-message')?.checked;
+  const inlineCodingEnabled = !!document.getElementById('enable-inline-coding-message')?.checked;
+  const serverBlocker = await serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodingEnabled});
+  if (serverBlocker) {
+    showChatComposerStatus(serverBlocker);
+    renderChatEffectiveContextSummary();
+    return;
+  }
   setChatComposerBusy(true);
 
   const payload = {
@@ -2635,8 +2670,8 @@ async function sendMessage(streamMode) {
         context_items: ctx.contexts,
         context_item_ids: ctx.contextItemIds,
         include_project_context: includeProjectContext ? includeProjectContext.checked : false,
-        use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked,
-        inline_coding_enabled: !!document.getElementById('enable-inline-coding-message')?.checked,
+        use_workspace_tools: useWorkspaceTools,
+        inline_coding_enabled: inlineCodingEnabled,
       };
     })(),
     conversation_id: fd.get('conversation_id'),
