@@ -1644,6 +1644,17 @@ def _normalize_message_rows(rows: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _normalize_chat_send_response(raw: Any) -> Any:
+    if not isinstance(raw, dict):
+        return raw
+    normalized = dict(raw)
+    for key in ("user_message", "assistant_message"):
+        message = _normalize_message_row(normalized.get(key))
+        if message is not None:
+            normalized[key] = message
+    return normalized
+
+
 def _normalize_vault_item_row(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -2198,7 +2209,7 @@ def api_send_message():
     resp = cp.post_message(conversation_id, payload)
     if resp is None:
         return _cp_error_response(cp, "chat message failed")
-    return jsonify(resp)
+    return jsonify(_normalize_chat_send_response(resp))
 
 
 @bp.post("/api/chat/assignments/preview")
