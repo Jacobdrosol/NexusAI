@@ -501,9 +501,10 @@
       {% if quality_gates.available %}
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Suite</th><th>Target</th><th>Tests</th><th>Latest Run</th><th>Score</th></tr></thead>
+          <thead><tr><th>Suite</th><th>Target</th><th>Tests</th><th>Latest Run</th><th>Score</th><th>Recommended Action</th></tr></thead>
           <tbody>
             {% for row in quality_gates.rows %}
+            {% set action = row.recommended_action or {} %}
             <tr>
               <td>{{ row.name }}<div class="mini-note"><code>{{ row.suite_id }}</code></div></td>
               <td><code>{{ row.target }}</code></td>
@@ -513,9 +514,13 @@
                 {% if row.latest_at %}<div class="mini-note">{{ row.latest_at[:19] | replace('T', ' ') }}</div>{% endif %}
               </td>
               <td>{% if row.latest_score is not none %}{{ '%.2f'|format(row.latest_score|float) }}{% else %}—{% endif %}</td>
+              <td>
+                <span class="badge {% if action.level == 'critical' %}badge-failed{% elif action.level == 'warning' %}badge-yellow{% elif action.level == 'watch' %}badge-running{% else %}badge-completed{% endif %}">{{ action.label or "review" }}</span>
+                {% if action.detail %}<div class="mini-note">{{ action.detail }}</div>{% endif %}
+              </td>
             </tr>
             {% else %}
-            <tr><td colspan="5" class="empty">No quality suites are registered yet.</td></tr>
+            <tr><td colspan="6" class="empty">No quality suites are registered yet.</td></tr>
             {% endfor %}
           </tbody>
         </table>

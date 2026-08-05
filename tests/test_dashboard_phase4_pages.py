@@ -5722,6 +5722,8 @@ def test_work_page_surfaces_provider_model_usage(dashboard_client):
     assert b"Research Bot Quality" in resp.data
     assert b"research-bot" in resp.data
     assert b"0.92" in resp.data
+    assert b"Recommended Action" in resp.data
+    assert b"continue monitoring" in resp.data
 
 
 def test_vault_upload_api_validates_required_fields(dashboard_client):

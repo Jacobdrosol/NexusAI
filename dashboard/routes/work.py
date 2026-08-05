@@ -404,6 +404,33 @@ def _token_governor_queue_pressure(
     return rows[: max(1, int(limit or 12))]
 
 
+def _quality_gate_recommended_action(status: str) -> dict[str, str]:
+    normalized = str(status or "not_run").strip().lower() or "not_run"
+    if normalized in {"failed", "error"}:
+        return {
+            "level": "critical",
+            "label": "review failed gates",
+            "detail": "Hold dependent automation until failing quality gates are reviewed and rerun.",
+        }
+    if normalized in {"running", "queued"}:
+        return {
+            "level": "watch",
+            "label": "wait for gate result",
+            "detail": "Let the active quality gate run finish before approving dependent work.",
+        }
+    if normalized == "passed":
+        return {
+            "level": "ready",
+            "label": "continue monitoring",
+            "detail": "Latest quality gate run passed for the shown target.",
+        }
+    return {
+        "level": "warning",
+        "label": "run quality gates",
+        "detail": "Run this suite before treating the target as production-ready.",
+    }
+
+
 def _quality_gate_summary(cp: Any, suites_payload: Any, *, limit: int = 5) -> dict[str, Any]:
     suites = suites_payload.get("suites") if isinstance(suites_payload, dict) else []
     suites = [suite for suite in (suites or []) if isinstance(suite, dict)]
@@ -438,6 +465,7 @@ def _quality_gate_summary(cp: Any, suites_payload: Any, *, limit: int = 5) -> di
                 "latest_status": status,
                 "latest_score": latest.get("score"),
                 "latest_at": str(latest.get("completed_at") or latest.get("created_at") or "").strip(),
+                "recommended_action": _quality_gate_recommended_action(status),
             }
         )
 

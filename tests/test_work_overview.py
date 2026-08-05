@@ -4,7 +4,16 @@ import bcrypt
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+from dashboard.routes.work import _quality_gate_recommended_action
 from dashboard.work_overview import build_work_overview
+
+
+def test_quality_gate_recommended_action_maps_operator_steps():
+    assert _quality_gate_recommended_action("passed")["label"] == "continue monitoring"
+    assert _quality_gate_recommended_action("failed")["label"] == "review failed gates"
+    assert _quality_gate_recommended_action("error")["level"] == "critical"
+    assert _quality_gate_recommended_action("running")["label"] == "wait for gate result"
+    assert _quality_gate_recommended_action("not_run")["label"] == "run quality gates"
 
 
 def _login_user(dashboard_client, *, email="admin@test.com", role="admin"):
