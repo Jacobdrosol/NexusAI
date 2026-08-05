@@ -138,6 +138,14 @@ def _expand_worker_replicas(raw_workers: list[Any], fleet: dict[str, Any]) -> li
                     count=replicas,
                     field=field,
                 )
+            for field in ("site_account", "site_user", "site_username", "globeiq_user_email"):
+                if worker.get(field):
+                    worker[field] = _render_replica_text(
+                        worker.get(field),
+                        index=index,
+                        count=replicas,
+                        field=field,
+                    )
             bot = worker.get("bot")
             if isinstance(bot, dict) and bot.get("id"):
                 bot["id"] = _render_replica_text(
@@ -189,6 +197,17 @@ def _as_list(value: Any) -> list[str]:
         return [str(item).strip() for item in value if str(item).strip()]
     text = str(value).strip()
     return [text] if text else []
+
+
+def _site_account_label(worker: dict[str, Any]) -> str:
+    for field in ("site_account", "site_user", "site_username", "globeiq_user_email"):
+        value = str(worker.get(field) or "").strip()
+        if not value:
+            continue
+        if "\n" in value or "\r" in value:
+            raise ValueError(f"Worker {worker.get('id') or worker.get('name')} {field} cannot contain a newline.")
+        return value
+    return ""
 
 
 def _mapping(value: Any, *, label: str) -> dict[str, str]:
@@ -703,7 +722,7 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
     if any(str(backend.get("type") or "").strip().lower() == "browser" for backend in backends):
         required_worker_tools = list(dict.fromkeys([*required_worker_tools, "browser-ui"]))
     routing_rules = _bot_routing_rules(worker)
-    routing_rules["worker_profile"] = {
+    worker_profile = {
         "worker_id": worker_id,
         "service": _worker_service(worker),
         "role": str(worker.get("role") or "").strip(),
@@ -714,6 +733,10 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
         "lesson_scope": _as_list(worker.get("lesson_scope")),
         "cli_tools": _worker_cli_tools(worker),
     }
+    site_account = _site_account_label(worker)
+    if site_account:
+        worker_profile["site_account"] = site_account
+    routing_rules["worker_profile"] = worker_profile
     routing_rules["launch_profile"] = {
         "worker_node_service": _worker_service(worker),
         "backend_type": primary_backend["type"],

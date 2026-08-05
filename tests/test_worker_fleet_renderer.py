@@ -48,6 +48,7 @@ def _profile(path: Path) -> Path:
                         "service": "worker-content",
                         "can_edit": True,
                         "task_scope": "single-lesson-controlled-content-repair",
+                        "site_account": "content-repair@globaliq.local",
                         "allowed_pages": ["/admin/dashboard", "/admin/documentation"],
                         "course_scope": ["60"],
                         "bot": {"id": "content-worker-bot"},
@@ -109,6 +110,7 @@ def test_render_worker_fleet_outputs_compose_worker_config_and_bot(tmp_path):
     assert bot["backends"][0]["worker_id"] == "content-repair-01"
     assert bot["backends"][0]["provider"] == "ollama_cloud"
     assert bot["routing_rules"]["worker_profile"]["course_scope"] == ["60"]
+    assert bot["routing_rules"]["worker_profile"]["site_account"] == "content-repair@globaliq.local"
 
     catalog_models = json.loads((out / "models" / "catalog-models.json").read_text())
     assert catalog_models == [
@@ -130,6 +132,7 @@ def test_render_worker_fleet_expands_guarded_replica_templates(tmp_path):
     profile_data["workers"][0]["id"] = "content-repair"
     profile_data["workers"][0]["name"] = "Content Worker"
     profile_data["workers"][0]["service"] = "worker-content"
+    profile_data["workers"][0]["site_account"] = "content-repair-{index:02d}@globaliq.local"
     profile_data["workers"][0]["bot"]["id"] = "content-worker-bot"
     profile_data["workers"][0]["replicas"] = 3
     profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
@@ -156,6 +159,23 @@ def test_render_worker_fleet_expands_guarded_replica_templates(tmp_path):
         "worker-content-03",
     }
     assert json.loads((out / "bots" / "content-repair-01.bot.json").read_text())["id"] == "content-worker-bot-01"
+    replica_bot = json.loads((out / "bots" / "content-repair-02.bot.json").read_text())
+    assert replica_bot["routing_rules"]["worker_profile"]["site_account"] == "content-repair-02@globaliq.local"
+
+
+def test_render_worker_fleet_rejects_newline_site_account_labels(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["workers"][0]["site_account"] = "content-repair@globaliq.local\nADMIN=true"
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="site_account cannot contain a newline"):
+        renderer.render(
+            profile,
+            tmp_path / "runtime",
+            {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+        )
 
 
 def test_render_worker_fleet_propagates_declared_worker_request_token(tmp_path):
