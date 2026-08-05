@@ -86,6 +86,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 48 in progress: added browser-side default-route provider compatibility preflight so incompatible default bot/model pairs are blocked before new-chat create or route-default save.
 - Batch 49 in progress: added a compact active-work operations brief to the Work overview builder, JSON API, and page so top active, waiting, and problem project-manager lanes are visible without scanning all detailed tables.
 - Batch 50 in progress: added a lightweight Work brief API for automation monitors and future mobile views so clients can fetch active lane priority and health without pulling the full overview payload.
+- Batch 51 in progress: added a chat effective-context API so web, mobile, and automation clients can inspect the effective bot, route, memory, workspace-tool, and inline-coding gates before sending a message.
 
 ## Validation
 
@@ -139,3 +140,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots -q` passed for Batch 48 browser-side default-route provider compatibility preflight.
 - `pytest tests/test_work_overview.py::test_work_overview_groups_tasks_by_project_and_manager tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 49 active-work operations brief.
 - `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 50 lightweight Work brief API.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_reports_active_memory_tools_and_coding tests/test_dashboard_phase4_pages.py::test_chat_effective_context_api_explains_blocked_gates tests/test_dashboard_phase4_pages.py::test_chat_message_api_blocks_workspace_tools_without_project_policy tests/test_dashboard_phase4_pages.py::test_chat_message_api_allows_workspace_tools_when_all_gates_overlap tests/test_dashboard_phase4_pages.py::test_chat_message_api_blocks_inline_coding_for_repo_output_denied_bot tests/test_dashboard_phase4_pages.py::test_chat_stream_api_blocks_inline_coding_for_unscoped_chat -q` passed for Batch 51 effective-context API.

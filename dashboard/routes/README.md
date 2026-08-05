@@ -115,6 +115,7 @@ Blueprint: `chat`.
 | PUT | `/api/chat/conversations/<conversation_id>/route-defaults` | Update default bot/model for a conversation | Yes |
 | PUT | `/api/chat/conversations/<conversation_id>/tool-access` | Update tool access settings for a conversation | Yes |
 | PUT | `/api/chat/conversations/<conversation_id>/memory-profile` | Update personal memory settings for a conversation | Yes |
+| GET | `/api/chat/conversations/<conversation_id>/effective-context` | Inspect the effective bot, route, memory, workspace-tool, and inline-coding gates for a conversation before sending | Yes |
 | POST | `/api/chat/messages` | Send a chat message (non-streaming) | Yes |
 | POST | `/api/chat/stream` | Send a chat message and stream the reply as SSE (proxies CP `/v1/chat/conversations/<id>/stream`) | Yes |
 | GET | `/api/chat/conversations/<conversation_id>/messages` | List messages for a conversation | Yes |
@@ -126,7 +127,7 @@ Blueprint: `chat`.
 | GET | `/api/chat/orchestrations/<orchestration_id>/graph` | Build DAG graph of all tasks in an orchestration | Yes |
 | GET | `/api/chat/orchestrations/<orchestration_id>/recap` | Full text recap of all task results in an orchestration | Yes |
 
-Conversation create and route-default endpoints validate default bot readiness, default model catalog state, and default bot/model provider compatibility before proxying changes to the control plane. Disabled, unknown, or incompatible catalog model IDs return `409` instead of being saved as stale chat routing defaults. The chat page also preflights default bot/model provider compatibility before new-chat create or route-default save. Message and stream send endpoints validate attachment shape, file count, and declared byte total before proxying to the control plane. The chat composer capability summary and image-attachment preflight use the effective route model: a conversation default model applies to the default chat route, while an explicit different bot uses that bot's own backend.
+Conversation create and route-default endpoints validate default bot readiness, default model catalog state, and default bot/model provider compatibility before proxying changes to the control plane. Disabled, unknown, or incompatible catalog model IDs return `409` instead of being saved as stale chat routing defaults. The chat page also preflights default bot/model provider compatibility before new-chat create or route-default save. Message and stream send endpoints validate attachment shape, file count, and declared byte total before proxying to the control plane. The chat composer capability summary and image-attachment preflight use the effective route model: a conversation default model applies to the default chat route, while an explicit different bot uses that bot's own backend. The effective-context API exposes the same memory, workspace-tool, and inline-coding gates as JSON for future mobile clients, automation monitors, and pre-send browser checks.
 
 ---
 

@@ -390,9 +390,12 @@ def _workspace_tool_request_blocker_from_cp(cp: Any, conversation_id: str, reque
 
     chat_access = _chat_tool_access_from_conversation(conversation)
     bot_access = bot_chat_tool_access(bot)
-    try:
-        project_access = _normalize_project_chat_tool_access(cp.get_project_chat_tool_access(project_id))
-    except Exception:
+    if project_id:
+        try:
+            project_access = _normalize_project_chat_tool_access(cp.get_project_chat_tool_access(project_id))
+        except Exception:
+            project_access = _normalize_project_chat_tool_access(None)
+    else:
         project_access = _normalize_project_chat_tool_access(None)
 
     reasons: list[str] = []
@@ -443,6 +446,117 @@ def _inline_coding_request_blocker_from_cp(cp: Any, conversation_id: str, reques
     if repo_output_mode != "allow":
         return f"bot {effective_bot_id} repo output is {repo_output_mode or 'deny'}"
     return ""
+
+
+def _project_memory_profiles_enabled_from_cp(cp: Any, project_id: str) -> bool:
+    safe_project_id = str(project_id or "").strip()
+    if not safe_project_id:
+        return False
+    try:
+        projects = cp.list_projects() if hasattr(cp, "list_projects") else []
+    except Exception:
+        projects = []
+    return _project_memory_profiles_enabled(projects, safe_project_id)
+
+
+def _effective_chat_context_from_cp(
+    cp: Any,
+    conversation_id: str,
+    *,
+    requested_bot_id: str = "",
+    use_workspace_tools: bool = False,
+    inline_coding_enabled: bool = False,
+) -> dict[str, Any] | None:
+    conversation = _conversation_from_cp(cp, conversation_id)
+    if not conversation:
+        return None
+
+    effective_bot_id = str(requested_bot_id or conversation.get("default_bot_id") or "").strip()
+    bot = _bot_from_cp(cp, effective_bot_id)
+    project_id = str(conversation.get("project_id") or "").strip()
+    chat_access = _chat_tool_access_from_conversation(conversation)
+    bot_access = bot_chat_tool_access(bot or {})
+    if project_id:
+        try:
+            project_access = _normalize_project_chat_tool_access(cp.get_project_chat_tool_access(project_id))
+        except Exception:
+            project_access = _normalize_project_chat_tool_access(None)
+    else:
+        project_access = _normalize_project_chat_tool_access(None)
+
+    project_memory_enabled = True
+    if project_id:
+        project_memory_enabled = _project_memory_profiles_enabled_from_cp(cp, project_id)
+    chat_memory_enabled = bool(conversation.get("memory_profiles_enabled", True))
+    bot_memory_enabled = bool((bot or {}).get("memory_profiles_enabled", False))
+    memory_reasons: list[str] = []
+    if not effective_bot_id or not bot:
+        memory_reasons.append("no bot selected")
+    if not chat_memory_enabled:
+        memory_reasons.append("chat off")
+    if bot and not bot_memory_enabled:
+        memory_reasons.append("bot off")
+    if project_id and not project_memory_enabled:
+        memory_reasons.append("project off")
+    memory_active = bool(bot and chat_memory_enabled and bot_memory_enabled and project_memory_enabled)
+
+    tool_reasons: list[str] = []
+    if not effective_bot_id or not bot:
+        tool_reasons.append("no selected bot with tool access")
+    if bot and not bot_access.get("enabled"):
+        tool_reasons.append("bot off")
+    if not chat_access.get("enabled"):
+        tool_reasons.append("chat off")
+    if not project_id:
+        tool_reasons.append("no scoped project")
+    if project_id and not project_access.get("enabled"):
+        tool_reasons.append("project off")
+    shared_tool_modes = sorted(_tool_modes(bot_access) & _tool_modes(chat_access) & _tool_modes(project_access))
+    if bot and bot_access.get("enabled") and chat_access.get("enabled") and project_access.get("enabled") and not shared_tool_modes:
+        tool_reasons.append("no shared tool mode")
+    tools_available = bool(bot and project_id and not tool_reasons and shared_tool_modes)
+
+    coding_blocker = _inline_coding_request_blocker_from_cp(cp, conversation_id, effective_bot_id)
+    inline_available = not bool(coding_blocker)
+
+    return {
+        "conversation_id": conversation.get("id"),
+        "project_id": project_id or None,
+        "bot": {
+            "id": effective_bot_id or None,
+            "name": str((bot or {}).get("name") or effective_bot_id or "").strip() or None,
+            "available": bool(bot),
+        },
+        "route": {
+            "default_bot_id": conversation.get("default_bot_id"),
+            "default_model_id": conversation.get("default_model_id"),
+            "requested_bot_id": str(requested_bot_id or "").strip() or None,
+        },
+        "memory": {
+            "active": memory_active,
+            "profile_id": conversation.get("memory_profile_id") or "default",
+            "chat_enabled": chat_memory_enabled,
+            "bot_enabled": bot_memory_enabled,
+            "project_enabled": project_memory_enabled if project_id else None,
+            "reasons": memory_reasons,
+        },
+        "workspace_tools": {
+            "requested": bool(use_workspace_tools),
+            "available": tools_available,
+            "request_allowed": (not use_workspace_tools) or tools_available,
+            "modes": shared_tool_modes,
+            "chat_access": chat_access,
+            "bot_access": bot_access,
+            "project_access": project_access if project_id else None,
+            "reasons": tool_reasons,
+        },
+        "inline_coding": {
+            "requested": bool(inline_coding_enabled),
+            "available": inline_available,
+            "request_allowed": (not inline_coding_enabled) or inline_available,
+            "blocker": coding_blocker,
+        },
+    }
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
@@ -1272,6 +1386,22 @@ def api_update_conversation_memory_profile(conversation_id: str):
     if updated is None:
         return _cp_error_response(cp, "conversation memory profile update failed")
     return jsonify(updated)
+
+
+@bp.get("/api/chat/conversations/<conversation_id>/effective-context")
+@login_required
+def api_conversation_effective_context(conversation_id: str):
+    cp = get_cp_client()
+    context = _effective_chat_context_from_cp(
+        cp,
+        conversation_id,
+        requested_bot_id=str(request.args.get("bot_id") or "").strip(),
+        use_workspace_tools=_request_bool(request.args.get("use_workspace_tools", False)),
+        inline_coding_enabled=_request_bool(request.args.get("inline_coding_enabled", False)),
+    )
+    if context is None:
+        return jsonify({"error": "conversation unavailable"}), 404
+    return jsonify(context)
 
 
 @bp.put("/api/chat/conversations/<conversation_id>/route-defaults")

@@ -1169,6 +1169,126 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"\"repo_search\": true" in resp.data
 
 
+def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c-project-chat",
+                    "title": "Project Chat",
+                    "project_id": "globeiq",
+                    "default_bot_id": "coding-chat",
+                    "default_model_id": "ollama-cloud-gpt-oss-120b",
+                    "memory_profiles_enabled": True,
+                    "memory_profile_id": "default",
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": True,
+                }
+            ]
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "coding-chat",
+                    "name": "Coding Chat",
+                    "memory_profiles_enabled": True,
+                    "routing_rules": {
+                        "chat_tool_access": {"enabled": True, "filesystem": True, "repo_search": True}
+                    },
+                    "execution_policy": {"repo_output_mode": "allow"},
+                }
+            ]
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ", "memory_profiles_enabled": True}]
+
+        def get_project_chat_tool_access(self, project_id):
+            assert project_id == "globeiq"
+            return {"enabled": True, "filesystem": True, "repo_search": False}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get(
+            "/api/chat/conversations/c-project-chat/effective-context"
+            "?use_workspace_tools=true&inline_coding_enabled=true"
+        )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["conversation_id"] == "c-project-chat"
+    assert payload["bot"]["id"] == "coding-chat"
+    assert payload["route"]["default_model_id"] == "ollama-cloud-gpt-oss-120b"
+    assert payload["memory"]["active"] is True
+    assert payload["memory"]["reasons"] == []
+    assert payload["workspace_tools"]["requested"] is True
+    assert payload["workspace_tools"]["available"] is True
+    assert payload["workspace_tools"]["modes"] == ["filesystem"]
+    assert payload["workspace_tools"]["request_allowed"] is True
+    assert payload["inline_coding"]["requested"] is True
+    assert payload["inline_coding"]["available"] is True
+    assert payload["inline_coding"]["blocker"] == ""
+
+
+def test_chat_effective_context_api_explains_blocked_gates(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c-unscoped",
+                    "title": "One-off",
+                    "project_id": None,
+                    "default_bot_id": "chat-only",
+                    "memory_profiles_enabled": True,
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "chat-only",
+                    "name": "Chat Only",
+                    "memory_profiles_enabled": False,
+                    "routing_rules": {
+                        "chat_tool_access": {"enabled": False, "filesystem": False, "repo_search": False}
+                    },
+                    "execution_policy": {"repo_output_mode": "deny"},
+                }
+            ]
+
+        def list_projects(self):
+            raise AssertionError("unscoped chats should not require project memory lookup")
+
+        def get_project_chat_tool_access(self, project_id):
+            raise AssertionError("unscoped chats should not require project tool lookup")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get(
+            "/api/chat/conversations/c-unscoped/effective-context"
+            "?use_workspace_tools=true&inline_coding_enabled=true"
+        )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["memory"]["active"] is False
+    assert payload["memory"]["project_enabled"] is None
+    assert payload["memory"]["reasons"] == ["bot off"]
+    assert payload["workspace_tools"]["available"] is False
+    assert payload["workspace_tools"]["request_allowed"] is False
+    assert "bot off" in payload["workspace_tools"]["reasons"]
+    assert "no scoped project" in payload["workspace_tools"]["reasons"]
+    assert payload["workspace_tools"]["project_access"] is None
+    assert payload["inline_coding"]["available"] is False
+    assert payload["inline_coding"]["request_allowed"] is False
+    assert payload["inline_coding"]["blocker"] == "no scoped project"
+
+
 def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     _login_admin(dashboard_client)
 
