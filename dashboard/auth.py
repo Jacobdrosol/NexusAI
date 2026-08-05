@@ -28,7 +28,20 @@ bp = Blueprint("auth", __name__)
 
 def _mobile_update_config() -> dict[str, object]:
     """Return public Android update metadata without exposing server secrets."""
+    import json
     import os
+    from pathlib import Path
+
+    manifest_path = Path(os.environ.get("NEXUSAI_MOBILE_RELEASE_MANIFEST", "/app/data/mobile-release.json"))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        manifest = {}
+    if isinstance(manifest, dict):
+        release_url = str(manifest.get("release_url") or "").strip()
+        latest = manifest.get("version_code")
+        if release_url.startswith("https://") and isinstance(latest, int) and latest > 0:
+            return {"minimum_version_code": int(manifest.get("minimum_version_code") or 1), "latest_version_code": latest, "release_url": release_url}
 
     def _version(name: str, default: int) -> int:
         try:

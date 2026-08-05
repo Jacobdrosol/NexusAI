@@ -368,6 +368,11 @@ git -c "safe.directory=$REPO_ROOT" fetch origin "$DEPLOY_REF"
 git -c "safe.directory=$REPO_ROOT" checkout "$DEPLOY_REF"
 git -c "safe.directory=$REPO_ROOT" reset --hard "origin/$DEPLOY_REF"
 
+if [ "${NEXUSAI_ANDROID_AUTO_PUBLISH:-1}" = "1" ] && [ -x ./scripts/publish-android-release.sh ]; then
+  echo "[deploy] checking Android release version"
+  ./scripts/publish-android-release.sh
+fi
+
 if [ "$CORE_RECREATE" = "1" ] && [ -f "docker-compose.yml" ]; then
   echo "[deploy] recreating core runtime services against persistent $RUNTIME_DATA_DIR state"
   echo "[deploy] compose project: $COMPOSE_PROJECT_NAME"
