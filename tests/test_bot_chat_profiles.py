@@ -79,3 +79,31 @@ def test_bot_chat_profile_adds_math_reasoning_to_vision_profiles():
     assert "image_understanding" in profile["capabilities"]
     assert "diagrams" in profile["capabilities"]
     assert "math_reasoning" in profile["capabilities"]
+
+
+def test_bot_chat_profile_labels_project_manager_and_pipeline_use():
+    manager = bot_chat_profile(
+        {
+            "id": "project-manager",
+            "name": "Project Manager",
+            "assignment_capabilities": {"is_project_manager": True},
+        }
+    )
+    pipeline = bot_chat_profile(
+        {
+            "id": "pipeline-entry",
+            "name": "Pipeline Entry",
+            "routing_rules": {"launch_profile": {"is_pipeline": True}},
+        }
+    )
+
+    assert manager["use_label"] == "Project manager"
+    assert pipeline["use_label"] == "Pipeline entry"
+
+
+def test_bot_chat_profile_labels_manual_and_scheduled_use():
+    manual = bot_chat_profile({"routing_rules": {"operator_profile": {"autonomy": "manual_chat_only"}}})
+    scheduled = bot_chat_profile({"routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}}})
+
+    assert manual["use_label"] == "Manual chat"
+    assert scheduled["use_label"] == "Scheduled worker"

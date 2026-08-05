@@ -43,6 +43,9 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
     profile = raw_profile if isinstance(raw_profile, dict) else {}
     operator_profile = routing.get("operator_profile") if isinstance(routing, dict) else None
     operator_profile = operator_profile if isinstance(operator_profile, dict) else {}
+    launch_profile = routing.get("launch_profile") if isinstance(routing, dict) else None
+    launch_profile = launch_profile if isinstance(launch_profile, dict) else {}
+    assignment_capabilities = _dict_from_any(bot.get("assignment_capabilities"))
     tool_access = bot_chat_tool_access(bot)
     policy = _dict_from_any(bot.get("execution_policy"))
     mode = str(profile.get("mode") or "").strip().lower()
@@ -96,6 +99,21 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         tool_labels.append("filesystem")
     if bool(tool_access.get("repo_search", False)):
         tool_labels.append("repo_search")
+    autonomy = str(operator_profile.get("autonomy") or "").strip() or "unspecified"
+    if bool(assignment_capabilities.get("is_project_manager", False)):
+        use_label = "Project manager"
+    elif bool(launch_profile.get("is_pipeline", False)) or bool(assignment_capabilities.get("is_pipeline_entry", False)):
+        use_label = "Pipeline entry"
+    elif routing.get("workflow") or routing.get("external_trigger"):
+        use_label = "Workflow worker"
+    elif autonomy == "scheduled_worker":
+        use_label = "Scheduled worker"
+    elif bool(tool_access.get("enabled", False)) or str(policy.get("repo_output_mode") or "").strip().lower() == "allow":
+        use_label = "Tool-enabled chat"
+    elif autonomy == "manual_chat_only":
+        use_label = "Manual chat"
+    else:
+        use_label = "General chat"
     return {
         "mode": mode,
         "label": str(profile.get("label") or CHAT_PROFILE_LABELS[mode]).strip(),
@@ -103,7 +121,8 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         "capabilities": capabilities,
         "tool_access": tool_access,
         "tool_label": ", ".join(tool_labels) if bool(tool_access.get("enabled", False)) else "off",
-        "autonomy": str(operator_profile.get("autonomy") or "").strip() or "unspecified",
+        "autonomy": autonomy,
+        "use_label": use_label,
         "repo_output_mode": str(policy.get("repo_output_mode") or "deny").strip().lower(),
         "inline_coding_default": bool(policy.get("inline_coding_default", False)),
     }

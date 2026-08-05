@@ -120,6 +120,7 @@
         {% if profile.capabilities %}
         <div class="metrics">{{ profile.capabilities | join(', ') }}</div>
         {% endif %}
+        <div class="metrics">Use: {{ profile.use_label or 'General chat' }}</div>
         <div class="metrics">Autonomy: {{ profile.autonomy }}</div>
         <div class="metrics">Chat tools: {{ profile.tool_label }}</div>
         {% if profile.repo_output_mode == 'allow' %}

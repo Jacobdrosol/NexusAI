@@ -4957,6 +4957,23 @@ def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
                         "inline_coding_default": True,
                     },
                 },
+                {
+                    "id": "scheduled-worker",
+                    "name": "Scheduled Worker",
+                    "role": "worker",
+                    "enabled": True,
+                    "backends": [],
+                    "routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}},
+                    "execution_policy": {"repo_output_mode": "deny"},
+                },
+                {
+                    "id": "project-manager",
+                    "name": "Project Manager",
+                    "role": "project-manager",
+                    "enabled": True,
+                    "backends": [],
+                    "assignment_capabilities": {"is_project_manager": True},
+                },
             ]
 
         def list_bot_readiness(self):
@@ -4988,6 +5005,10 @@ def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
     assert b"repo_search" in resp.data
     assert b"filesystem" in resp.data
     assert b"repo_output" in resp.data
+    assert b"Use: Manual chat" in resp.data
+    assert b"Use: Tool-enabled chat" in resp.data
+    assert b"Use: Scheduled worker" in resp.data
+    assert b"Use: Project manager" in resp.data
     assert b"Autonomy: manual_chat_only" in resp.data
     assert b"Chat tools: off" in resp.data
     assert b"Chat tools: filesystem, repo_search" in resp.data
