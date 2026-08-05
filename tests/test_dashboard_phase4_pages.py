@@ -1701,6 +1701,73 @@ def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client)
     assert b"function formatMessageUsageLabel" in resp.data
 
 
+def test_chat_page_resolves_id_only_message_provenance_labels(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-chat",
+                    "title": "Chat",
+                    "scope": "global",
+                    "project_id": None,
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "default_bot_id": "personal-general-chat",
+                    "default_model_id": "ollama-qwen",
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return [
+                {
+                    "id": "m-assistant",
+                    "role": "assistant",
+                    "content": "Assistant reply",
+                    "bot_id": "personal-general-chat",
+                    "provider": "ollama_cloud",
+                    "model": "ollama-qwen",
+                    "metadata": {
+                        "bot": {"id": "personal-general-chat"},
+                        "model": {"id": "ollama-qwen", "provider": "ollama_cloud"},
+                    },
+                }
+            ]
+
+        def list_bots(self):
+            return [{"id": "personal-general-chat", "name": "Personal General Chat"}]
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return [
+                {
+                    "id": "ollama-qwen",
+                    "name": "qwen3.5:397b",
+                    "provider": "ollama_cloud",
+                    "enabled": True,
+                }
+            ]
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-chat")
+
+    assert resp.status_code == 200
+    assert b'title="Bot personal-general-chat">Personal General Chat (personal-general-chat)</span>' in resp.data
+    assert b'title="Model ollama-qwen">ollama_cloud / qwen3.5:397b</span>' in resp.data
+    assert b"const botDisplayLabels" in resp.data
+    assert b"const modelDisplayLabels" in resp.data
+
+
 def test_chat_page_handles_conversation_list_error_gracefully(dashboard_client):
     _login_admin(dashboard_client)
 

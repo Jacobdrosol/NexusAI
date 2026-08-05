@@ -568,17 +568,21 @@
         <div class="message-role">{{ m.role }}</div>
         {% set bot_meta = m.metadata.get('bot') if m.metadata and m.metadata.get('bot') else {} %}
         {% set model_meta = m.metadata.get('model') if m.metadata and m.metadata.get('model') else {} %}
-        {% set bot_label = bot_meta.get('name') or bot_meta.get('id') or m.bot_id %}
+        {% set bot_id = bot_meta.get('id') or m.bot_id %}
+        {% set bot_label = bot_meta.get('name') or bot_display_labels.get(bot_id, bot_id) %}
         {% set provider_label = model_meta.get('provider') or m.provider %}
-        {% set model_label = model_meta.get('model') or m.model %}
+        {% set model_id = model_meta.get('id') or m.model %}
+        {% set model_catalog_label = model_display_labels.get(model_id) %}
+        {% set model_label = model_catalog_label or model_meta.get('model') or m.model %}
+        {% if model_catalog_label %}{% set provider_label = "" %}{% endif %}
         {% set usage_meta = m.metadata.get('usage') if m.metadata and m.metadata.get('usage') else {} %}
         {% set usage_prompt = usage_meta.get('prompt_tokens') or 0 %}
         {% set usage_completion = usage_meta.get('completion_tokens') or 0 %}
         {% set usage_total = usage_meta.get('total_tokens') or (usage_prompt + usage_completion) %}
         {% if m.role == 'assistant' and (bot_label or provider_label or model_label or usage_total) %}
         <div class="message-provenance">
-          {% if bot_label %}<span>{{ bot_label }}</span>{% endif %}
-          {% if provider_label or model_label %}<span>{{ provider_label }}{% if provider_label and model_label %} / {% endif %}{{ model_label }}</span>{% endif %}
+          {% if bot_label %}<span{% if bot_id %} title="Bot {{ bot_id }}"{% endif %}>{{ bot_label }}</span>{% endif %}
+          {% if provider_label or model_label %}<span{% if model_id %} title="Model {{ model_id }}"{% endif %}>{{ provider_label }}{% if provider_label and model_label %} / {% endif %}{{ model_label }}</span>{% endif %}
           {% if usage_total %}<span>{{ "{:,}".format(usage_total) }} tokens{% if usage_prompt or usage_completion %} ({{ "{:,}".format(usage_prompt) }} in / {{ "{:,}".format(usage_completion) }} out){% endif %}</span>{% endif %}
           {% if bot_meta.get('updated_at') %}<span>bot updated {{ (bot_meta.get('updated_at')[:19]) | replace('T', ' ') }}</span>{% endif %}
         </div>
@@ -952,6 +956,8 @@ const initialMessages = {{ messages|tojson }};
 const assignmentBots = {{ assignment_bots|tojson }};
 const availableBots = {{ chat_bots|tojson }};
 const availableModels = {{ model_catalog|tojson }};
+const botDisplayLabels = {{ bot_display_labels|tojson }};
+const modelDisplayLabels = {{ model_display_labels|tojson }};
 const chatAttachmentLimits = {{ chat_attachment_limits|tojson }};
 const CHAT_ATTACHMENT_MAX_FILES = Number(chatAttachmentLimits?.max_files || 15);
 const CHAT_ATTACHMENT_MAX_TOTAL_BYTES = Number(chatAttachmentLimits?.max_total_bytes || 1073741824);
@@ -1454,15 +1460,18 @@ function renderMessageProvenanceHtml(message) {
   const meta = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {};
   const bot = meta.bot && typeof meta.bot === 'object' ? meta.bot : {};
   const model = meta.model && typeof meta.model === 'object' ? meta.model : {};
-  const botLabel = String(bot.name || bot.id || message?.bot_id || '').trim();
-  const provider = String(model.provider || message?.provider || '').trim();
-  const modelName = String(model.model || message?.model || '').trim();
+  const botId = String(bot.id || message?.bot_id || '').trim();
+  const botLabel = String(bot.name || botDisplayLabels[botId] || botId).trim();
+  let provider = String(model.provider || message?.provider || '').trim();
+  const modelId = String(model.id || message?.model || '').trim();
+  let modelName = String(modelDisplayLabels[modelId] || model.model || message?.model || '').trim();
+  if (modelDisplayLabels[modelId]) provider = '';
   const botUpdatedAt = String(bot.updated_at || '').trim();
   const parts = [];
-  if (botLabel) parts.push(`<span>${esc(botLabel)}</span>`);
+  if (botLabel) parts.push(`<span${botId ? ` title="Bot ${esc(botId)}"` : ''}>${esc(botLabel)}</span>`);
   if (provider || modelName) {
     const providerModel = provider && modelName ? `${provider} / ${modelName}` : (provider || modelName);
-    parts.push(`<span>${esc(providerModel)}</span>`);
+    parts.push(`<span${modelId ? ` title="Model ${esc(modelId)}"` : ''}>${esc(providerModel)}</span>`);
   }
   const usageLabel = formatMessageUsageLabel(meta.usage);
   if (usageLabel) parts.push(`<span>${esc(usageLabel)}</span>`);
