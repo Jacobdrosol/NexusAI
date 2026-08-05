@@ -23,6 +23,8 @@ data class MobileBootstrap(val apiVersion: Int, val androidUpdate: AndroidUpdate
 data class ChatConversation(val id: String, val title: String, val projectId: String?, val updatedAt: String)
 data class ChatMessage(val id: String, val role: String, val content: String, val createdAt: String)
 data class ChatProject(val id: String, val name: String)
+data class ChatRouteOption(val id: String, val name: String)
+data class ChatBootstrap(val bots: List<ChatRouteOption>, val models: List<ChatRouteOption>)
 
 class NexusApiClient(private val store: InstanceStore) {
     private val cookies = mutableListOf<Cookie>()
@@ -139,6 +141,58 @@ class NexusApiClient(private val store: InstanceStore) {
     }
 
     @Throws(IOException::class)
+    fun chatBootstrap(): ChatBootstrap {
+        val request = Request.Builder().url(
+            requireInstanceUrl().newBuilder().addPathSegments("api/chat/bootstrap").build(),
+        ).build()
+        return client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException(jsonError(body, "Chat configuration is unavailable."))
+            val payload = JSONObject(body)
+            ChatBootstrap(
+                bots = payload.optJSONArray("bots").toRouteOptions(),
+                models = payload.optJSONArray("models").toRouteOptions(),
+            )
+        }
+    }
+
+    @Throws(IOException::class)
+    fun archiveConversation(conversationId: String): ChatConversation {
+        val request = Request.Builder()
+            .url(requireInstanceUrl().newBuilder().addPathSegments("api/chat/conversations/$conversationId/archive").build())
+            .header("X-CSRFToken", csrfToken())
+            .post(JSONObject().toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        return client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException(jsonError(body, "Could not archive chat."))
+            JSONObject(body).toChatConversation()
+        }
+    }
+
+    @Throws(IOException::class)
+    fun deleteConversation(conversationId: String) {
+        val request = Request.Builder()
+            .url(requireInstanceUrl().newBuilder().addPathSegments("api/chat/conversations/$conversationId").build())
+            .header("X-CSRFToken", csrfToken())
+            .delete()
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Could not delete chat (${response.code}).")
+        }
+    }
+
+    @Throws(IOException::class)
+    fun updateMemory(conversationId: String, enabled: Boolean) = mutateConversation(
+        conversationId, "memory-profile", JSONObject().put("enabled", enabled).put("profile_id", "default"),
+    )
+
+    @Throws(IOException::class)
+    fun updateRoute(conversationId: String, botId: String?, modelId: String?) = mutateConversation(
+        conversationId, "route-defaults", JSONObject().put("default_bot_id", botId ?: "").put("default_model_id", modelId ?: ""),
+    )
+
+    @Throws(IOException::class)
     fun listMessages(conversationId: String): List<ChatMessage> = getJsonArray(
         requireInstanceUrl().newBuilder().addPathSegments("api/chat/conversations/$conversationId/messages").build(),
     ).toChatMessages()
@@ -196,6 +250,19 @@ class NexusApiClient(private val store: InstanceStore) {
         }
     }
 
+    private fun mutateConversation(conversationId: String, action: String, payload: JSONObject): ChatConversation {
+        val request = Request.Builder()
+            .url(requireInstanceUrl().newBuilder().addPathSegments("api/chat/conversations/$conversationId/$action").build())
+            .header("X-CSRFToken", csrfToken())
+            .put(payload.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        return client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException(jsonError(body, "Chat settings update failed."))
+            JSONObject(body).toChatConversation()
+        }
+    }
+
     private fun jsonError(body: String, fallback: String): String = runCatching {
         JSONObject(body).optString("error").ifBlank { fallback }
     }.getOrDefault(fallback)
@@ -235,3 +302,12 @@ private fun JSONObject.toChatMessage() = ChatMessage(
     content = optString("content"),
     createdAt = optString("created_at"),
 )
+
+private fun JSONArray?.toRouteOptions(): List<ChatRouteOption> = buildList {
+    if (this@toRouteOptions == null) return@buildList
+    for (index in 0 until this@toRouteOptions.length()) {
+        val row = this@toRouteOptions.optJSONObject(index) ?: continue
+        val id = row.optString("id")
+        if (id.isNotBlank()) add(ChatRouteOption(id, row.optString("name", id)))
+    }
+}

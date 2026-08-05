@@ -2105,6 +2105,36 @@ def api_list_conversations():
     return jsonify(conversations)
 
 
+@bp.get("/api/chat/bootstrap")
+@login_required
+def api_chat_bootstrap():
+    """Return the small, user-safe configuration surface needed by chat clients."""
+    cp = get_cp_client()
+    try:
+        raw_bots = cp.list_bots() or []
+    except Exception:
+        raw_bots = []
+    try:
+        raw_models = cp.list_models() or []
+    except Exception:
+        raw_models = []
+    bots = []
+    for bot in _chat_selectable_bots(raw_bots):
+        if not isinstance(bot, dict):
+            continue
+        bot_id = str(bot.get("id") or "").strip()
+        if bot_id:
+            bots.append({"id": bot_id, "name": str(bot.get("name") or bot_id).strip() or bot_id})
+    models = []
+    for model in raw_models:
+        if not isinstance(model, dict) or model.get("enabled") is False:
+            continue
+        model_id = str(model.get("id") or model.get("name") or "").strip()
+        if model_id:
+            models.append({"id": model_id, "name": str(model.get("name") or model_id).strip() or model_id})
+    return jsonify({"bots": bots, "models": models})
+
+
 @bp.post("/api/chat/conversations")
 @login_required
 def api_create_conversation():

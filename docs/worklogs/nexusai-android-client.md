@@ -39,6 +39,20 @@ The client uses a versioned API surface in the dashboard. The initial implementa
 - Instance errors, expired sessions, and unavailable servers produce actionable UI states.
 - Build instructions and update behavior are documented.
 
+## Chat Completion Scope
+
+The Android chat client must reach a usable, safe subset of the web chat before operational screens are started:
+
+- project, unscoped, and bridged chat selection; active and archived conversation lifecycle;
+- create, search, archive, restore, and delete conversations with explicit confirmation for destructive actions;
+- streaming responses with recoverable reconnect/refresh behavior;
+- normal text, image, and document attachments within the dashboard limits;
+- readable Markdown, code blocks, copy actions, math-capable rendering, and attachment previews;
+- per-conversation chat settings for bot, model, memory, and display preferences; and
+- native loading, empty, offline, expired-session, and server-error states.
+
+Worker execution, repository actions, deployment controls, and operational dashboards remain out of scope until this checklist is completed and device-tested.
+
 ## Progress
 
 - Discovery complete: NexusAI has no existing Android client. Dashboard authentication is session-cookie based through `/api/auth/login`, and chat/work APIs already provide the initial read/write surface.
@@ -46,6 +60,7 @@ The client uses a versioned API surface in the dashboard. The initial implementa
 - Dashboard mobile contract added: `/api/mobile/bootstrap` returns versioned, public Android update metadata, and authenticated `/api/auth/csrf` issues a session-bound token for mobile mutations without exempting chat APIs from CSRF protections.
 - Android update delivery added: the client checks the instance contract after session restoration and uses Android's package installer to apply a user-approved replacement APK. Same package ID and signing key preserve local app data across updates.
 - First chat UI complete: project and unscoped scope picker, active conversation list, new scoped chat creation, message-history reader, refresh, and normal text composer. Native mutations use a session-bound CSRF token rather than weakening the dashboard's browser protections.
+- In progress: mobile chat configuration bootstrap and conversation lifecycle client methods. These provide the native settings and archive/delete work without exposing worker controls.
 - Verification: `ANDROID_HOME=%LOCALAPPDATA%\\Android\\Sdk .\\gradlew.bat :app:assembleDebug` completed successfully. The debug APK is at `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Risks and Blockers
