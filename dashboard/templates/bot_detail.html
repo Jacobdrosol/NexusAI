@@ -142,6 +142,20 @@
     {% endfor %}
   </div>
   {% endif %}
+  {% if tooling.worker_profile %}
+  {% set worker_profile = tooling.worker_profile %}
+  <div class="state-info" style="margin-top:0.75rem;">
+    <strong>Worker profile:</strong> {{ worker_profile.task_scope or worker_profile.role or 'scoped worker' }}
+    <div class="metrics">
+      Edits: {{ 'allowed' if worker_profile.can_edit else 'not allowed' }}
+      {% if worker_profile.site_account %} · Site account: {{ worker_profile.site_account }}{% endif %}
+      {% if worker_profile.course_scope %} · Courses: {{ worker_profile.course_scope | join(', ') }}{% endif %}
+      {% if worker_profile.lesson_scope %} · Lessons: {{ worker_profile.lesson_scope | join(', ') }}{% endif %}
+      {% if worker_profile.allowed_pages %} · Pages: {{ worker_profile.allowed_pages | join(', ') }}{% endif %}
+      {% if worker_profile.cli_tools %} · CLI tools: {{ worker_profile.cli_tools | join(', ') }}{% endif %}
+    </div>
+  </div>
+  {% endif %}
   {% if tooling.workers %}
   <table style="margin-top:0.75rem;">
     <thead><tr><th>Worker</th><th>Status</th><th>Enabled</th><th>Probe</th></tr></thead>

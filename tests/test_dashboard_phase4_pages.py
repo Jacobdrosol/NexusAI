@@ -2770,6 +2770,15 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                     "operator_profile": {
                         "autonomy": "manual_chat_only",
                     },
+                    "worker_profile": {
+                        "task_scope": "single-repo-coding-help",
+                        "can_edit": False,
+                        "site_account": "code.casey@globaliq.local",
+                        "course_scope": ["nexusai"],
+                        "lesson_scope": ["chat-ui"],
+                        "allowed_pages": ["chat", "bots"],
+                        "cli_tools": ["repo-search"],
+                    },
                 },
                 "execution_policy": {
                     "required_worker_tools": ["repo-search"],
@@ -2884,6 +2893,13 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"Browser Owner Approval Actions" in resp.data
     assert b"lesson_preview.read" in resp.data
     assert b"Required Worker Tools" in resp.data
+    assert b"Worker profile:" in resp.data
+    assert b"single-repo-coding-help" in resp.data
+    assert b"Site account: code.casey@globaliq.local" in resp.data
+    assert b"Courses: nexusai" in resp.data
+    assert b"Lessons: chat-ui" in resp.data
+    assert b"Pages: chat, bots" in resp.data
+    assert b"CLI tools: repo-search" in resp.data
     assert b"Credential References" in resp.data
     assert b"OLLAMA_CLOUD_KEY" in resp.data
     assert b"repo-search" in resp.data
