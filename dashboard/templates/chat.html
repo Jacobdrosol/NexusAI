@@ -1569,6 +1569,30 @@ function routeDefaultCompatibilityBlocker(botId, modelId) {
   return `Default model provider ${expectedProvider} is not available on default bot ${safeBotId}.`;
 }
 
+function routeDefaultDraftState() {
+  const selectedBotId = activeChatBotId();
+  const selectedModelId = selectedChatDefaultModelId();
+  const savedBotId = String(selectedConversation.default_bot_id || '').trim();
+  const savedModelId = String(selectedConversation.default_model_id || '').trim();
+  const botChanged = selectedBotId !== savedBotId;
+  const modelChanged = selectedModelId !== savedModelId;
+  const selectedBotLabel = selectedBotId || 'conversation bot';
+  const selectedModelLabel = selectedModelId || 'bot default model';
+  if (!botChanged && !modelChanged) {
+    return {
+      changed: false,
+      text: `route saved: bot ${savedBotId || 'conversation bot'}; model ${savedModelId || 'bot default model'}`,
+    };
+  }
+  const changes = [];
+  if (botChanged) changes.push(`bot ${selectedBotLabel}`);
+  if (modelChanged) changes.push(`model ${selectedModelLabel}`);
+  return {
+    changed: true,
+    text: `route draft unsaved: ${changes.join('; ')}. Save Defaults before expecting this route on future messages.`,
+  };
+}
+
 function effectiveChatModelInfo() {
   const bot = activeChatBot();
   const backend = Array.isArray(bot?.backends) && bot.backends.length ? bot.backends[0] : null;
@@ -1856,7 +1880,10 @@ function renderChatEffectiveContextSummary() {
   const modelClass = modelBlocker ? 'attention' : (modelProvider || modelName ? 'ready' : 'disabled');
   const modelLabel = [modelProvider, modelName].filter(Boolean).join(' / ') || 'model unknown';
   const modelText = `effective model: ${modelSource} ${modelLabel}; ${modelImageSupported ? 'images supported' : 'text only'}${modelBlocker ? '; ' + modelBlocker : ''}`;
+  const routeDraft = routeDefaultDraftState();
+  const routeClass = routeDraft.changed ? 'attention' : 'ready';
   summary.innerHTML = `
+    <span class="badge badge-${routeClass}">${esc(routeDraft.text)}</span>
     <span class="badge badge-${modelClass}">${esc(modelText)}</span>
     <span class="badge badge-${memoryClass}">${esc(memoryText)}</span>
     <span class="badge badge-${toolsClass}">${esc(toolText)}</span>
@@ -3867,6 +3894,7 @@ document.getElementById('enable-inline-coding-message')?.addEventListener('chang
 });
 document.getElementById('chat-default-model-selector')?.addEventListener('change', () => {
   updateChatBotCapabilitySummary();
+  renderChatEffectiveContextSummary();
   refreshServerEffectiveContextSummary().catch(() => {});
   if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
     alert('The newly selected conversation model does not support image attachments. Remove the screenshots or switch to a vision-capable model.');
