@@ -20,7 +20,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -v "$SIGNING_DIR:/signing:ro" \
   -e "NEXUSAI_ANDROID_STORE_FILE=/signing/$SIGNING_STORE_NAME" -e NEXUSAI_ANDROID_STORE_PASSWORD \
   -e NEXUSAI_ANDROID_KEY_ALIAS -e NEXUSAI_ANDROID_KEY_PASSWORD \
-  "$ANDROID_BUILD_IMAGE" ./gradlew :app:assembleRelease
+  "$ANDROID_BUILD_IMAGE" sh ./gradlew :app:assembleRelease
 mkdir -p "$RELEASE_DIR"
 cp android/app/build/outputs/apk/release/app-release.apk "$RELEASE_DIR/nexusai.apk"
 printf '{"version_code":%s,"minimum_version_code":1,"release_url":"https://chat.globeiq.org/releases/nexusai.apk"}\n' "$VERSION_CODE" > "$MANIFEST"
