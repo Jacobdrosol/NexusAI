@@ -1136,6 +1136,54 @@ def api_hold_work():
     return jsonify(result)
 
 
+def _update_bot_hourly_cap_setting(
+    *,
+    setting_key: str,
+    response_key: str,
+    body: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    action = str(body.get("action") or "set").strip().lower()
+    bot_id = str(body.get("bot_id") or "").strip()
+    if action not in {"set", "clear"}:
+        return {"error": "action must be set or clear."}, 400
+    if not bot_id:
+        return {"error": "bot_id is required."}, 400
+
+    mgr = SettingsManager.instance()
+    raw_limits = mgr.get(setting_key, {})
+    limits = raw_limits if isinstance(raw_limits, dict) else {}
+    updated_limits: dict[str, int] = {}
+    for key, value in limits.items():
+        normalized_key = str(key or "").strip()
+        if not normalized_key or normalized_key == bot_id:
+            continue
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            updated_limits[normalized_key] = parsed
+
+    if action == "set":
+        try:
+            hourly_limit = int(body.get("hourly_limit"))
+        except (TypeError, ValueError):
+            return {"error": "hourly_limit must be a positive integer."}, 400
+        if hourly_limit <= 0:
+            return {"error": "hourly_limit must be a positive integer."}, 400
+        updated_limits[bot_id] = hourly_limit
+
+    changed_by = getattr(current_user, "email", "api")
+    mgr.set(setting_key, json.dumps(updated_limits, sort_keys=True), changed_by)
+    return {
+        "status": "ok",
+        "action": action,
+        "bot_id": bot_id,
+        "hourly_limit": updated_limits.get(bot_id),
+        response_key: updated_limits,
+    }, 200
+
+
 @bp.post("/api/work/bot-cap")
 @login_required
 def api_work_bot_cap():
@@ -1186,3 +1234,19 @@ def api_work_bot_cap():
             "token_governor_bot_hourly_limits": updated_limits,
         }
     )
+
+
+@bp.post("/api/work/chat-bot-cap")
+@login_required
+def api_work_chat_bot_cap():
+    _require_admin()
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "Request body must be a JSON object."}), 400
+
+    payload, status_code = _update_bot_hourly_cap_setting(
+        setting_key="token_governor_chat_bot_hourly_limits",
+        response_key="token_governor_chat_bot_hourly_limits",
+        body=body,
+    )
+    return jsonify(payload), status_code

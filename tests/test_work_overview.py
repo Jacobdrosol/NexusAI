@@ -678,6 +678,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Chat Bot Usage Pressure" in resp.data
     assert b"override chat cap" in resp.data
     assert b"warning 0.8" in resp.data
+    assert b"Cap Chat At Current" in resp.data
+    assert b"Clear Chat Cap" in resp.data
+    assert b"setChatBotHourlyCap" in resp.data
     assert b"No chat token usage" not in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
@@ -1670,6 +1673,59 @@ def test_work_bot_cap_api_rejects_invalid_payload(dashboard_client):
     bad_limit = dashboard_client.post(
         "/api/work/bot-cap",
         json={"action": "set", "bot_id": "audit-reader", "hourly_limit": 0},
+    )
+
+    assert bad_action.status_code == 400
+    assert "action must be set or clear" in bad_action.get_data(as_text=True)
+    assert missing_bot.status_code == 400
+    assert "bot_id is required" in missing_bot.get_data(as_text=True)
+    assert bad_limit.status_code == 400
+    assert "hourly_limit must be a positive integer" in bad_limit.get_data(as_text=True)
+
+
+def test_work_chat_bot_cap_api_sets_and_clears_override(dashboard_client, tmp_path):
+    from shared.settings_manager import SettingsManager
+
+    _login_admin(dashboard_client)
+    original_settings = SettingsManager._instance
+    SettingsManager._instance = SettingsManager(str(tmp_path / "work-chat-bot-cap.db"))
+    try:
+        SettingsManager._instance.set(
+            "token_governor_chat_bot_hourly_limits",
+            json.dumps({"existing-chat-bot": 12345}),
+            changed_by="test",
+        )
+
+        set_resp = dashboard_client.post(
+            "/api/work/chat-bot-cap",
+            json={"action": "set", "bot_id": "general-chat", "hourly_limit": 50000},
+        )
+        assert set_resp.status_code == 200
+        data = set_resp.get_json()
+        assert data["token_governor_chat_bot_hourly_limits"] == {
+            "existing-chat-bot": 12345,
+            "general-chat": 50000,
+        }
+
+        clear_resp = dashboard_client.post(
+            "/api/work/chat-bot-cap",
+            json={"action": "clear", "bot_id": "general-chat"},
+        )
+        assert clear_resp.status_code == 200
+        data = clear_resp.get_json()
+        assert data["token_governor_chat_bot_hourly_limits"] == {"existing-chat-bot": 12345}
+    finally:
+        SettingsManager._instance = original_settings
+
+
+def test_work_chat_bot_cap_api_rejects_invalid_payload(dashboard_client):
+    _login_admin(dashboard_client)
+
+    bad_action = dashboard_client.post("/api/work/chat-bot-cap", json={"action": "freeze", "bot_id": "general-chat"})
+    missing_bot = dashboard_client.post("/api/work/chat-bot-cap", json={"action": "set", "hourly_limit": 100})
+    bad_limit = dashboard_client.post(
+        "/api/work/chat-bot-cap",
+        json={"action": "set", "bot_id": "general-chat", "hourly_limit": 0},
     )
 
     assert bad_action.status_code == 400

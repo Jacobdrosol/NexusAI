@@ -454,7 +454,7 @@
       </div>
       <div class="table-wrap" style="margin-top:0.75rem;">
         <table>
-          <thead><tr><th>Chat Bot Usage Pressure</th><th>Tokens</th><th>Cap</th><th>Remaining</th><th>Status</th><th>Latest</th></tr></thead>
+          <thead><tr><th>Chat Bot Usage Pressure</th><th>Tokens</th><th>Cap</th><th>Remaining</th><th>Status</th><th>Latest</th><th>Actions</th></tr></thead>
           <tbody>
             {% for row in chat_usage_pressure_lanes %}
             <tr>
@@ -467,9 +467,23 @@
               <td>{{ "{:,}".format(row.remaining_tokens or 0) }}</td>
               <td><span class="badge {% if row.level == 'critical' %}badge-failed{% elif row.level == 'warning' %}badge-yellow{% else %}badge-completed{% endif %}">{{ row.level }} {{ row.usage_ratio }}</span></td>
               <td>{{ row.last_message_at or '' }}</td>
+              <td>
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="setChatBotHourlyCap({bot_id: {{ row.bot_id|tojson }}, hourly_limit: {{ row.total_tokens or 0 }}, label: {{ row.bot_id|tojson }}})">
+                  Cap Chat At Current
+                </button>
+                {% if row.cap_source == 'override' %}
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="clearChatBotHourlyCap({bot_id: {{ row.bot_id|tojson }}, label: {{ row.bot_id|tojson }}})">
+                  Clear Chat Cap
+                </button>
+                {% endif %}
+              </td>
             </tr>
             {% else %}
-            <tr><td colspan="6" class="empty">No chat bot hourly caps are active for measured usage</td></tr>
+            <tr><td colspan="7" class="empty">No chat bot hourly caps are active for measured usage</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -1403,6 +1417,57 @@ function clearBotHourlyCap(scope) {
   .then(function(res) {
     if (!res.ok) {
       alert('Bot cap clear failed: ' + (res.data.error || 'unknown error'));
+      return;
+    }
+    window.location.reload();
+  })
+  .catch(function(e) { alert('Network error: ' + e); });
+}
+
+function setChatBotHourlyCap(scope) {
+  var botId = String(scope.bot_id || '').trim();
+  var hourlyLimit = Number(scope.hourly_limit || 0);
+  if (!botId || !Number.isFinite(hourlyLimit) || hourlyLimit <= 0) {
+    alert('A chat bot and positive hourly limit are required.');
+    return;
+  }
+  if (!confirm('Set hourly chat token cap for ' + (scope.label || botId) + ' to ' + Math.trunc(hourlyLimit).toLocaleString() + '?')) {
+    return;
+  }
+  fetch('/api/work/chat-bot-cap', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify({action: 'set', bot_id: botId, hourly_limit: Math.trunc(hourlyLimit)})
+  })
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (!res.ok) {
+      alert('Chat bot cap update failed: ' + (res.data.error || 'unknown error'));
+      return;
+    }
+    window.location.reload();
+  })
+  .catch(function(e) { alert('Network error: ' + e); });
+}
+
+function clearChatBotHourlyCap(scope) {
+  var botId = String(scope.bot_id || '').trim();
+  if (!botId) {
+    alert('bot_id is required.');
+    return;
+  }
+  if (!confirm('Clear hourly chat token cap override for ' + (scope.label || botId) + '?')) {
+    return;
+  }
+  fetch('/api/work/chat-bot-cap', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify({action: 'clear', bot_id: botId})
+  })
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (!res.ok) {
+      alert('Chat bot cap clear failed: ' + (res.data.error || 'unknown error'));
       return;
     }
     window.location.reload();
