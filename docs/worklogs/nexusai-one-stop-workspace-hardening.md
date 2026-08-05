@@ -236,3 +236,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_unscoped_filter_limits_conversation_list tests/test_dashboard_phase4_pages.py::test_chat_page_renders_project_filter_metadata_on_conversations -q` passed for Batch 105 chat sidebar count visibility.
 - Batch 106: added non-secret backend credential-reference visibility to bot tooling status, Bots list, and Bot Detail so operators can see which bots require named vault or environment keys without exposing secret values.
 - `pytest tests/test_bot_tooling_status.py tests/test_dashboard_phase4_pages.py::test_bot_detail_page_renders_chat_profile_controls -q` passed for Batch 106 credential-reference visibility.
+- Batch 107: added assigned-bot credential-reference visibility to Project Detail so project-level launch review shows which bots depend on named vault or environment keys.
+- `pytest tests/test_dashboard_phase4_pages.py::test_project_detail_page_surfaces_ai_workspace_readiness tests/test_bot_tooling_status.py -q` passed for Batch 107 project assigned-bot credential visibility.

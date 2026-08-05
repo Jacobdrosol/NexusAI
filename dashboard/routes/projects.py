@@ -282,6 +282,23 @@ def _project_bot_scope_view(bot: dict[str, Any]) -> dict[str, Any]:
                 result.append(label)
         return result
 
+    credential_refs = []
+    backends = bot.get("backends") if isinstance(bot.get("backends"), list) else []
+    for backend in backends:
+        if not isinstance(backend, dict):
+            continue
+        for key in ("api_key_ref", "credential_ref", "auth_token_ref"):
+            label = str(backend.get(key) or "").strip()
+            lowered = label.lower()
+            if not label:
+                continue
+            if any(lowered.startswith(prefix) for prefix in ("sk-", "xoxb-", "xoxp-", "ghp_", "github_pat_", "ya29.", "eyj")):
+                label = "[redacted raw credential]"
+            elif len(label) > 96:
+                label = label[:93] + "..."
+            if label not in credential_refs:
+                credential_refs.append(label)
+
     return {
         "required_tools": policy_list("required_worker_tools"),
         "connection_actions": policy_list("connection_action_allowlist"),
@@ -290,6 +307,7 @@ def _project_bot_scope_view(bot: dict[str, Any]) -> dict[str, Any]:
         "browser_owner_approvals": policy_list("browser_action_owner_approval_required"),
         "repo_output_mode": str(policy.get("repo_output_mode") or "deny").strip().lower() or "deny",
         "can_apply_db_actions": bool(policy.get("can_apply_db_actions", False)),
+        "credential_refs": credential_refs,
     }
 
 
