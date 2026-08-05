@@ -3773,6 +3773,54 @@ def test_chat_assignment_preview_api_blocks_unavailable_pm_bot(dashboard_client)
     assert b"PM schedule disabled" in resp.data
 
 
+def test_chat_assignment_preview_blocks_invalid_context_payload(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def preview_assignment(self, body):
+            raise AssertionError("invalid assignment preview context should not reach control plane")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/assignments/preview",
+            json={
+                "conversation_id": "c1",
+                "instruction": "Do work",
+                "pm_bot_id": "pm-bot",
+                "context_items": [{"id": "vault-1"}],
+            },
+        )
+
+    assert resp.status_code == 400
+    assert b"Invalid context payload" in resp.data
+    assert b"context_items must contain strings" in resp.data
+
+
+def test_chat_assignment_preview_proxies_string_context_items(dashboard_client):
+    _login_admin(dashboard_client)
+    seen = {}
+
+    class FakeCP:
+        def preview_assignment(self, body):
+            seen["body"] = body
+            return {"run_id": "run-1", "context_item_count": len(body.get("context_items") or [])}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/assignments/preview",
+            json={
+                "conversation_id": "c1",
+                "instruction": "Do work",
+                "pm_bot_id": "pm-bot",
+                "context_items": ["Chat: prior notes"],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert seen["body"]["context_items"] == ["Chat: prior notes"]
+    assert resp.get_json()["context_item_count"] == 1
+
+
 def test_chat_assignment_create_blocks_invalid_context_payload(dashboard_client):
     _login_admin(dashboard_client)
 

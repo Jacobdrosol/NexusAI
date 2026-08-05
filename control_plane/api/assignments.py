@@ -33,6 +33,7 @@ class PreviewAssignmentRequest(BaseModel):
     pm_bot_id: str
     instruction: str
     node_overrides: Dict[str, NodeOverride] = Field(default_factory=dict)
+    context_items: List[str] = Field(default_factory=list)
 
 
 class CreateAssignmentRequest(BaseModel):
@@ -78,6 +79,7 @@ async def preview_assignment(request: Request, body: PreviewAssignmentRequest) -
             pm_bot_id=body.pm_bot_id,
             instruction=body.instruction,
             node_overrides=_dump_overrides(body.node_overrides),
+            context_items=list(body.context_items or []),
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))

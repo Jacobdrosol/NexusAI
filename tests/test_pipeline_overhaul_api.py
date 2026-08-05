@@ -64,6 +64,7 @@ async def test_assignment_preview_create_and_lineage(cp_client):
             "conversation_id": conversation_id,
             "instruction": "Implement feature x with deterministic checks.",
             "pm_bot_id": pm_bot_id,
+            "context_items": ["Chat: existing architecture constraints"],
             "node_overrides": {
                 pm_bot_id: {
                     "skip": False,
@@ -77,6 +78,7 @@ async def test_assignment_preview_create_and_lineage(cp_client):
     preview = preview_resp.json()
     assert preview["run_id"]
     assert preview["assignment_id"]
+    assert preview["context_item_count"] == 1
     assert isinstance(preview.get("graph", {}).get("nodes"), list)
 
     create_resp = await cp_client.post(

@@ -1806,6 +1806,7 @@ def api_assignment_preview():
             "instruction": instruction,
             "pm_bot_id": pm_bot_id,
             "node_overrides": data.get("node_overrides") if isinstance(data.get("node_overrides"), dict) else {},
+            "context_items": data.get("context_items") if isinstance(data.get("context_items"), list) else [],
         }
     )
     if preview is None:

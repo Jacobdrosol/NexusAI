@@ -161,6 +161,7 @@ class AssignmentService:
         pm_bot_id: str,
         instruction: str,
         node_overrides: Optional[Dict[str, Any]] = None,
+        context_items: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         conversation = await self._chat_manager.get_conversation(conversation_id)
         if conversation is None:
@@ -182,7 +183,7 @@ class AssignmentService:
             instruction=instruction,
             graph_snapshot={"nodes": nodes, "edges": edges},
             node_overrides=normalized_overrides,
-            metadata={"mode": "preview"},
+            metadata={"mode": "preview", "context_item_count": len(context_items or [])},
         )
         return {
             "run_id": run["id"],
@@ -193,6 +194,7 @@ class AssignmentService:
             "instruction": instruction,
             "graph": run["graph_snapshot"],
             "node_overrides": run["node_overrides"],
+            "context_item_count": len(context_items or []),
             "project_connections": self._connection_resolver.list_project_connections(str(conversation.project_id or "").strip()),
         }
 
