@@ -820,10 +820,19 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
             return []
 
         def list_bots(self):
-            return []
+            return [
+                {"id": "personal-general-chat", "name": "Personal General Chat"},
+                {"id": "personal-research-chat", "name": "Personal Research Chat"},
+            ]
 
         def list_projects(self):
             return [{"id": "globeiq", "name": "GlobeIQ", "enabled": True}]
+
+        def list_models(self):
+            return [
+                {"id": "ollama-cloud/gpt-oss-120b", "name": "gpt-oss:120b", "provider": "ollama_cloud", "enabled": True},
+                {"id": "ollama-cloud/kimi-k2", "name": "kimi-k2", "provider": "ollama_cloud", "enabled": True},
+            ]
 
         def list_vault_items(self, **kwargs):
             return []
@@ -838,10 +847,12 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert b"row.hidden = !matches" in resp.data
     assert b"All projects" in resp.data
     assert b"Project globeiq" in resp.data
-    assert b"Bot personal-general-chat" in resp.data
-    assert b"Model ollama-cloud/gpt-oss-120b" in resp.data
-    assert b"Bot personal-research-chat" in resp.data
-    assert b"Model ollama-cloud/kimi-k2" in resp.data
+    assert b'Bot Personal General Chat (personal-general-chat)' in resp.data
+    assert b'title="Bot personal-general-chat"' in resp.data
+    assert b"Model ollama_cloud / gpt-oss:120b" in resp.data
+    assert b'title="Model ollama-cloud/gpt-oss-120b"' in resp.data
+    assert b"Bot Personal Research Chat (personal-research-chat)" in resp.data
+    assert b"Model ollama_cloud / kimi-k2" in resp.data
 
 
 def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_client):

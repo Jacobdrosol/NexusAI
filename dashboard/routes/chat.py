@@ -318,6 +318,33 @@ def _model_catalog_entry_from_cp(cp: Any, model_id: str) -> tuple[dict[str, Any]
     return None, f"{safe_model_id} is not in the enabled model catalog"
 
 
+def _bot_display_labels(bots: list[dict[str, Any]]) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for bot in bots or []:
+        if not isinstance(bot, dict):
+            continue
+        bot_id = str(bot.get("id") or "").strip()
+        if not bot_id:
+            continue
+        name = str(bot.get("name") or "").strip()
+        labels[bot_id] = f"{name} ({bot_id})" if name and name != bot_id else bot_id
+    return labels
+
+
+def _model_display_labels(models: list[dict[str, Any]]) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for model in models or []:
+        if not isinstance(model, dict):
+            continue
+        model_id = str(model.get("id") or "").strip()
+        if not model_id:
+            continue
+        provider = str(model.get("provider") or "").strip()
+        name = str(model.get("name") or model_id).strip() or model_id
+        labels[model_id] = f"{provider} / {name}" if provider else name
+    return labels
+
+
 def _model_capabilities(model: dict[str, Any] | None) -> list[str]:
     raw = (model or {}).get("capabilities")
     if not isinstance(raw, list):
@@ -1504,6 +1531,8 @@ def chat_page() -> str:
             selected_project_chat_tool_access=selected_project_chat_tool_access,
             selected_project_work=selected_project_work,
             model_catalog=model_catalog,
+            bot_display_labels=_bot_display_labels(bots),
+            model_display_labels=_model_display_labels(model_catalog),
             chat_attachment_limits={
                 "max_files": CHAT_ATTACHMENT_MAX_FILES,
                 "max_total_bytes": CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
@@ -1535,6 +1564,8 @@ def chat_page() -> str:
             selected_project_chat_tool_access=_normalize_project_chat_tool_access(None),
             selected_project_work={"available": False, "project_ids": [], "counts": {}, "total": 0, "by_manager": [], "recent": []},
             model_catalog=[],
+            bot_display_labels={},
+            model_display_labels={},
             chat_attachment_limits={
                 "max_files": CHAT_ATTACHMENT_MAX_FILES,
                 "max_total_bytes": CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
