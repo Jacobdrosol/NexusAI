@@ -181,6 +181,7 @@ _MEMORY_PROFILE_RECALL_RE = re.compile(
     r"\b(remember|memory|memories|profile|preference|preferences|prefer|preferred|like|called|name|codename)\b",
     re.IGNORECASE,
 )
+_ALLOWED_CONVERSATION_SCOPES = {"global", "project", "bridged"}
 
 
 class CreateConversationRequest(BaseModel):
@@ -210,6 +211,13 @@ def _workspace_tool_access_requested(
 def _workspace_tool_access_allowed_for_scope(*, scope: str, project_id: Optional[str]) -> bool:
     normalized_scope = str(scope or "global").strip()
     return normalized_scope in {"project", "bridged"} and bool((project_id or "").strip())
+
+
+def _normalize_conversation_scope(scope: str) -> str:
+    normalized_scope = str(scope or "global").strip() or "global"
+    if normalized_scope not in _ALLOWED_CONVERSATION_SCOPES:
+        raise HTTPException(status_code=400, detail="scope must be one of: global, project, bridged")
+    return normalized_scope
 
 
 class UpdateConversationRouteDefaultsRequest(BaseModel):
@@ -3743,10 +3751,11 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
     project_id = (body.project_id or "").strip() or None
     bridge_project_ids = [str(pid).strip() for pid in body.bridge_project_ids if str(pid).strip()]
     bridge_project_ids = list(dict.fromkeys(bridge_project_ids))
+    scope = _normalize_conversation_scope(body.scope)
 
-    if body.scope == "project" and not project_id:
+    if scope == "project" and not project_id:
         raise HTTPException(status_code=400, detail="project_id is required for project-scoped conversations")
-    if body.scope == "bridged":
+    if scope == "bridged":
         if not project_id:
             raise HTTPException(status_code=400, detail="project_id is required for bridged conversations")
         bridge_project_ids = [pid for pid in bridge_project_ids if pid != project_id]
@@ -3754,7 +3763,7 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
         enabled=body.tool_access_enabled,
         filesystem=body.tool_access_filesystem,
         repo_search=body.tool_access_repo_search,
-    ) and not _workspace_tool_access_allowed_for_scope(scope=body.scope, project_id=project_id):
+    ) and not _workspace_tool_access_allowed_for_scope(scope=scope, project_id=project_id):
         raise HTTPException(
             status_code=400,
             detail="workspace tools require a project-scoped or bridged conversation",
@@ -3771,7 +3780,7 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
         title=body.title,
         project_id=project_id,
         bridge_project_ids=bridge_project_ids,
-        scope=body.scope,
+        scope=scope,
         default_bot_id=body.default_bot_id,
         default_model_id=body.default_model_id,
         owner_user_id=body.owner_user_id,

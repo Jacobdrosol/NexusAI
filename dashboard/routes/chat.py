@@ -25,6 +25,7 @@ _CHAT_SELECTABLE_ROLES = {
     "code-reviewer",
     "tutor",
 }
+_ALLOWED_CONVERSATION_SCOPES = {"global", "project", "bridged"}
 
 
 def _bot_value(bot: Any, key: str, default: Any = None) -> Any:
@@ -1141,6 +1142,13 @@ def _workspace_tool_access_allowed_for_create(data: dict[str, Any]) -> bool:
     return scope in {"project", "bridged"} and bool(project_id)
 
 
+def _normalize_create_conversation_scope(data: dict[str, Any]) -> str:
+    scope = str(data.get("scope") or "global").strip() or "global"
+    if scope not in _ALLOWED_CONVERSATION_SCOPES:
+        raise ValueError("scope must be one of: global, project, bridged")
+    return scope
+
+
 def _normalize_project_chat_tool_access(raw: Any) -> dict[str, bool]:
     if not isinstance(raw, dict):
         raw = {}
@@ -1507,6 +1515,10 @@ def api_create_conversation():
     title = (data.get("title") or "").strip()
     if not title:
         return jsonify({"error": "title is required"}), 400
+    try:
+        scope = _normalize_create_conversation_scope(data)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if _workspace_tool_access_requested(data) and not _workspace_tool_access_allowed_for_create(data):
         return jsonify({"error": "workspace tools require a project-scoped or bridged conversation"}), 400
     cp = get_cp_client()
@@ -1526,7 +1538,7 @@ def api_create_conversation():
             "title": title,
             "project_id": data.get("project_id"),
             "bridge_project_ids": data.get("bridge_project_ids") or [],
-            "scope": data.get("scope", "global"),
+            "scope": scope,
             "default_bot_id": default_bot_id or None,
             "default_model_id": default_model_id or None,
             "owner_user_id": _current_memory_user_id(),

@@ -3264,6 +3264,23 @@ def test_chat_create_conversation_api_blocks_unscoped_workspace_tools(dashboard_
     assert b"workspace tools require a project-scoped or bridged conversation" in resp.data
 
 
+def test_chat_create_conversation_api_blocks_invalid_scope(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def create_conversation(self, body):
+            raise AssertionError("invalid conversation scope should not reach control plane create")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/conversations",
+            json={"title": "Bad Scope", "scope": "site-admin"},
+        )
+
+    assert resp.status_code == 400
+    assert b"scope must be one of: global, project, bridged" in resp.data
+
+
 def test_chat_create_conversation_api_blocks_disabled_default_model(dashboard_client):
     _login_admin(dashboard_client)
 

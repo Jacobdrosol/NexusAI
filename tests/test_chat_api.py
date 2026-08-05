@@ -5904,6 +5904,18 @@ async def test_create_conversation_blocks_workspace_tools_without_project_scope(
 
 
 @pytest.mark.anyio
+async def test_create_conversation_blocks_invalid_scope(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Bad Scope", "scope": "site-admin"},
+        )
+
+        assert create_resp.status_code == 400
+        assert "scope must be one of: global, project, bridged" in create_resp.text
+
+
+@pytest.mark.anyio
 async def test_update_conversation_tool_access_blocks_unscoped_conversation(cp_app):
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Unscoped Tool Guard"})
