@@ -654,7 +654,8 @@
               <div class="message-attachment-meta">
                 <span class="message-attachment-name">{{ attachment.get('name') }}</span>
                 <span class="message-attachment-detail">
-                  {% if attachment.get('mime_type') %}{{ attachment.get('mime_type') }}{% endif %}{% if attachment.get('mime_type') and attachment.get('size_bytes') %} · {% endif %}{% if attachment.get('size_bytes') %}{{ attachment.get('size_bytes') }} bytes{% endif %}
+                  {% set attachment_size = attachment.get('size_bytes')|int if attachment.get('size_bytes') else 0 %}
+                  {% if attachment.get('mime_type') %}{{ attachment.get('mime_type') }}{% endif %}{% if attachment.get('mime_type') and attachment_size %} · {% endif %}{% if attachment_size >= 1073741824 %}{{ (attachment_size / 1073741824)|round(1) }} GB{% elif attachment_size >= 1048576 %}{{ (attachment_size / 1048576)|round(1) }} MB{% elif attachment_size >= 1024 %}{{ (attachment_size / 1024)|round(1) }} KB{% elif attachment_size %}{{ attachment_size }} B{% endif %}
                 </span>
               </div>
             </div>

@@ -2645,6 +2645,64 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b"Response stream finished without a saved assistant message." in resp.data
 
 
+def test_chat_page_formats_saved_attachment_sizes(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "title": "Chat 1", "scope": "global"}]
+
+        def list_messages(self, conversation_id, limit=None):
+            return [
+                {
+                    "id": "m1",
+                    "role": "user",
+                    "content": "Use these files.",
+                    "metadata": {
+                        "attachments": [
+                            {
+                                "name": "notes.md",
+                                "mime_type": "text/markdown",
+                                "kind": "text",
+                                "size_bytes": 1536,
+                            },
+                            {
+                                "name": "diagram.png",
+                                "mime_type": "image/png",
+                                "kind": "image",
+                                "size_bytes": 2_097_152,
+                                "data_url": "data:image/png;base64,aGVsbG8=",
+                            },
+                        ]
+                    },
+                }
+            ]
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c1")
+
+    assert resp.status_code == 200
+    assert b"notes.md" in resp.data
+    assert b"text/markdown" in resp.data
+    assert b"1.5 KB" in resp.data
+    assert b"diagram.png" in resp.data
+    assert b"image/png" in resp.data
+    assert b"2.0 MB" in resp.data
+    assert b"2097152 bytes" not in resp.data
+
+
 def test_chat_page_image_preflight_uses_effective_default_model(dashboard_client):
     _login_admin(dashboard_client)
 
