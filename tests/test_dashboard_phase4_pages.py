@@ -329,6 +329,7 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert b"1 enabled assigned bot(s) are blocked." in resp.data
     assert b"1 enabled / 1 total" in resp.data
     assert b"Assigned Bot Scope" in resp.data
+    assert b"Tooling Action" in resp.data
     assert b"Project Bot Tooling Risks" in resp.data
     assert b"restore browser session" in resp.data
     assert b"Authenticated browser session" in resp.data

@@ -422,3 +422,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 197 chat usage gap summary visibility.
 - Batch 198: added persistent top-level Work cards for worker and chat global cap pressure so token safety state remains visible even when it is not yet warning or critical.
 - `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 198 cap-pressure card visibility.
+- Batch 199: surfaced per-assigned-bot tooling recommended actions, blocker categories, and first blocker messages in the Project Detail assigned-bot table so project owners can see the next safe action beside each bot before launching work.
+- `pytest tests/test_dashboard_phase4_pages.py::test_project_detail_page_surfaces_ai_workspace_readiness tests/test_bot_tooling_status.py::test_bot_tooling_status_groups_blocked_worker_tool_causes -q` passed for Batch 199 project assigned-bot tooling action visibility.

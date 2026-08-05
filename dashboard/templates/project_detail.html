@@ -198,7 +198,7 @@
 <section class="panel" style="margin-bottom:1rem;">
   <h2 class="panel-title">Assigned Bot Scope</h2>
   <table>
-    <thead><tr><th>Bot</th><th>Status</th><th>Readiness</th><th>Work Scope</th><th>Approval Gates</th></tr></thead>
+    <thead><tr><th>Bot</th><th>Status</th><th>Readiness</th><th>Tooling Action</th><th>Work Scope</th><th>Approval Gates</th></tr></thead>
     <tbody>
       {% for bot in bots %}
       {% set scope = bot.scope_view or {} %}
@@ -214,6 +214,22 @@
           {% set readiness = bot.readiness or {} %}
           <span class="badge badge-{{ readiness.state or 'unknown' }}">{{ readiness.state or 'unknown' }}</span>
           {% if readiness.detail %}<div class="mini-note">{{ readiness.detail }}</div>{% endif %}
+        </td>
+        <td class="metrics">
+          {% if bot_tooling %}
+            {% set tooling_action = bot_tooling.recommended_action or {} %}
+            <span class="badge {% if tooling_action.level == 'critical' %}badge-failed{% elif tooling_action.level == 'warning' %}badge-yellow{% elif tooling_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
+              {{ tooling_action.label or 'inspect bot' }}
+            </span>
+            {% if bot_tooling.blocking_category_view %}
+            <div>{{ bot_tooling.blocking_category_view.label }}</div>
+            {% endif %}
+            {% if bot_tooling.blocking_messages %}
+            <div class="mini-note">{{ bot_tooling.blocking_messages[0] }}</div>
+            {% endif %}
+          {% else %}
+            <span class="badge badge-unknown">unknown</span>
+          {% endif %}
         </td>
         <td class="metrics">
           {% if scope.backend_routes %}<div>Routes: {{ scope.backend_routes | join(', ') }}</div>{% endif %}
@@ -235,7 +251,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="5" class="empty">No bots are assigned to this project.</td></tr>
+      <tr><td colspan="6" class="empty">No bots are assigned to this project.</td></tr>
       {% endfor %}
     </tbody>
   </table>
