@@ -4192,6 +4192,15 @@ function chatHealthMessage(prefix, health) {
   return reason ? `${prefix}: ${reason}` : `${prefix}: ${health.level}`;
 }
 
+function chatSpendMessage(prefix, spend) {
+  if (!spend || !['critical', 'warning', 'watch'].includes(String(spend.level || ''))) return '';
+  const label = String(spend.label || 'spend watch').trim();
+  const provider = String(spend.provider || '').trim();
+  const model = String(spend.model || '').trim();
+  const lane = provider || model ? ` for ${[provider, model].filter(Boolean).join(' / ')}` : '';
+  return `${prefix}: ${label}${lane}`;
+}
+
 async function loadChatUsagePressureBanner() {
   const banner = document.getElementById('chat-usage-pressure-banner');
   if (!banner) return;
@@ -4205,6 +4214,7 @@ async function loadChatUsagePressureBanner() {
       chatPressureMessage('Chat bot cap', data.chat_cap_pressure),
       chatHealthMessage('Chat usage telemetry', data.chat_usage_health),
       chatHealthMessage('Chat provider/model attribution', chatUsageBrief.provider_model_attribution),
+      chatSpendMessage('Chat provider/model spend', chatUsageBrief.provider_model_spend),
     ].filter(Boolean);
     if (!messages.length) return;
     const critical = [
@@ -4212,6 +4222,7 @@ async function loadChatUsagePressureBanner() {
       data.chat_cap_pressure,
       data.chat_usage_health,
       chatUsageBrief.provider_model_attribution,
+      chatUsageBrief.provider_model_spend,
     ]
       .some((pressure) => String(pressure?.level || '') === 'critical');
     banner.className = `chat-composer-status ${critical ? 'error' : 'info'}`;
