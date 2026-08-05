@@ -1020,6 +1020,8 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert resp.status_code == 200
     assert b"chat-effective-context-summary" in resp.data
     assert b"function renderChatEffectiveContextSummary" in resp.data
+    assert b"function workspaceToolRequestBlocker" in resp.data
+    assert b"Workspace tools are not available:" in resp.data
     assert b"const selectedConversationProjectId = \"globeiq\";" in resp.data
     assert b"const selectedProjectMemoryProfilesEnabled = true;" in resp.data
     assert b"\"repo_search\": true" in resp.data
