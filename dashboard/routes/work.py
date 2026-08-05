@@ -49,6 +49,22 @@ def _empty_usage_summary() -> dict[str, Any]:
     }
 
 
+def _empty_chat_usage_summary() -> dict[str, Any]:
+    return {
+        "totals": {
+            "messages": 0,
+            "messages_with_usage": 0,
+            "messages_without_usage": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+        "by_conversation": [],
+        "by_bot": [],
+        "by_provider_model": [],
+    }
+
+
 def _normalize_usage_summary(summary: Any) -> dict[str, Any]:
     normalized = _empty_usage_summary()
     if not isinstance(summary, dict):
@@ -60,6 +76,22 @@ def _normalize_usage_summary(summary: Any) -> dict[str, Any]:
     if isinstance(totals, dict):
         normalized["totals"] = {**normalized["totals"], **totals}
     for key in ("by_project", "by_manager", "by_project_manager_bot", "by_bot", "by_provider_model"):
+        value = summary.get(key)
+        normalized[key] = value if isinstance(value, list) else []
+    return normalized
+
+
+def _normalize_chat_usage_summary(summary: Any) -> dict[str, Any]:
+    normalized = _empty_chat_usage_summary()
+    if not isinstance(summary, dict):
+        return normalized
+    for key, value in summary.items():
+        if key not in normalized:
+            normalized[key] = value
+    totals = summary.get("totals")
+    if isinstance(totals, dict):
+        normalized["totals"] = {**normalized["totals"], **totals}
+    for key in ("by_conversation", "by_bot", "by_provider_model"):
         value = summary.get(key)
         normalized[key] = value if isinstance(value, list) else []
     return normalized
@@ -92,6 +124,38 @@ def _usage_health(usage: dict[str, Any]) -> dict[str, Any]:
         "measured_tasks": measured_tasks,
         "missing_tasks": missing_tasks,
         "total_tasks": total_tasks,
+        "missing_ratio": missing_ratio,
+        "total_tokens": total_tokens,
+    }
+
+
+def _chat_usage_health(chat_usage: dict[str, Any]) -> dict[str, Any]:
+    totals = chat_usage.get("totals") if isinstance(chat_usage.get("totals"), dict) else {}
+    measured_messages = _safe_count(totals, "messages_with_usage")
+    missing_messages = _safe_count(totals, "messages_without_usage")
+    total_messages = measured_messages + missing_messages
+    total_tokens = _safe_count(totals, "total_tokens")
+    missing_ratio = round(missing_messages / total_messages, 2) if total_messages else 0.0
+
+    if missing_messages and missing_ratio >= 0.5:
+        level = "critical"
+        reason = "chat token usage telemetry is incomplete for most assistant messages"
+    elif missing_messages:
+        level = "warning"
+        reason = "some assistant chat messages are missing token usage telemetry"
+    elif total_tokens:
+        level = "ready"
+        reason = "chat token usage telemetry is complete for measured messages"
+    else:
+        level = "idle"
+        reason = "no chat token usage recorded in this window"
+
+    return {
+        "level": level,
+        "reason": reason,
+        "measured_messages": measured_messages,
+        "missing_messages": missing_messages,
+        "total_messages": total_messages,
         "missing_ratio": missing_ratio,
         "total_tokens": total_tokens,
     }
@@ -162,6 +226,29 @@ def _usage_brief(usage: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
         "top_projects": _top_rows("by_project"),
         "top_managers": _top_rows("by_manager"),
         "top_project_manager_bots": _top_rows("by_project_manager_bot"),
+    }
+
+
+def _chat_usage_brief(chat_usage: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
+    totals = chat_usage.get("totals") if isinstance(chat_usage.get("totals"), dict) else {}
+
+    def _top_rows(key: str) -> list[dict[str, Any]]:
+        rows = [dict(row) for row in chat_usage.get(key) or [] if isinstance(row, dict)]
+        rows.sort(key=lambda row: _safe_count(row, "total_tokens"), reverse=True)
+        return rows[: max(1, int(limit or 5))]
+
+    return {
+        "totals": {
+            "messages": _safe_count(totals, "messages"),
+            "messages_with_usage": _safe_count(totals, "messages_with_usage"),
+            "messages_without_usage": _safe_count(totals, "messages_without_usage"),
+            "prompt_tokens": _safe_count(totals, "prompt_tokens"),
+            "completion_tokens": _safe_count(totals, "completion_tokens"),
+            "total_tokens": _safe_count(totals, "total_tokens"),
+        },
+        "top_conversations": _top_rows("by_conversation"),
+        "top_bots": _top_rows("by_bot"),
+        "top_provider_models": _top_rows("by_provider_model"),
     }
 
 
@@ -536,6 +623,18 @@ def _load_work_overview() -> dict[str, Any]:
     overview["usage_brief"] = _usage_brief(overview["usage"])
     overview["usage_pressure_lanes"] = _usage_pressure_lanes(overview["usage"])
     overview["token_governor_queue_pressure"] = _token_governor_queue_pressure(tasks, overview["usage"])
+    chat_usage = getattr(cp, "chat_usage", None)
+    if callable(chat_usage):
+        chat_usage_result, warning = _safe_cp_call(cp, "chat token usage", chat_usage, hours=24, limit_conversations=25, timeout=1.5)
+        overview["chat_usage"] = _normalize_chat_usage_summary(chat_usage_result)
+        if warning:
+            warnings.append(warning)
+            overview["data_degraded"] = True
+            overview["data_warnings"] = warnings
+    else:
+        overview["chat_usage"] = _empty_chat_usage_summary()
+    overview["chat_usage_health"] = _chat_usage_health(overview["chat_usage"])
+    overview["chat_usage_brief"] = _chat_usage_brief(overview["chat_usage"])
     list_quality_suites = getattr(cp, "list_platform_ai_quality_suites_global", None)
     if callable(list_quality_suites):
         quality_suites, warning = _safe_cp_call(cp, "quality gate suites", list_quality_suites, limit=8, timeout=1.0)
@@ -577,6 +676,8 @@ def api_work_brief():
             "snapshot_health": overview.get("snapshot_health") or {},
             "usage_health": overview.get("usage_health") or {},
             "usage_brief": overview.get("usage_brief") or {},
+            "chat_usage_health": overview.get("chat_usage_health") or {},
+            "chat_usage_brief": overview.get("chat_usage_brief") or {},
             "usage_pressure_lanes": overview.get("usage_pressure_lanes") or [],
             "token_governor_queue_pressure": overview.get("token_governor_queue_pressure") or [],
             "capacity": overview.get("capacity") or {},

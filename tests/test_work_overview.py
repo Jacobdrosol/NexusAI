@@ -528,6 +528,46 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                 },
             }
 
+        def chat_usage(self, **kwargs):
+            return {
+                "window": {"hours": 24},
+                "totals": {
+                    "messages": 2,
+                    "messages_with_usage": 1,
+                    "messages_without_usage": 1,
+                    "prompt_tokens": 30,
+                    "completion_tokens": 10,
+                    "total_tokens": 40,
+                },
+                "by_conversation": [
+                    {
+                        "conversation_id": "chat-1",
+                        "conversation_title": "Planning Chat",
+                        "project_id": "nexusai",
+                        "scope": "project",
+                        "total_tokens": 40,
+                        "messages_with_usage": 1,
+                        "messages_without_usage": 1,
+                    }
+                ],
+                "by_bot": [
+                    {
+                        "bot_id": "general-chat",
+                        "total_tokens": 40,
+                        "messages_with_usage": 1,
+                        "messages_without_usage": 1,
+                    }
+                ],
+                "by_provider_model": [
+                    {
+                        "provider": "ollama_cloud",
+                        "model": "qwen3.5:397b",
+                        "total_tokens": 40,
+                        "messages_with_usage": 1,
+                    }
+                ],
+            }
+
     fake = FakeCP()
     with patch("dashboard.routes.work.get_cp_client", return_value=fake):
         resp = dashboard_client.get("/work")
@@ -563,7 +603,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"capacity available" in resp.data
     assert b"Total pressure" in resp.data
     assert b"Usage Health" in resp.data
+    assert b"Chat Usage Health" in resp.data
     assert b"token usage telemetry is incomplete for most measured tasks" in resp.data
+    assert b"chat token usage telemetry is incomplete for most assistant messages" in resp.data
     assert b"Missing ratio" in resp.data
     assert b"GlobeIQ" in resp.data
     assert b"GlobeIQ Manager" in resp.data
@@ -615,6 +657,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Usage Gaps" in resp.data
     assert b"2 missing usage" in resp.data
     assert b"lesson-writer" in resp.data
+    assert b"Planning Chat" in resp.data
+    assert b"general-chat" in resp.data
+    assert b"No chat token usage" not in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
     assert b"Stale Work" in resp.data
@@ -690,8 +735,12 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["attention"]["total"] == 8
     assert brief_data["snapshot_health"]["level"] == "ready"
     assert brief_data["usage_health"]["missing_tasks"] == 2
+    assert brief_data["chat_usage_health"]["missing_messages"] == 1
+    assert brief_data["chat_usage_health"]["total_tokens"] == 40
     assert brief_data["usage_brief"]["totals"]["prompt_tokens"] == 60
     assert brief_data["usage_brief"]["totals"]["completion_tokens"] == 80
+    assert brief_data["chat_usage_brief"]["totals"]["prompt_tokens"] == 30
+    assert brief_data["chat_usage_brief"]["top_conversations"][0]["conversation_id"] == "chat-1"
     assert brief_data["usage_brief"]["top_bots"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["project_id"] == "globeiq"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["manager_id"] == "globeiq-pm"
@@ -1028,6 +1077,12 @@ def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
     assert data["usage"]["by_project_manager_bot"] == []
     assert data["usage"]["by_bot"] == []
     assert data["usage"]["by_provider_model"] == []
+    assert data["chat_usage"]["totals"]["total_tokens"] == 0
+    assert data["chat_usage"]["totals"]["messages_with_usage"] == 0
+    assert data["chat_usage"]["totals"]["messages_without_usage"] == 0
+    assert data["chat_usage"]["by_conversation"] == []
+    assert data["chat_usage"]["by_bot"] == []
+    assert data["chat_usage"]["by_provider_model"] == []
     assert data["usage_pressure_lanes"] == []
     assert data["usage_health"] == {
         "level": "idle",
@@ -1035,6 +1090,15 @@ def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
         "measured_tasks": 0,
         "missing_tasks": 0,
         "total_tasks": 0,
+        "missing_ratio": 0.0,
+        "total_tokens": 0,
+    }
+    assert data["chat_usage_health"] == {
+        "level": "idle",
+        "reason": "no chat token usage recorded in this window",
+        "measured_messages": 0,
+        "missing_messages": 0,
+        "total_messages": 0,
         "missing_ratio": 0.0,
         "total_tokens": 0,
     }
