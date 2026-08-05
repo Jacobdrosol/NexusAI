@@ -932,6 +932,8 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert b"loadChatUsagePressureBanner" in resp.data
     assert b"chatHealthMessage" in resp.data
     assert b"chatSpendMessage" in resp.data
+    assert b"chatTopProjectMessage" in resp.data
+    assert b"Top chat project:" in resp.data
     assert b"Chat usage telemetry" in resp.data
     assert b"Chat provider/model attribution" in resp.data
     assert b"Chat provider/model spend" in resp.data

@@ -4201,6 +4201,18 @@ function chatSpendMessage(prefix, spend) {
   return `${prefix}: ${label}${lane}`;
 }
 
+function chatTopProjectMessage(chatUsageBrief) {
+  const rows = Array.isArray(chatUsageBrief?.top_projects) ? chatUsageBrief.top_projects : [];
+  if (!rows.length) return '';
+  const top = rows[0] || {};
+  const projectId = String(top.project_id || 'unscoped').trim() || 'unscoped';
+  const tokens = Number(top.total_tokens || 0);
+  if (!tokens) return '';
+  const conversations = Number(top.conversation_count || 0);
+  const conversationText = conversations ? ` across ${conversations} chat${conversations === 1 ? '' : 's'}` : '';
+  return `Top chat project: ${projectId} using ${tokens.toLocaleString()} tokens${conversationText}`;
+}
+
 async function loadChatUsagePressureBanner() {
   const banner = document.getElementById('chat-usage-pressure-banner');
   if (!banner) return;
@@ -4215,6 +4227,7 @@ async function loadChatUsagePressureBanner() {
       chatHealthMessage('Chat usage telemetry', data.chat_usage_health),
       chatHealthMessage('Chat provider/model attribution', chatUsageBrief.provider_model_attribution),
       chatSpendMessage('Chat provider/model spend', chatUsageBrief.provider_model_spend),
+      chatTopProjectMessage(chatUsageBrief),
     ].filter(Boolean);
     if (!messages.length) return;
     const critical = [
