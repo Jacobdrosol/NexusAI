@@ -129,6 +129,8 @@ def normalize_launch_profile(bot: dict[str, Any]) -> dict[str, Any] | None:
 def launchable_bots(bots: list[dict[str, Any]], *, surface: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for bot in bots:
+        if not bool(bot.get("enabled", True)):
+            continue
         profile = normalize_launch_profile(bot)
         if not profile or not profile["enabled"]:
             continue

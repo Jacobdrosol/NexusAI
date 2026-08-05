@@ -76,7 +76,7 @@ Key functions:
 |---|---|
 | `normalize_launch_profile(bot)` | Extracts and normalises a bot's `launch_profile` dict from `routing_rules` or top-level fields. Returns `None` if no valid profile exists. |
 | `normalize_launch_payload(bot, payload)` | Applies `input_transform` or `output_contract` template substitution (`{{payload.field}}` syntax) to a launch payload dict. |
-| `launchable_bots(bots, *, surface)` | Filters a list of bot dicts to only those with an enabled launch profile visible on the requested surface (`"overview"` or `"tasks"`). Returns sorted list. |
+| `launchable_bots(bots, *, surface)` | Filters a list of enabled bot dicts to only those with an enabled launch profile visible on the requested surface (`"overview"` or `"tasks"`). Returns sorted list. |
 
 Template expressions use `{{payload.some.nested.field}}` and `json:payload.field_json` for JSON-parsing stored values.
 
