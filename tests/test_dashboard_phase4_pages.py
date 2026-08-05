@@ -1024,6 +1024,7 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"function inlineCodingRequestBlocker" in resp.data
     assert b"Workspace tools are not available:" in resp.data
     assert b"Inline coding is not available:" in resp.data
+    assert b"inline coding inactive: message toggle off" in resp.data
     assert b"const selectedConversationProjectId = \"globeiq\";" in resp.data
     assert b"const selectedProjectMemoryProfilesEnabled = true;" in resp.data
     assert b"\"repo_search\": true" in resp.data

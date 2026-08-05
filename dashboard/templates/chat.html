@@ -1639,9 +1639,16 @@ function renderChatEffectiveContextSummary() {
   const toolText = effectiveTools
     ? `workspace tools active: ${effectiveToolModes.join(', ')}`
     : `workspace tools inactive: ${toolReasons.join(', ') || 'gate off'}`;
+  const codingRequested = _chatGateCheckboxValue('enable-inline-coding-message', false);
+  const codingBlocker = inlineCodingRequestBlocker();
+  const codingClass = codingRequested ? (codingBlocker ? 'attention' : 'ready') : 'disabled';
+  const codingText = codingRequested
+    ? (codingBlocker || 'inline coding active')
+    : 'inline coding inactive: message toggle off';
   summary.innerHTML = `
     <span class="badge badge-${memoryClass}">${esc(memoryText)}</span>
     <span class="badge badge-${toolsClass}">${esc(toolText)}</span>
+    <span class="badge badge-${codingClass}">${esc(codingText)}</span>
   `;
 }
 
