@@ -5989,6 +5989,51 @@ def test_platform_ai_session_stream_error_payload_is_displayed(dashboard_client)
     assert b"operator-chat-status" in resp.data
 
 
+def test_platform_ai_session_uses_server_upload_limits(dashboard_client, monkeypatch):
+    _login_admin(dashboard_client)
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_UPLOAD_MAX_FILES", "7")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_UPLOAD_MAX_TOTAL_BYTES", "123456")
+
+    class FakeCP:
+        def get_platform_ai_session(self, session_id):
+            return {
+                "id": session_id,
+                "mode": "bot_creator",
+                "status": "running",
+                "archived": False,
+                "metadata": {},
+                "created_at": "2026-03-12T00:00:00+00:00",
+                "updated_at": "2026-03-12T00:00:00+00:00",
+            }
+
+        def list_platform_ai_messages(self, session_id, limit=400):
+            return {"messages": []}
+
+        def list_platform_ai_events(self, session_id, limit=600):
+            return {"events": []}
+
+        def list_platform_ai_proposals(self, session_id, limit=100):
+            return {"proposals": []}
+
+        def list_projects(self):
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_workers(self):
+            return []
+
+    with patch("dashboard.routes.platform_ai.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/platform-ai/sessions/session-1")
+
+    assert resp.status_code == 200
+    assert b'"max_files": 7' in resp.data
+    assert b'"max_total_bytes": 123456' in resp.data
+    assert b"SESSION_ATTACHMENT_MAX_FILES = Number(sessionUploadLimits?.max_files || 15)" in resp.data
+    assert b"SESSION_ATTACHMENT_MAX_TOTAL_BYTES = Number(sessionUploadLimits?.max_total_bytes || 1024 * 1024 * 1024)" in resp.data
+
+
 def test_vault_upload_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/vault/upload", data={"source_mode": "paste"})

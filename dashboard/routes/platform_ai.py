@@ -359,6 +359,7 @@ def platform_ai_session_page(session_id: str) -> str:
             projects=[],
             bots=[],
             workers=[],
+            upload_limits=_platform_ai_upload_limits(),
             error="Platform AI session not found or control plane unavailable.",
             active_page="platform_ai",
         )
@@ -398,6 +399,7 @@ def platform_ai_session_page(session_id: str) -> str:
         projects=projects,
         bots=bots,
         workers=workers,
+        upload_limits=_platform_ai_upload_limits(),
         error=None,
         active_page="platform_ai",
     )

@@ -531,8 +531,9 @@ let LAST_PROPOSALS = Array.isArray(INITIAL_PROPOSALS) ? INITIAL_PROPOSALS : [];
 let LAST_CONTEXT_FILES = {{ context_files|default([], true)|tojson }};
 let LAST_MESSAGE_FILES = {{ message_files|default([], true)|tojson }};
 let pendingSessionAttachments = [];
-const SESSION_ATTACHMENT_MAX_FILES = 15;
-const SESSION_ATTACHMENT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
+const sessionUploadLimits = {{ (upload_limits or {})|tojson }};
+const SESSION_ATTACHMENT_MAX_FILES = Number(sessionUploadLimits?.max_files || 15);
+const SESSION_ATTACHMENT_MAX_TOTAL_BYTES = Number(sessionUploadLimits?.max_total_bytes || 1024 * 1024 * 1024);
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
