@@ -1342,9 +1342,9 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"\"repo_search\": true" in resp.data
     assert b"const assignmentContext = selectedContextItems();" in resp.data
     assert b"context_items: assignmentContext.contexts" in resp.data
+    assert b"context_item_ids: assignmentContext.contextItemIds" in resp.data
     assert b"Context items: " in resp.data
-    assert b"Assignments include selected conversation context." in resp.data
-    assert b"Selected vault items are not included in assignments yet." in resp.data
+    assert b"Assignments include selected conversation context and selected vault items." in resp.data
 
 
 def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashboard_client):
@@ -3808,7 +3808,10 @@ def test_chat_assignment_preview_proxies_string_context_items(dashboard_client):
     class FakeCP:
         def preview_assignment(self, body):
             seen["body"] = body
-            return {"run_id": "run-1", "context_item_count": len(body.get("context_items") or [])}
+            return {
+                "run_id": "run-1",
+                "context_item_count": len(body.get("context_items") or []) + len(body.get("context_item_ids") or []),
+            }
 
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.post(
@@ -3818,12 +3821,14 @@ def test_chat_assignment_preview_proxies_string_context_items(dashboard_client):
                 "instruction": "Do work",
                 "pm_bot_id": "pm-bot",
                 "context_items": ["Chat: prior notes"],
+                "context_item_ids": ["vault-1"],
             },
         )
 
     assert resp.status_code == 200
     assert seen["body"]["context_items"] == ["Chat: prior notes"]
-    assert resp.get_json()["context_item_count"] == 1
+    assert seen["body"]["context_item_ids"] == ["vault-1"]
+    assert resp.get_json()["context_item_count"] == 2
 
 
 def test_chat_assignment_create_blocks_invalid_context_payload(dashboard_client):

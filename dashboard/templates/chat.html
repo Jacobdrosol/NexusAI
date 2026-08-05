@@ -867,7 +867,7 @@
           {% endfor %}
         </select>
       </div>
-      <p class="mini-note">Assignments include selected conversation context. Selected vault items are not included until assignment vault-context routing is enabled.</p>
+      <p class="mini-note">Assignments include selected conversation context and selected vault items.</p>
       <div class="modal-actions">
         <button type="submit" class="btn btn-primary">Next</button>
         <button type="button" class="btn" onclick="hideModal('modal-assign')">Cancel</button>
@@ -3217,10 +3217,6 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
     return;
   }
   const assignmentContext = selectedContextItems();
-  if (assignmentContext.contextItemIds.length) {
-    alert('Selected vault items are not included in assignments yet. Use selected conversation context or paste critical vault details into the instruction.');
-    return;
-  }
   const res = await fetch('/api/chat/assignments/preview', {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
@@ -3228,7 +3224,8 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
       conversation_id: fd.get('conversation_id'),
       instruction,
       pm_bot_id: pmBotId,
-      context_items: assignmentContext.contexts
+      context_items: assignmentContext.contexts,
+      context_item_ids: assignmentContext.contextItemIds
     }),
   });
   if (!res.ok) {
@@ -3255,6 +3252,7 @@ document.getElementById('assign-config-submit')?.addEventListener('click', async
     run_id: activeAssignmentPreview.run_id,
     node_overrides: nodeOverrides,
     context_items: assignmentContext.contexts,
+    context_item_ids: assignmentContext.contextItemIds,
     include_project_context: includeProjectContext ? includeProjectContext.checked : false,
     use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked
   };

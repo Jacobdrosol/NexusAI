@@ -1793,7 +1793,7 @@ def api_assignment_preview():
         return jsonify({"error": "instruction is required"}), 400
     if not pm_bot_id:
         return jsonify({"error": "pm_bot_id is required"}), 400
-    context_blocker = _context_payload_blocker(data.get("context_items"), None)
+    context_blocker = _context_payload_blocker(data.get("context_items"), data.get("context_item_ids"))
     if context_blocker:
         return jsonify({"error": f"Invalid context payload: {context_blocker}"}), 400
     cp = get_cp_client()
@@ -1807,6 +1807,7 @@ def api_assignment_preview():
             "pm_bot_id": pm_bot_id,
             "node_overrides": data.get("node_overrides") if isinstance(data.get("node_overrides"), dict) else {},
             "context_items": data.get("context_items") if isinstance(data.get("context_items"), list) else [],
+            "context_item_ids": data.get("context_item_ids") if isinstance(data.get("context_item_ids"), list) else [],
         }
     )
     if preview is None:
@@ -1827,7 +1828,7 @@ def api_create_assignment():
         return jsonify({"error": "instruction is required"}), 400
     if not pm_bot_id:
         return jsonify({"error": "pm_bot_id is required"}), 400
-    context_blocker = _context_payload_blocker(data.get("context_items"), None)
+    context_blocker = _context_payload_blocker(data.get("context_items"), data.get("context_item_ids"))
     if context_blocker:
         return jsonify({"error": f"Invalid context payload: {context_blocker}"}), 400
     cp = get_cp_client()
@@ -1842,6 +1843,7 @@ def api_create_assignment():
             "run_id": data.get("run_id"),
             "node_overrides": data.get("node_overrides") if isinstance(data.get("node_overrides"), dict) else {},
             "context_items": data.get("context_items") if isinstance(data.get("context_items"), list) else [],
+            "context_item_ids": data.get("context_item_ids") if isinstance(data.get("context_item_ids"), list) else [],
         }
     )
     if created is None:
@@ -1866,7 +1868,7 @@ def api_assignment_splice(assignment_id: str):
     from_node_id = str(data.get("from_node_id") or "").strip()
     if not from_node_id:
         return jsonify({"error": "from_node_id is required"}), 400
-    context_blocker = _context_payload_blocker(data.get("context_items"), None)
+    context_blocker = _context_payload_blocker(data.get("context_items"), data.get("context_item_ids"))
     if context_blocker:
         return jsonify({"error": f"Invalid context payload: {context_blocker}"}), 400
     cp = get_cp_client()
@@ -1876,6 +1878,7 @@ def api_assignment_splice(assignment_id: str):
             "from_node_id": from_node_id,
             "node_overrides": data.get("node_overrides") if isinstance(data.get("node_overrides"), dict) else {},
             "context_items": data.get("context_items") if isinstance(data.get("context_items"), list) else [],
+            "context_item_ids": data.get("context_item_ids") if isinstance(data.get("context_item_ids"), list) else [],
         },
     )
     if result is None:

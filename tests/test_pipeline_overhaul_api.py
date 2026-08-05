@@ -57,6 +57,16 @@ async def test_assignment_preview_create_and_lineage(cp_client):
     pm_bot_id = "pm-assign-v2"
     created_bot = await cp_client.post("/v1/bots", json=_pm_bot_payload(pm_bot_id))
     assert created_bot.status_code == 200
+    vault_resp = await cp_client.post(
+        "/v1/vault/items",
+        json={
+            "title": "Architecture Note",
+            "content": "Preserve existing task contracts and avoid broad rewrites.",
+            "namespace": "chat",
+        },
+    )
+    assert vault_resp.status_code == 200
+    vault_item_id = vault_resp.json()["id"]
 
     preview_resp = await cp_client.post(
         "/v1/assignments/preview",
@@ -65,6 +75,7 @@ async def test_assignment_preview_create_and_lineage(cp_client):
             "instruction": "Implement feature x with deterministic checks.",
             "pm_bot_id": pm_bot_id,
             "context_items": ["Chat: existing architecture constraints"],
+            "context_item_ids": [vault_item_id],
             "node_overrides": {
                 pm_bot_id: {
                     "skip": False,
@@ -78,7 +89,7 @@ async def test_assignment_preview_create_and_lineage(cp_client):
     preview = preview_resp.json()
     assert preview["run_id"]
     assert preview["assignment_id"]
-    assert preview["context_item_count"] == 1
+    assert preview["context_item_count"] == 2
     assert isinstance(preview.get("graph", {}).get("nodes"), list)
 
     create_resp = await cp_client.post(
@@ -125,6 +136,7 @@ async def test_assignment_preview_create_and_lineage(cp_client):
 async def test_assignment_context_items_are_bounded(cp_client):
     oversized_context = "x" * 12001
     too_many_context_items = [f"context {idx}" for idx in range(51)]
+    too_many_context_item_ids = [f"vault-{idx}" for idx in range(201)]
 
     preview_item_resp = await cp_client.post(
         "/v1/assignments/preview",
@@ -153,6 +165,17 @@ async def test_assignment_context_items_are_bounded(cp_client):
         json={"from_node_id": "node-1", "context_items": [oversized_context]},
     )
     assert splice_item_resp.status_code == 422
+
+    create_id_count_resp = await cp_client.post(
+        "/v1/assignments",
+        json={
+            "conversation_id": "conversation-1",
+            "instruction": "Create with too many vault ids.",
+            "pm_bot_id": "pm-bot",
+            "context_item_ids": too_many_context_item_ids,
+        },
+    )
+    assert create_id_count_resp.status_code == 422
 
 
 @pytest.mark.anyio

@@ -16,7 +16,10 @@ router = APIRouter(prefix="/v1/assignments", tags=["assignments"])
 
 _ASSIGNMENT_CONTEXT_ITEM_MAX_CHARS = 12000
 _ASSIGNMENT_CONTEXT_ITEM_MAX_COUNT = 50
+_ASSIGNMENT_CONTEXT_ITEM_ID_MAX_CHARS = 200
+_ASSIGNMENT_CONTEXT_ITEM_ID_MAX_COUNT = 200
 AssignmentContextItem = Annotated[str, Field(max_length=_ASSIGNMENT_CONTEXT_ITEM_MAX_CHARS)]
+AssignmentContextItemId = Annotated[str, Field(min_length=1, max_length=_ASSIGNMENT_CONTEXT_ITEM_ID_MAX_CHARS)]
 
 
 class NodeConnectionBinding(BaseModel):
@@ -38,6 +41,7 @@ class PreviewAssignmentRequest(BaseModel):
     instruction: str
     node_overrides: Dict[str, NodeOverride] = Field(default_factory=dict)
     context_items: List[AssignmentContextItem] = Field(default_factory=list, max_length=_ASSIGNMENT_CONTEXT_ITEM_MAX_COUNT)
+    context_item_ids: List[AssignmentContextItemId] = Field(default_factory=list, max_length=_ASSIGNMENT_CONTEXT_ITEM_ID_MAX_COUNT)
 
 
 class CreateAssignmentRequest(BaseModel):
@@ -47,12 +51,14 @@ class CreateAssignmentRequest(BaseModel):
     run_id: Optional[str] = None
     node_overrides: Dict[str, NodeOverride] = Field(default_factory=dict)
     context_items: List[AssignmentContextItem] = Field(default_factory=list, max_length=_ASSIGNMENT_CONTEXT_ITEM_MAX_COUNT)
+    context_item_ids: List[AssignmentContextItemId] = Field(default_factory=list, max_length=_ASSIGNMENT_CONTEXT_ITEM_ID_MAX_COUNT)
 
 
 class SpliceAssignmentRequest(BaseModel):
     from_node_id: str
     node_overrides: Dict[str, NodeOverride] = Field(default_factory=dict)
     context_items: List[AssignmentContextItem] = Field(default_factory=list, max_length=_ASSIGNMENT_CONTEXT_ITEM_MAX_COUNT)
+    context_item_ids: List[AssignmentContextItemId] = Field(default_factory=list, max_length=_ASSIGNMENT_CONTEXT_ITEM_ID_MAX_COUNT)
 
 
 class RerunNodeRequest(BaseModel):
@@ -61,6 +67,29 @@ class RerunNodeRequest(BaseModel):
 
 def _dump_overrides(raw: Dict[str, NodeOverride]) -> Dict[str, Dict[str, Any]]:
     return {str(key): value.model_dump() for key, value in (raw or {}).items()}
+
+
+async def _resolve_assignment_context_items(
+    request: Request,
+    *,
+    context_items: List[str],
+    context_item_ids: List[str],
+) -> List[str]:
+    resolved: List[str] = []
+    vault_manager = getattr(request.app.state, "vault_manager", None)
+    if context_item_ids and vault_manager is not None:
+        item_ids = [str(item_id).strip() for item_id in context_item_ids if str(item_id).strip()]
+        for item_id in item_ids[:20]:
+            try:
+                item = await vault_manager.get_item(item_id)
+                text = (item.content or "").strip()
+                if not text:
+                    continue
+                resolved.append(f"[vault:{item.id}] {item.title}\n{text[:4000]}")
+            except Exception:
+                continue
+    resolved.extend(str(item).strip() for item in context_items if str(item).strip())
+    return resolved[:_ASSIGNMENT_CONTEXT_ITEM_MAX_COUNT]
 
 
 async def _resolve_run(request: Request, assignment_id: str) -> Dict[str, Any]:
@@ -78,12 +107,17 @@ async def _resolve_run(request: Request, assignment_id: str) -> Dict[str, Any]:
 async def preview_assignment(request: Request, body: PreviewAssignmentRequest) -> Dict[str, Any]:
     service = request.app.state.assignment_service
     try:
+        context_items = await _resolve_assignment_context_items(
+            request,
+            context_items=list(body.context_items or []),
+            context_item_ids=list(body.context_item_ids or []),
+        )
         return await service.preview(
             conversation_id=body.conversation_id,
             pm_bot_id=body.pm_bot_id,
             instruction=body.instruction,
             node_overrides=_dump_overrides(body.node_overrides),
-            context_items=list(body.context_items or []),
+            context_items=context_items,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -95,13 +129,18 @@ async def create_assignment(request: Request, body: CreateAssignmentRequest) -> 
     chat_manager = request.app.state.chat_manager
     pm_orchestrator = request.app.state.pm_orchestrator
     try:
+        context_items = await _resolve_assignment_context_items(
+            request,
+            context_items=list(body.context_items or []),
+            context_item_ids=list(body.context_item_ids or []),
+        )
         queued = await service.create_assignment(
             conversation_id=body.conversation_id,
             instruction=body.instruction,
             pm_bot_id=body.pm_bot_id,
             run_id=body.run_id,
             node_overrides=_dump_overrides(body.node_overrides),
-            context_items=list(body.context_items or []),
+            context_items=context_items,
         )
         # Build context snapshot so the "PM context: X messages" label shows in the UI
         try:
@@ -221,11 +260,16 @@ async def splice_assignment(assignment_id: str, request: Request, body: SpliceAs
     pm_orchestrator = request.app.state.pm_orchestrator
     run = await _resolve_run(request, assignment_id)
     try:
+        context_items = await _resolve_assignment_context_items(
+            request,
+            context_items=list(body.context_items or []),
+            context_item_ids=list(body.context_item_ids or []),
+        )
         result = await service.splice_and_rerun(
             run_id=str(run.get("id") or ""),
             from_node_id=body.from_node_id,
             override_patch=_dump_overrides(body.node_overrides),
-            context_items=list(body.context_items or []),
+            context_items=context_items,
         )
         assignment = result.get("assignment") if isinstance(result.get("assignment"), dict) else {}
         conversation_id = str(run.get("conversation_id") or "").strip()
