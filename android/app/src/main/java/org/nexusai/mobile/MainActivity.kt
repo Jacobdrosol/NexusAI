@@ -1,5 +1,8 @@
 package org.nexusai.mobile
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,7 +23,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -49,6 +54,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -359,15 +365,45 @@ private fun ConversationScreen(modifier: Modifier, conversation: ChatConversatio
     }
     LazyColumn(Modifier.fillMaxWidth().height(360.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(messages) { message ->
-            Column(Modifier.fillMaxWidth()) {
-                Text(if (message.role == "user") "You" else "NexusAI", style = MaterialTheme.typography.labelMedium)
-                Text(message.content)
-            }
+            MessageRow(message)
         }
     }
     OutlinedTextField(value = draft, onValueChange = { draft = it }, label = { Text("Message") }, modifier = Modifier.fillMaxWidth(), minLines = 2, enabled = !loading)
     Button(enabled = !loading && draft.isNotBlank(), onClick = { onSend(draft.trim()); draft = "" }, modifier = Modifier.fillMaxWidth()) { Text(if (loading) "Sending…" else "Send") }
     if (status.isNotBlank()) Text(status, color = MaterialTheme.colorScheme.error)
+    }
+}
+
+@Composable
+private fun MessageRow(message: ChatMessage) {
+    val context = LocalContext.current
+    var actionsOpen by remember(message.id) { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (message.role == "user") "You" else "NexusAI",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Box {
+                IconButton(onClick = { actionsOpen = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Open message actions")
+                }
+                DropdownMenu(expanded = actionsOpen, onDismissRequest = { actionsOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Copy") },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("NexusAI message", message.content))
+                            actionsOpen = false
+                        },
+                    )
+                }
+            }
+        }
+        Text(message.content)
     }
 }
 
