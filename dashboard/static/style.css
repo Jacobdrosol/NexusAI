@@ -3091,9 +3091,14 @@ select.form-control {
     padding: 1rem 0.8rem;
   }
 
-  .page-chat .app-shell,
+  .page-chat .app-shell {
+    height: 100dvh;
+  }
+
   .page-chat .app-main {
     height: auto;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .page-chat .app-sidebar {
