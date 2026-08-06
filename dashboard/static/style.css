@@ -927,7 +927,7 @@ select.form-control {
 .page-chat .chat-main-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 0.5rem;
   flex: 0 0 auto;
   margin-bottom: 0;

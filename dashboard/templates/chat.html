@@ -2,19 +2,6 @@
 {% set active_page = "chat" %}
 {% block title %}Chat{% endblock %}
 {% block content %}
-<div class="page-header chat-page-header">
-  <h1>Chat</h1>
-  <div class="chat-page-header-actions">
-    <button
-        id="chat-conversations-toggle"
-        class="btn chat-conversations-toggle"
-      type="button"
-      aria-controls="chat-conversation-panel"
-      aria-expanded="false"
-    >Chats</button>
-    <button class="btn btn-primary" onclick="showCreateConversation()">+ New Conversation</button>
-  </div>
-</div>
 <div id="chat-usage-pressure-banner" class="chat-composer-status info" hidden></div>
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
@@ -528,12 +515,21 @@
 
   <section class="panel chat-panel-main">
     <div class="chat-main-header">
-      <h2 class="panel-title">Messages</h2>
-      {% if selected_conversation %}
       <div class="chat-main-header-controls">
+        <button
+            id="chat-conversations-toggle"
+            class="btn chat-conversations-toggle"
+          type="button"
+          aria-controls="chat-conversation-panel"
+          aria-expanded="false"
+        >Chats</button>
+        <button class="btn btn-primary" type="button" onclick="showCreateConversation()">+ New Conversation</button>
+        {% if selected_conversation %}
         <button id="chat-settings-toggle" class="btn btn-sm" type="button">Chat settings</button>
+        {% endif %}
       </div>
     </div>
+    {% if selected_conversation %}
     <div id="task-events-shell" class="chat-task-shell" hidden>
       <div id="task-event-state" class="state-info chat-task-state"></div>
       <div id="task-events" class="list chat-task-events"></div>
