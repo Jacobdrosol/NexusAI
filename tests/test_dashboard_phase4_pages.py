@@ -953,16 +953,9 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert "ollama_cloud / gpt-oss:120b" in active_row
     assert "personal research chat (personal-research-chat)" in archived_row
     assert "ollama_cloud / kimi-k2" in archived_row
-    assert b'id="chat-usage-pressure-banner"' in resp.data
-    assert b"loadChatUsagePressureBanner" in resp.data
-    assert b"chatHealthMessage" in resp.data
-    assert b"chatSpendMessage" in resp.data
-    assert b"chatTopProjectMessage" in resp.data
-    assert b"Top chat project:" in resp.data
-    assert b"Chat usage telemetry" in resp.data
-    assert b"Chat provider/model attribution" in resp.data
-    assert b"Chat provider/model spend" in resp.data
-    assert b"/api/work/brief" in resp.data
+    assert b'id="chat-usage-pressure-banner"' not in resp.data
+    assert b"loadChatUsagePressureBanner" not in resp.data
+    assert b"/api/work/brief" not in resp.data
     assert b'id="chat-clear-filters"' in resp.data
     assert b"function clearConversationFilters" in resp.data
     assert b"addEventListener('click', clearConversationFilters)" in resp.data
