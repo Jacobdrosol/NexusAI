@@ -532,6 +532,7 @@ select.form-control {
 }
 
 .message {
+  position: relative;
   margin-bottom: 0.65rem;
   padding: 0.65rem 0.75rem;
   border-radius: 8px;
@@ -781,29 +782,58 @@ select.form-control {
   margin-bottom: 0.5rem;
 }
 
+.message-actions-menu {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  z-index: 2;
+}
+
+.message-actions-menu summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  list-style: none;
+}
+
+.message-actions-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-actions-menu[open] summary {
+  border-color: #737373;
+  background: #303030;
+}
+
 .message-actions {
   display: flex;
+  flex-direction: column;
   gap: 0.35rem;
-  margin-top: 0.5rem;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-2px);
-  transition: opacity 0.14s ease, transform 0.14s ease;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  min-width: 10rem;
+  padding: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #1c1c1c;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
 }
 
-.message:hover .message-actions,
-.message:focus-within .message-actions {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
-}
-
-@media (hover: none) {
-  .message-actions {
-    opacity: 1;
-    pointer-events: auto;
-    transform: none;
-  }
+.message-actions .btn {
+  width: 100%;
+  text-align: left;
 }
 
 .context-picker-list {

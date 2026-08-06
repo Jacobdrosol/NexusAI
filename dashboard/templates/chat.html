@@ -647,7 +647,9 @@
           </div>
         </div>
         {% endif %}
-        <div class="message-actions">
+        <details class="message-actions-menu">
+          <summary aria-label="Open message actions" title="Message actions">...</summary>
+          <div class="message-actions">
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
           {% if m.role == 'assistant' and not (m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error']) %}
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
@@ -695,7 +697,8 @@
             </button>
             <button type="button" class="btn btn-primary chat-stream-btn-inline" onclick="sendMessage(true)">Send</button>
           </div>
-        </div>
+          </div>
+        </details>
         <div id="chat-attachment-list" class="chat-attachment-list" aria-live="polite"></div>
         <div id="chat-composer-status" class="chat-composer-status" role="status" aria-live="polite" hidden></div>
         <div class="mini-note chat-attachment-hint">Drag files here or use +. Max {{ chat_attachment_limits.max_files }} files, 1 GB total.</div>
@@ -1510,14 +1513,19 @@ function renderMessageActions(meta, role = '') {
     ? `<button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>`
     : '';
   return `
-    <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
-    ${rerunBtn}
-    ${sendToVaultBtn}
-    ${recapBtn}
-    ${reviewBtn}
-    ${applyBtn}
-    ${markFailedBtn}
-    ${dagBtn}
+    <details class="message-actions-menu">
+      <summary aria-label="Open message actions" title="Message actions">...</summary>
+      <div class="message-actions">
+        <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
+        ${rerunBtn}
+        ${sendToVaultBtn}
+        ${recapBtn}
+        ${reviewBtn}
+        ${applyBtn}
+        ${markFailedBtn}
+        ${dagBtn}
+      </div>
+    </details>
   `;
 }
 
@@ -2613,9 +2621,7 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
     ${renderAssignmentContextHtml(meta)}
     <div class="message-body"></div>
     ${renderMessageAttachmentsHtml(meta)}
-    <div class="message-actions">
-       ${renderMessageActions(meta, role)}
-    </div>
+    ${renderMessageActions(meta, role)}
   `;
   renderMessageBody(div.querySelector('.message-body'), content);
   container.appendChild(div);
@@ -2693,7 +2699,7 @@ function hydrateMessageElement(el, message) {
   const existingContext = el.querySelector('.message-context');
   const bodyEl = el.querySelector('.message-body');
   const existingAttachments = el.querySelector('.message-attachments');
-  const actionsEl = el.querySelector('.message-actions');
+  const actionsEl = el.querySelector('.message-actions-menu');
   const failedPm = isFailedPmLikeMessage(message?.metadata || null);
   const assignError = String(message?.metadata?.mode || '').trim() === 'assign_error';
   const queuedPm = String(message?.metadata?.mode || '').trim() === 'assign_pending'
@@ -2761,7 +2767,7 @@ function hydrateMessageElement(el, message) {
     existingAttachments.remove();
   }
   if (bodyEl) renderMessageBody(bodyEl, message.content || '');
-  if (actionsEl) actionsEl.innerHTML = renderMessageActions(message.metadata || null, message.role || '');
+  if (actionsEl) actionsEl.outerHTML = renderMessageActions(message.metadata || null, message.role || '');
   return el;
 }
 
