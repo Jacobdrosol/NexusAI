@@ -649,7 +649,7 @@
         {% endif %}
         <div class="message-actions">
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
-          {% if not (m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error']) %}
+          {% if m.role == 'assistant' and not (m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error']) %}
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
           {% endif %}
           {% if not (m.metadata and (m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false)) %}
@@ -1485,7 +1485,7 @@ function selectedContextItems() {
   return {contexts, contextItemIds};
 }
 
-function renderMessageActions(meta) {
+function renderMessageActions(meta, role = '') {
   const orchestrationId = meta?.orchestration_id;
   const passedPmRun = isPassedPmRunReport(meta);
   const dagBtn = orchestrationId
@@ -1506,7 +1506,7 @@ function renderMessageActions(meta) {
   const sendToVaultBtn = canIngestMessageToVault(meta)
     ? `<button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>`
     : '';
-  const rerunBtn = canRerunMessage(meta)
+  const rerunBtn = role === 'assistant' && canRerunMessage(meta)
     ? `<button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>`
     : '';
   return `
@@ -2614,7 +2614,7 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
     <div class="message-body"></div>
     ${renderMessageAttachmentsHtml(meta)}
     <div class="message-actions">
-      ${renderMessageActions(meta)}
+       ${renderMessageActions(meta, role)}
     </div>
   `;
   renderMessageBody(div.querySelector('.message-body'), content);
@@ -2761,7 +2761,7 @@ function hydrateMessageElement(el, message) {
     existingAttachments.remove();
   }
   if (bodyEl) renderMessageBody(bodyEl, message.content || '');
-  if (actionsEl) actionsEl.innerHTML = renderMessageActions(message.metadata || null);
+  if (actionsEl) actionsEl.innerHTML = renderMessageActions(message.metadata || null, message.role || '');
   return el;
 }
 
