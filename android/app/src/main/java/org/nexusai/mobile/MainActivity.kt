@@ -6,8 +6,10 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,12 +17,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -35,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -158,6 +172,7 @@ private fun ChatApp(
     var newChatOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var appSettingsOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     var chatBootstrap by remember { mutableStateOf<ChatBootstrap?>(null) }
 
     fun loadMessages(conversation: ChatConversation) {
@@ -181,6 +196,14 @@ private fun ChatApp(
             loading = false
         }
     }
+    fun openChatSettings() {
+        if (selectedConversation == null) return
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { api.chatBootstrap() } }
+                .onSuccess { chatBootstrap = it; settingsOpen = true }
+                .onFailure { status = it.message ?: "Chat settings are unavailable." }
+        }
+    }
     LaunchedEffect(Unit) {
         runCatching { withContext(Dispatchers.IO) { api.listProjects() } }.onSuccess { projects = it }
         loadConversations()
@@ -193,13 +216,46 @@ private fun ChatApp(
                 Button(onClick = onInstallUpdate) { Text("Update") }
             }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = { projectPickerOpen = true }) {
                 Text(selectedProject?.name ?: "Unscoped chats")
             }
-            Button(onClick = { newChatOpen = true }) { Text("New chat") }
-            Button(onClick = { appSettingsOpen = true }) { Text("App") }
-            Button(onClick = onDisconnect) { Text("Sign out") }
+            Spacer(Modifier.weight(1f))
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Default.Menu, contentDescription = "Open chat menu")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("New chat") },
+                        leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                        onClick = { menuOpen = false; newChatOpen = true },
+                    )
+                    if (selectedConversation != null) {
+                        DropdownMenuItem(
+                            text = { Text("Refresh chat") },
+                            leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                            onClick = { menuOpen = false; loadMessages(selectedConversation!!) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Chat settings") },
+                            leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                            onClick = { menuOpen = false; openChatSettings() },
+                        )
+                    }
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("App settings") },
+                        leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                        onClick = { menuOpen = false; appSettingsOpen = true },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Sign out") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
+                        onClick = { menuOpen = false; onDisconnect() },
+                    )
+                }
+            }
         }
         if (selectedConversation == null) {
             Text("Chats", style = MaterialTheme.typography.titleMedium)
@@ -220,14 +276,6 @@ private fun ChatApp(
                 loading = loading,
                 status = status,
                 onBack = { selectedConversation = null; messages = emptyList() },
-                onRefresh = { loadMessages(selectedConversation!!) },
-                onSettings = {
-                    scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { api.chatBootstrap() } }
-                            .onSuccess { chatBootstrap = it; settingsOpen = true }
-                            .onFailure { status = it.message ?: "Chat settings are unavailable." }
-                    }
-                },
                 onSend = { content ->
                     loading = true
                     scope.launch {
@@ -302,16 +350,12 @@ private fun ChatApp(
 }
 
 @Composable
-private fun ConversationScreen(modifier: Modifier, conversation: ChatConversation, messages: List<ChatMessage>, loading: Boolean, status: String, onBack: () -> Unit, onRefresh: () -> Unit, onSettings: () -> Unit, onSend: (String) -> Unit) {
+private fun ConversationScreen(modifier: Modifier, conversation: ChatConversation, messages: List<ChatMessage>, loading: Boolean, status: String, onBack: () -> Unit, onSend: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Button(onClick = onBack) { Text("Chats") }
         Text(conversation.title, style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Button(onClick = onRefresh) { Text("Refresh") }
-            Button(onClick = onSettings) { Text("Settings") }
-        }
     }
     LazyColumn(Modifier.fillMaxWidth().height(360.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(messages) { message ->

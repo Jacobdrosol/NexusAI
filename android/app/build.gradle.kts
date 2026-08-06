@@ -17,8 +17,8 @@ android {
         applicationId = "org.nexusai.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
         buildConfigField("String", "BUILD_COMMIT", "\"$buildCommit\"")
     }
 
@@ -48,6 +48,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.12.4")
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
