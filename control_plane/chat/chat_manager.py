@@ -18,6 +18,8 @@ from shared.models import ChatConversation, ChatMessage
 
 _DEFAULT_DB_PATH = str(Path(__file__).parent.parent.parent / "data" / "nexusai.db")
 logger = logging.getLogger(__name__)
+_DELETED_MESSAGE_PLACEHOLDER = "Message deleted"
+_PAIRABLE_MESSAGE_MODES = {"", "standard"}
 
 
 def _normalize_tool_access_flags(
@@ -194,6 +196,8 @@ class ChatManager:
             return False
         if not isinstance(metadata, dict):
             return True
+        if metadata.get("deleted") is True:
+            return False
         mode = str(metadata.get("mode") or "").strip().lower()
         if mode == "assign_error":
             return False
@@ -239,6 +243,30 @@ class ChatManager:
             except Exception:
                 # Chat persistence must not fail solely because optional retrieval storage is unavailable.
                 logger.exception("Automatic project chat ingest failed for message %s", message.id)
+
+    async def _delete_project_message_vectors(
+        self,
+        conversation: ChatConversation,
+        messages: List[ChatMessage],
+    ) -> None:
+        """Remove only the automatic project-vault records for deleted chat messages."""
+        if self._vault_manager is None:
+            return
+        for project_id in self._conversation_project_ids(conversation):
+            namespace = f"project:{project_id}:chat"
+            for message in messages:
+                try:
+                    item = await self._vault_manager.find_item_by_source_ref(
+                        source_ref=f"chat-message:{message.id}",
+                        namespace=namespace,
+                        project_id=project_id,
+                    )
+                    if item is not None:
+                        await self._vault_manager.delete_item(item.id)
+                except Exception:
+                    # The message is already non-referenceable in chat history. Preserve that
+                    # invariant even if optional project-vector cleanup has a transient failure.
+                    logger.exception("Project chat vector deletion failed for message %s", message.id)
 
     async def _reindex_message(
         self,
@@ -1049,6 +1077,8 @@ class ChatManager:
         if target is None or target.role != "assistant":
             raise ConversationNotFoundError(f"Assistant response not found: {message_id}")
         target_metadata = target.metadata if isinstance(target.metadata, dict) else {}
+        if target_metadata.get("deleted") is True:
+            raise ValueError("Deleted responses cannot be selected.")
         group_id = str(target_metadata.get("response_group_id") or target.id).strip()
         variants = [
             message
@@ -1068,6 +1098,92 @@ class ChatManager:
             await self.update_message(variant.id, metadata=metadata)
         refreshed = await self.list_messages(conversation_id, include_response_variants=True)
         return next(message for message in refreshed if message.id == message_id)
+
+    @staticmethod
+    def _is_pairable_chat_message(message: ChatMessage) -> bool:
+        if str(message.role or "").strip().lower() not in {"user", "assistant"}:
+            return False
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        if metadata.get("deleted") is True:
+            return False
+        return str(metadata.get("mode") or "").strip().lower() in _PAIRABLE_MESSAGE_MODES
+
+    async def delete_message_pair(self, conversation_id: str, message_id: str) -> List[ChatMessage]:
+        """Replace a normal chat turn with placeholders and remove its retrieval records.
+
+        Message rows are retained solely to preserve transcript ordering. Their original content,
+        attachments, local chat-memory vectors, and automatic project-vault vectors are removed.
+        Personal memory-profile records are deliberately not changed.
+        """
+        await self._ensure_db()
+        conversation = await self.get_conversation(conversation_id)
+        messages = await self.list_messages(conversation_id, include_response_variants=True)
+        target_index = next((index for index, item in enumerate(messages) if item.id == message_id), None)
+        if target_index is None:
+            raise ConversationNotFoundError(f"Message not found: {message_id}")
+        target = messages[target_index]
+        if not self._is_pairable_chat_message(target):
+            raise ValueError("Only a normal user message and its assistant response can be deleted as a pair.")
+
+        if target.role == "user":
+            user_index = target_index
+        else:
+            user_index = next(
+                (
+                    index
+                    for index in range(target_index - 1, -1, -1)
+                    if messages[index].role == "user" and self._is_pairable_chat_message(messages[index])
+                ),
+                None,
+            )
+            if user_index is None:
+                raise ValueError("The user message for this assistant response is unavailable.")
+
+        next_user_index = next(
+            (index for index in range(user_index + 1, len(messages)) if messages[index].role == "user"),
+            len(messages),
+        )
+        paired_messages = [messages[user_index]]
+        paired_messages.extend(
+            item
+            for item in messages[user_index + 1:next_user_index]
+            if item.role == "assistant" and self._is_pairable_chat_message(item)
+        )
+        if len(paired_messages) < 2:
+            raise ValueError("This message does not have a completed assistant response to delete.")
+
+        deleted_at = datetime.now(timezone.utc).isoformat()
+        pair_id = str(uuid.uuid4())
+        updated_messages: List[ChatMessage] = []
+        async with self._lock:
+            async with open_sqlite(self._db_path, foreign_keys=True) as db:
+                for item in paired_messages:
+                    metadata = dict(item.metadata or {})
+                    metadata.pop("attachments", None)
+                    metadata.pop("response_variants", None)
+                    metadata.update(
+                        {
+                            "deleted": True,
+                            "deleted_at": deleted_at,
+                            "deleted_pair_id": pair_id,
+                        }
+                    )
+                    await db.execute(
+                        "UPDATE messages SET content = ?, metadata = ? WHERE id = ?",
+                        (_DELETED_MESSAGE_PLACEHOLDER, json.dumps(metadata), item.id),
+                    )
+                    await db.execute("DELETE FROM chat_message_memory WHERE message_id = ?", (item.id,))
+                    updated_messages.append(
+                        item.model_copy(update={"content": _DELETED_MESSAGE_PLACEHOLDER, "metadata": metadata})
+                    )
+                await db.execute(
+                    "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                    (deleted_at, conversation_id),
+                )
+                await db.commit()
+
+        await self._delete_project_message_vectors(conversation, paired_messages)
+        return updated_messages
 
     async def summarize_message_usage(self, *, hours: int = 24, limit_conversations: int = 25) -> Dict[str, Any]:
         await self._ensure_db()
@@ -1379,6 +1495,7 @@ class ChatManager:
             FROM messages
             WHERE conversation_id = ?
               AND lower(role) IN ('user', 'assistant')
+              AND COALESCE(json_extract(metadata, '$.deleted'), 0) = 0
               AND (
                 COALESCE(lower(json_extract(metadata, '$.mode')), '') NOT IN (
                   'assign_request',

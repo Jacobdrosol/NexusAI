@@ -779,6 +779,13 @@ class CPClient:
             timeout=_CHAT_TIMEOUT,
         )
 
+    def delete_message_pair(self, conversation_id: str, message_id: str) -> Optional[Dict[str, Any]]:
+        return self._request(
+            "DELETE",
+            f"/v1/chat/conversations/{conversation_id}/messages/{message_id}",
+            timeout=_CHAT_TIMEOUT,
+        )
+
     # Assignments
     def preview_assignment(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/assignments/preview", body, timeout=_CHAT_TIMEOUT)

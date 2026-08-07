@@ -4071,6 +4071,9 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b"handleChatComposerPaste(event)" in resp.data
     assert b"textarea?.addEventListener('paste'" in resp.data
     assert b"catalogCapabilities.length" in resp.data
+    assert b"Permanently delete message pair?" in resp.data
+    assert b"requestDeleteMessagePair(this)" in resp.data
+    assert b"confirmDeleteMessagePair" in resp.data
     assert b"clearAcceptedComposerDraft(form)" in resp.data
     assert b"Response stream finished without a saved assistant message." in resp.data
     assert b"function formatChatGateError(data, fallback)" in resp.data
@@ -6017,6 +6020,23 @@ def test_chat_delete_conversation_api_surfaces_success(dashboard_client):
         resp = dashboard_client.delete("/api/chat/conversations/c1")
 
     assert resp.status_code == 204
+
+
+def test_chat_delete_message_pair_api_surfaces_success(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def delete_message_pair(self, conversation_id, message_id):
+            return {
+                "conversation_id": conversation_id,
+                "deleted_message_ids": [message_id, "paired-assistant"],
+            }
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.delete("/api/chat/conversations/c1/messages/m1")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["deleted_message_ids"] == ["m1", "paired-assistant"]
 
 
 def test_chat_archive_restore_conversation_apis_surface_success(dashboard_client):

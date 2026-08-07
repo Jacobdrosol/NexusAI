@@ -1029,6 +1029,9 @@ def _messages_to_payload(
 ) -> List[dict]:
     payload: List[dict] = []
     for message in messages:
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        if metadata.get("deleted") is True:
+            continue
         attachment_parts = _message_attachment_parts(message.metadata)
         if attachment_parts:
             content_parts: List[Dict[str, Any]] = []
@@ -1975,6 +1978,8 @@ def _message_is_context_eligible(message: ChatMessage) -> bool:
     if str(message.role or "").strip().lower() not in {"user", "assistant"}:
         return False
     metadata = message.metadata if isinstance(message.metadata, dict) else {}
+    if metadata.get("deleted") is True:
+        return False
     mode = str(metadata.get("mode") or "").strip().lower()
     if mode == "assign_error":
         return False
@@ -4284,6 +4289,25 @@ async def select_response_variant(conversation_id: str, message_id: str, request
         return await chat_manager.select_response_variant(conversation_id, message_id)
     except ConversationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/conversations/{conversation_id}/messages/{message_id}")
+async def delete_message_pair(conversation_id: str, message_id: str, request: Request) -> dict:
+    """Irreversibly remove a normal chat turn while preserving transcript placeholders."""
+    chat_manager = request.app.state.chat_manager
+    try:
+        messages = await chat_manager.delete_message_pair(conversation_id, message_id)
+    except ConversationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "conversation_id": conversation_id,
+        "deleted_message_ids": [message.id for message in messages],
+        "messages": messages,
+    }
 
 
 @router.post("/conversations/{conversation_id}/orchestrations/{orchestration_id}/mark-failed", response_model=ChatMessage)

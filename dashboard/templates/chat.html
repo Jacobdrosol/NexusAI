@@ -559,7 +559,7 @@
           {% if bot_meta.get('updated_at') %}<span>bot updated {{ (bot_meta.get('updated_at')[:19]) | replace('T', ' ') }}</span>{% endif %}
         </div>
         {% endif %}
-        {% if m.role == 'assistant' and m.metadata and m.metadata.get('response_variant_count', 0)|int > 1 %}
+        {% if m.role == 'assistant' and m.metadata and not m.metadata.get('deleted') and m.metadata.get('response_variant_count', 0)|int > 1 %}
         <div class="message-response-variant">
           {% if m.metadata.get('response_variant_index', 1)|int == 1 %}Original response{% else %}Regenerated response{% endif %}
           · Version {{ m.metadata.get('response_variant_index', 1) }} of {{ m.metadata.get('response_variant_count') }}
@@ -657,7 +657,10 @@
           <summary aria-label="Open message actions" title="Message actions">...</summary>
           <div class="message-actions">
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
-          {% if m.role == 'assistant' and not (m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error']) %}
+          {% if not (m.metadata and m.metadata.get('deleted')) and m.role in ['user', 'assistant'] and not (m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error']) %}
+          <button class="btn btn-sm btn-danger" onclick="requestDeleteMessagePair(this)">Delete pair</button>
+          {% endif %}
+          {% if m.role == 'assistant' and not (m.metadata and (m.metadata.get('deleted') or m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error'])) %}
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
           {% if m.metadata and m.metadata.get('response_variants') %}
             {% for variant in m.metadata.get('response_variants') %}
@@ -796,6 +799,18 @@
   </div>
 </div>
 {% endif %}
+
+<div id="modal-delete-message-pair" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:620px;">
+    <h2>Permanently delete message pair?</h2>
+    <p>This permanently removes the selected message and its paired response from future chat history and project retrieval.</p>
+    <p><strong>This cannot be undone or restored.</strong> Both messages will remain only as “Message deleted” placeholders. Personal memory already created from them is not changed.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-danger" id="delete-message-pair-confirm">Permanently delete pair</button>
+      <button type="button" class="btn" onclick="cancelDeleteMessagePair()">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <div id="modal-create-convo" class="modal" style="display:none;">
   <div class="modal-content chat-create-convo-modal">
@@ -1279,6 +1294,14 @@ function canIngestMessageToVault(metadata) {
 }
 
 function canRerunMessage(metadata) {
+  if (metadata?.deleted === true) return false;
+  const mode = String(metadata?.mode || '').trim();
+  return !['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error'].includes(mode);
+}
+
+function canDeleteMessagePair(metadata, role) {
+  if (metadata?.deleted === true) return false;
+  if (!['user', 'assistant'].includes(String(role || '').trim())) return false;
   const mode = String(metadata?.mode || '').trim();
   return !['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error'].includes(mode);
 }
@@ -1500,6 +1523,7 @@ function selectedContextItems() {
 }
 
 function responseVariantActions(meta, messageId) {
+  if (meta?.deleted === true) return '';
   const variants = Array.isArray(meta?.response_variants) ? meta.response_variants : [];
   if (variants.length < 2) return '';
   return variants.filter((variant) => String(variant?.id || '') !== String(messageId || '')).map((variant) => (
@@ -1528,11 +1552,15 @@ function renderMessageActions(meta, role = '', messageId = '') {
   const rerunBtn = role === 'assistant' && canRerunMessage(meta)
     ? `<button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>`
     : '';
+  const deleteBtn = canDeleteMessagePair(meta, role)
+    ? '<button class="btn btn-sm btn-danger" onclick="requestDeleteMessagePair(this)">Delete pair</button>'
+    : '';
   return `
     <details class="message-actions-menu">
       <summary aria-label="Open message actions" title="Message actions">...</summary>
       <div class="message-actions">
         <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
+        ${deleteBtn}
         ${rerunBtn}
         ${responseVariantActions(meta, messageId)}
         ${recapBtn}
@@ -1607,6 +1635,7 @@ function renderMessageTimestampHtml(message) {
 }
 
 function renderResponseVariantHtml(meta) {
+  if (meta?.deleted === true) return '';
   const count = Number(meta?.response_variant_count || 0);
   const index = Number(meta?.response_variant_index || 0);
   if (count < 2 || index < 1) return '';
@@ -3574,6 +3603,43 @@ function rerunMessage(btn) {
     rerunAssistantMessageId: m.id,
   });
 }
+
+let pendingDeleteMessagePairId = '';
+
+function requestDeleteMessagePair(btn) {
+  const message = getMessageData(btn);
+  if (!message.id || !canDeleteMessagePair(message.metadata || null, message.role)) return;
+  pendingDeleteMessagePairId = String(message.id);
+  document.getElementById('modal-delete-message-pair').style.display = 'flex';
+}
+
+function cancelDeleteMessagePair() {
+  pendingDeleteMessagePairId = '';
+  hideModal('modal-delete-message-pair');
+}
+
+async function confirmDeleteMessagePair() {
+  const messageId = pendingDeleteMessagePairId;
+  if (!selectedConversationId || !messageId) return;
+  const confirmButton = document.getElementById('delete-message-pair-confirm');
+  if (confirmButton) confirmButton.disabled = true;
+  try {
+    const response = await fetch(
+      `/api/chat/conversations/${encodeURIComponent(selectedConversationId)}/messages/${encodeURIComponent(messageId)}`,
+      {method: 'DELETE', headers: {'X-CSRFToken': getCsrf()}},
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Message pair deletion failed.');
+    cancelDeleteMessagePair();
+    await refreshMessages();
+  } catch (error) {
+    alert(error.message || 'Message pair deletion failed.');
+  } finally {
+    if (confirmButton) confirmButton.disabled = false;
+  }
+}
+
+document.getElementById('delete-message-pair-confirm')?.addEventListener('click', confirmDeleteMessagePair);
 
 async function selectResponseVariant(messageId) {
   if (!selectedConversationId || !messageId) return;

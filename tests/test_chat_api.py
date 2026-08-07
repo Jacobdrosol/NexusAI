@@ -106,6 +106,92 @@ async def test_project_chat_messages_are_automatically_ingested_and_unscoped_mes
 
 
 @pytest.mark.anyio
+async def test_delete_message_pair_replaces_transcript_turn_and_removes_project_vectors(cp_app):
+    captured_payloads = []
+
+    async def _capture_schedule(task):
+        captured_payloads.append(task.payload)
+        return {"output": "assistant message that must be deleted"}
+
+    cp_app.state.scheduler.schedule = _capture_schedule
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        bot_resp = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-delete-message-pair",
+                "name": "Delete Message Pair Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+        assert bot_resp.status_code == 200
+        conversation_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Delete Pair", "scope": "project", "project_id": "project-delete-pair"},
+        )
+        assert conversation_resp.status_code == 200
+        conversation_id = conversation_resp.json()["id"]
+
+        sent = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "Private project detail that must be removed.", "bot_id": "bot-delete-message-pair"},
+        )
+        assert sent.status_code == 200
+        user_message = sent.json()["user_message"]
+        assistant_message = sent.json()["assistant_message"]
+        project_items = await cp_app.state.vault_manager.list_items(
+            namespace="project:project-delete-pair:chat",
+            project_id="project-delete-pair",
+        )
+        assert len(project_items) == 2
+
+        deleted = await client.delete(
+            f"/v1/chat/conversations/{conversation_id}/messages/{assistant_message['id']}",
+        )
+        assert deleted.status_code == 200
+        assert set(deleted.json()["deleted_message_ids"]) == {user_message["id"], assistant_message["id"]}
+
+        messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+        assert messages_resp.status_code == 200
+        messages = messages_resp.json()
+        assert [message["content"] for message in messages] == ["Message deleted", "Message deleted"]
+        assert all(message["metadata"]["deleted"] is True for message in messages)
+        assert await cp_app.state.vault_manager.list_items(
+            namespace="project:project-delete-pair:chat",
+            project_id="project-delete-pair",
+        ) == []
+        assert await cp_app.state.chat_manager.search_message_memory(
+            conversation_id,
+            "Private project detail",
+        ) == []
+
+        follow_up = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "What remains in this chat?", "bot_id": "bot-delete-message-pair"},
+        )
+        assert follow_up.status_code == 200
+
+    payload_text = "\n".join(str(item.get("content") or "") for item in captured_payloads[-1])
+    assert "Private project detail that must be removed." not in payload_text
+    assert "assistant message that must be deleted" not in payload_text
+    assert "Message deleted" not in payload_text
+
+
+@pytest.mark.anyio
+async def test_delete_message_pair_rejects_unpaired_or_deleted_message(cp_app):
+    manager = cp_app.state.chat_manager
+    conversation = await manager.create_conversation(title="Incomplete Turn")
+    message = await manager.add_message(conversation.id, role="user", content="still waiting")
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        response = await client.delete(f"/v1/chat/conversations/{conversation.id}/messages/{message.id}")
+
+    assert response.status_code == 400
+    assert "completed assistant response" in response.json()["detail"]
+
+
+@pytest.mark.anyio
 async def test_project_chat_context_is_retrieved_across_project_conversations(cp_app):
     captured_payloads = []
 

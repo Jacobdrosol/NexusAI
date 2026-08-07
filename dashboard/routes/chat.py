@@ -2602,6 +2602,16 @@ def api_select_response_variant(conversation_id: str, message_id: str):
     return jsonify(selected)
 
 
+@bp.delete("/api/chat/conversations/<conversation_id>/messages/<message_id>")
+@login_required
+def api_delete_message_pair(conversation_id: str, message_id: str):
+    cp = get_cp_client()
+    result = cp.delete_message_pair(conversation_id, message_id)
+    if result is None:
+        return _cp_error_response(cp, "message deletion failed")
+    return jsonify(result)
+
+
 @bp.post("/api/chat/stream")
 @login_required
 def api_send_message_stream():
