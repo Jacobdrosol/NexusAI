@@ -1114,6 +1114,11 @@ def test_chat_page_project_filter_is_client_side_and_keeps_full_conversation_lis
     assert b"conversation_id=c-primary" in resp.data
     assert b"syncChatProjectFilterUrl(String(this.value || '').trim())" in resp.data
     assert b"window.location = buildChatUrl({project_id: this.value})" not in resp.data
+    style_source = (Path(__file__).resolve().parents[1] / "dashboard" / "static" / "style.css").read_text(
+        encoding="utf-8"
+    )
+    assert ".page-chat .chat-conversation-row[hidden]" in style_source
+    assert "display: none !important;" in style_source
 
 
 def test_chat_page_surfaces_selected_project_work_snapshot(dashboard_client):

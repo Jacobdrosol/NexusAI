@@ -1131,6 +1131,10 @@ select.form-control {
   background: transparent;
 }
 
+.page-chat .chat-conversation-row[hidden] {
+  display: none !important;
+}
+
 .page-chat .chat-conversation-row.active {
   background: #303030;
 }
