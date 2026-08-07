@@ -2896,6 +2896,15 @@ async function refreshMessages() {
     if (!res.ok) return;
     const messages = await res.json();
     if (!Array.isArray(messages)) return;
+    const visibleMessageIds = new Set(messages.map((message) => String(message?.id || '')).filter(Boolean));
+    document.querySelectorAll('#messages .message[data-message-id]').forEach((element) => {
+      const messageId = String(element.dataset.messageId || '');
+      const transient = element.dataset.pending === 'true' || element.dataset.pendingAssistant === 'true';
+      if (messageId && !transient && !visibleMessageIds.has(messageId)) {
+        element.remove();
+        messageMap.delete(messageId);
+      }
+    });
     messages.forEach((message) => upsertMessage(message));
   } catch (_) {
     // leave current view intact; next poll can recover
