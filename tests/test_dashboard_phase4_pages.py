@@ -807,6 +807,7 @@ def test_chat_mobile_layout_uses_a_conversation_drawer():
     assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
     assert "window.requestAnimationFrame(scrollMessagesToLatest);" in template
     assert "window.addEventListener('load'" in template
+    assert "el.dataset.renderKey === renderKey" in template
 
 
 def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client):

@@ -2855,6 +2855,12 @@ function hydrateMessageElement(el, message) {
   const id = String(message.id);
   messageMap.set(id, message);
 
+  // Polling runs while a conversation is open. Replacing an unchanged message body
+  // clears the browser selection and closes its action menu, so leave its DOM alone.
+  const renderKey = JSON.stringify(message);
+  if (el.dataset.renderKey === renderKey) return el;
+  el.dataset.renderKey = renderKey;
+
   el.className = 'message ' + (message.role || 'assistant');
   el.dataset.messageId = id;
   el.dataset.role = message.role || 'assistant';

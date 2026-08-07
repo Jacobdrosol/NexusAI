@@ -509,7 +509,7 @@ def _bot_detail_operating_summary(
     chat_tools = _bot_chat_tool_access(bot)
     tool_modes = [
         label
-        for key, label in (("filesystem", "filesystem"), ("repo_search", "repo search"))
+        for key, label in (("filesystem", "filesystem"), ("repo_search", "repo search"), ("web_search", "web search"))
         if bool(chat_tools.get(key, False))
     ]
     readiness_view = _bot_readiness_view(readiness)

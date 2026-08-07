@@ -47,6 +47,7 @@ def test_bot_chat_profile_normalizes_disabled_and_mode_less_tool_access():
         "enabled": False,
         "filesystem": False,
         "repo_search": False,
+        "web_search": False,
         "mode_error": "",
     }
     assert disabled["tool_label"] == "off"
@@ -56,6 +57,22 @@ def test_bot_chat_profile_normalizes_disabled_and_mode_less_tool_access():
     assert incomplete["tool_access"]["mode_error"] == "no enabled tool mode"
     assert incomplete["tool_label"] == "no enabled tool mode"
     assert incomplete["use_label"] == "Tool policy incomplete"
+
+
+def test_bot_chat_profile_exposes_web_search_without_workspace_access():
+    profile = bot_chat_profile(
+        {
+            "routing_rules": {
+                "chat_tool_access": {"enabled": True, "web_search": True},
+                "operator_profile": {"autonomy": "manual_chat_only"},
+            }
+        }
+    )
+
+    assert profile["tool_access"]["web_search"] is True
+    assert profile["tool_label"] == "web_search"
+    assert "web_search" in profile["capabilities"]
+    assert profile["use_label"] == "Tool-enabled chat"
 
 
 def test_with_bot_chat_profiles_preserves_bot_fields_and_adds_profile():

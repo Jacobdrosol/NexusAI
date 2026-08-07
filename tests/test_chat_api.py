@@ -8,6 +8,53 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 
+def test_web_search_only_matches_current_or_lookup_prompts():
+    from control_plane.chat.web_search import should_search_web
+
+    assert should_search_web("What is the current market price for this part?") is True
+    assert should_search_web("Look up this serial number for me") is True
+    assert should_search_web("Help me word a private message to my colleague") is False
+
+
+@pytest.mark.anyio
+async def test_chat_injects_self_hosted_web_context_only_for_enabled_bot(cp_app, monkeypatch):
+    captured_payloads = []
+
+    async def _capture_schedule(task):
+        captured_payloads.append(task.payload)
+        return {"output": "The cited price is current."}
+
+    cp_app.state.scheduler.schedule = _capture_schedule
+    search = AsyncMock(return_value=["[web:example.test] Example price\nURL: https://example.test/price\nSnippet: $12.34"])
+    monkeypatch.setattr("control_plane.api.chat.resolve_web_context_items", search)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "web-chat-bot",
+                "name": "Web Chat Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "routing_rules": {"chat_tool_access": {"enabled": True, "web_search": True}},
+                "enabled": True,
+            },
+        )
+        assert bot.status_code == 200
+        conversation = await client.post("/v1/chat/conversations", json={"title": "Current prices"})
+        assert conversation.status_code == 200
+        sent = await client.post(
+            f"/v1/chat/conversations/{conversation.json()['id']}/messages",
+            json={"content": "What is the current price?", "bot_id": "web-chat-bot"},
+        )
+        assert sent.status_code == 200
+
+    search.assert_awaited_once_with("What is the current price?")
+    context_text = "\n".join(str(item.get("content") or "") for item in captured_payloads[0])
+    assert "https://example.test/price" in context_text
+    assert "cite the exact URL" in context_text
+
+
 def test_ollama_message_normalization_preserves_image_content_parts():
     from control_plane.scheduler.scheduler import _messages_for_ollama, _payload_to_messages
 

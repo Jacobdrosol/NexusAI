@@ -22,6 +22,7 @@ from control_plane.chat.workspace_tools import (
     read_workspace_file_snippet,
     search_workspace_snippets,
 )
+from control_plane.chat.web_search import resolve_web_context_items
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.chat_attachments import (
     CHAT_ATTACHMENT_MAX_FILES,
@@ -1046,6 +1047,18 @@ def _messages_to_payload(
     if resolved_context:
         joined = "\n".join(resolved_context)
         payload.insert(0, {"role": "system", "content": f"Context:\n{joined}"})
+        if any(str(item or "").startswith("[web:") for item in resolved_context):
+            payload.insert(
+                1,
+                {
+                    "role": "system",
+                    "content": (
+                        "Current web-search results are included above for this turn. "
+                        "Use them when relevant, cite the exact URL for time-sensitive claims, "
+                        "and say when the results do not establish an exact answer."
+                    ),
+                },
+            )
     resolved_memory_hits = list(memory_profile_hits or [])
     if resolved_memory_hits:
         memory_lines = []
@@ -1438,11 +1451,13 @@ def _parse_tool_access_config(raw: Any) -> Dict[str, Any]:
     enabled = bool(cfg.get("enabled", False))
     filesystem = bool(cfg.get("filesystem", False)) if enabled else False
     repo_search = bool(cfg.get("repo_search", False)) if enabled else False
-    mode_error = "no enabled tool mode" if enabled and not (filesystem or repo_search) else ""
+    web_search = bool(cfg.get("web_search", False)) if enabled else False
+    mode_error = "no enabled tool mode" if enabled and not (filesystem or repo_search or web_search) else ""
     return {
         "enabled": enabled,
         "filesystem": filesystem,
         "repo_search": repo_search,
+        "web_search": web_search,
         "mode_error": mode_error,
         "workspace_root": str(cfg.get("workspace_root") or "").strip() or None,
     }
@@ -1693,6 +1708,7 @@ async def _effective_tool_access(
             "enabled": False,
             "filesystem": False,
             "repo_search": False,
+            "web_search": False,
             "workspace_root": None,
         }
 
@@ -1702,6 +1718,7 @@ async def _effective_tool_access(
             "enabled": False,
             "filesystem": False,
             "repo_search": False,
+            "web_search": False,
             "workspace_root": None,
         }
     bot = await bot_registry.get(target_bot_id)
@@ -1734,12 +1751,15 @@ async def _effective_tool_access(
             "enabled": False,
             "filesystem": False,
             "repo_search": False,
+            # Web research is bot-scoped rather than project-workspace access.
+            "web_search": bool(bot_cfg["enabled"] and bot_cfg["web_search"]),
             "workspace_root": workspace_root,
         }
     return {
         "enabled": True,
         "filesystem": bool(chat_cfg["filesystem"] and bot_cfg["filesystem"] and project_cfg["filesystem"]),
         "repo_search": bool(chat_cfg["repo_search"] and bot_cfg["repo_search"] and project_cfg["repo_search"]),
+        "web_search": bool(bot_cfg["enabled"] and bot_cfg["web_search"]),
         "workspace_root": workspace_root,
     }
 
@@ -2162,12 +2182,17 @@ async def _resolve_context_items(
             query=body.content,
         )
 
+    web_context: List[str] = []
+    if bool(tool_cfg.get("web_search", False)):
+        web_context = await resolve_web_context_items(body.content)
+
     # Explicit references and project chat context precede workspace, repo, vault, and manual context.
     resolved.extend(referenced_conversation_context)
     resolved.extend(project_chat_context)
     resolved.extend(repo_profile_context)
     resolved.extend(workspace_context)
     resolved.extend(repo_context)
+    resolved.extend(web_context)
     resolved.extend(vault_items)
     resolved.extend(manual_context)
     return _order_context_items(resolved, limit=item_limit)

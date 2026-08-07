@@ -589,15 +589,18 @@
   <div class="form-group">
     <label><input type="checkbox" id="bot-chat-tool-enabled"> Enable workspace tools for this bot</label>
   </div>
-  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+  <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;">
     <div class="form-group">
       <label><input type="checkbox" id="bot-chat-tool-filesystem"> Allow filesystem read/search</label>
     </div>
     <div class="form-group">
       <label><input type="checkbox" id="bot-chat-tool-repo-search"> Allow semantic repo search</label>
     </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="bot-chat-tool-web-search"> Allow current web lookup</label>
+    </div>
   </div>
-  <div class="mini-note">Workspace root path is configured at project level. Per-message usage still requires enabling tools in the chat composer.</div>
+  <div class="mini-note">Workspace root path is configured at project level. Web lookup uses the self-hosted SearXNG service and is limited to current-data or explicit lookup prompts.</div>
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">
@@ -1321,7 +1324,7 @@ BOT.chat_tool_access = BOT.chat_tool_access && typeof BOT.chat_tool_access === '
     ? BOT.routing_rules.chat_tool_access
     : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.tool_access && typeof BOT.routing_rules.tool_access === 'object')
       ? BOT.routing_rules.tool_access
-      : {enabled: false, filesystem: false, repo_search: false}));
+      : {enabled: false, filesystem: false, repo_search: false, web_search: false}));
 BOT.direct_chat_access = BOT.direct_chat_access && typeof BOT.direct_chat_access === 'object'
   ? BOT.direct_chat_access
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.direct_chat && typeof BOT.routing_rules.direct_chat === 'object')
@@ -1796,6 +1799,7 @@ function normalizedChatToolAccess() {
     enabled: cfg.enabled === true,
     filesystem: cfg.filesystem === true,
     repo_search: cfg.repo_search === true,
+    web_search: cfg.web_search === true,
   };
 }
 
@@ -1830,6 +1834,7 @@ function syncChatToolAccessInputs() {
   const enabled = !!document.getElementById('bot-chat-tool-enabled')?.checked;
   const filesystem = document.getElementById('bot-chat-tool-filesystem');
   const repoSearch = document.getElementById('bot-chat-tool-repo-search');
+  const webSearch = document.getElementById('bot-chat-tool-web-search');
   if (filesystem) {
     filesystem.disabled = !enabled;
     if (!enabled) filesystem.checked = false;
@@ -1837,6 +1842,10 @@ function syncChatToolAccessInputs() {
   if (repoSearch) {
     repoSearch.disabled = !enabled;
     if (!enabled) repoSearch.checked = false;
+  }
+  if (webSearch) {
+    webSearch.disabled = !enabled;
+    if (!enabled) webSearch.checked = false;
   }
 }
 
@@ -1862,9 +1871,11 @@ function loadChatToolAccessEditor() {
   const enabled = document.getElementById('bot-chat-tool-enabled');
   const filesystem = document.getElementById('bot-chat-tool-filesystem');
   const repoSearch = document.getElementById('bot-chat-tool-repo-search');
+  const webSearch = document.getElementById('bot-chat-tool-web-search');
   if (enabled) enabled.checked = cfg.enabled;
   if (filesystem) filesystem.checked = cfg.filesystem;
   if (repoSearch) repoSearch.checked = cfg.repo_search;
+  if (webSearch) webSearch.checked = cfg.web_search;
   syncChatToolAccessInputs();
 }
 
@@ -1881,6 +1892,7 @@ function saveChatToolAccess() {
     enabled: !!document.getElementById('bot-chat-tool-enabled')?.checked,
     filesystem: !!document.getElementById('bot-chat-tool-filesystem')?.checked,
     repo_search: !!document.getElementById('bot-chat-tool-repo-search')?.checked,
+    web_search: !!document.getElementById('bot-chat-tool-web-search')?.checked,
   };
   BOT.direct_chat_access = {enabled: !!document.getElementById('bot-direct-chat-enabled')?.checked};
   BOT.memory_profiles_enabled = !!document.getElementById('bot-memory-enabled')?.checked;

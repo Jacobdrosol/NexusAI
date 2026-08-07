@@ -33,11 +33,13 @@ def bot_chat_tool_access(bot: dict[str, Any]) -> dict[str, Any]:
     enabled = bool(cfg.get("enabled", False))
     filesystem = bool(cfg.get("filesystem", False)) if enabled else False
     repo_search = bool(cfg.get("repo_search", False)) if enabled else False
-    mode_error = "no enabled tool mode" if enabled and not (filesystem or repo_search) else ""
+    web_search = bool(cfg.get("web_search", False)) if enabled else False
+    mode_error = "no enabled tool mode" if enabled and not (filesystem or repo_search or web_search) else ""
     return {
         "enabled": enabled,
         "filesystem": filesystem,
         "repo_search": repo_search,
+        "web_search": web_search,
         "mode_error": mode_error,
     }
 
@@ -129,6 +131,8 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         add_capability("repo_search")
     if bool(tool_access.get("filesystem", False)):
         add_capability("filesystem")
+    if bool(tool_access.get("web_search", False)):
+        add_capability("web_search")
     if bool(policy.get("inline_coding_default", False)):
         add_capability("inline_coding_default")
     if str(policy.get("repo_output_mode") or "").strip().lower() == "allow":
@@ -138,6 +142,8 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         tool_labels.append("filesystem")
     if bool(tool_access.get("repo_search", False)):
         tool_labels.append("repo_search")
+    if bool(tool_access.get("web_search", False)):
+        tool_labels.append("web_search")
     autonomy = str(operator_profile.get("autonomy") or "").strip() or "unspecified"
     if bool(assignment_capabilities.get("is_project_manager", False)):
         use_label = "Project manager"

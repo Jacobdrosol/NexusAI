@@ -219,7 +219,7 @@
     {% set row_readiness_state = bot_tooling.state if bot_tooling else (b.readiness.state if b.readiness else 'unknown') %}
     {% set row_chat_has_blocker = (bot_tooling and (bot_tooling.missing_credential_refs or bot_tooling.blocking_messages or bot_tooling.disabled_activation_messages)) or ((not bot_tooling) and b.readiness and b.readiness.state == 'blocked') %}
     {% set row_chat_blocked = row_readiness_state == 'disabled' or (row_readiness_state == 'blocked' and row_chat_has_blocker) %}
-    {% set row_chat_capable = b.enabled and b.direct_chat_access.enabled and not row_chat_blocked %}
+    {% set row_chat_capable = b.enabled and b.direct_chat_access.enabled and not row_chat_blocked and not row_profile.tool_access.mode_error %}
     <tr data-id="{{ b.id }}"
         data-readiness="{{ row_readiness_state }}"
         data-disabled-needs-fix="{{ 'true' if bot_tooling and bot_tooling.disabled_activation_messages else 'false' }}"
