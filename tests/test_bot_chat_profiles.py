@@ -88,6 +88,19 @@ def test_bot_chat_profile_exposes_explicit_document_generation_capability():
     assert "document_generation" in profile["capabilities"]
 
 
+def test_bot_chat_profile_exposes_explicit_document_editing_capability():
+    profile = bot_chat_profile(
+        {
+            "routing_rules": {
+                "chat_profile": {"mode": "chat", "document_editing": True},
+            }
+        }
+    )
+
+    assert profile["document_editing"] is True
+    assert "document_editing" in profile["capabilities"]
+
+
 def test_with_bot_chat_profiles_preserves_bot_fields_and_adds_profile():
     rows = with_bot_chat_profiles(
         [

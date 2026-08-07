@@ -2895,6 +2895,7 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
 
     assert resp.status_code == 200
     assert b"Chat Profile" in resp.data
+    assert b"Edit attached DOCX and preserve formatting" in resp.data
     assert b"bot-chat-profile-document-generation" in resp.data
     assert b"Use in Chat" in resp.data
     assert b"/chat?bot_id=coding-helper" in resp.data

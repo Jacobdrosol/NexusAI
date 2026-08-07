@@ -169,6 +169,85 @@ async def test_stream_message_returns_docx_artifact_for_explicitly_enabled_bot(c
 
 
 @pytest.mark.anyio
+async def test_stream_message_edits_attached_docx_with_source_paragraph_style_preserved(cp_app):
+    from docx import Document
+
+    source = Document()
+    source.add_heading("Jacob Derifield", level=1)
+    source.add_paragraph("Professional Summary")
+    bullet = source.add_paragraph("Built reliable software systems.", style="List Bullet")
+    bullet.runs[0].bold = True
+    bullet.runs[0].font.name = "Arial"
+    source.add_paragraph("Des Moines, IA")
+    buffer = BytesIO()
+    source.save(buffer)
+    data_url = (
+        "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,"
+        + base64.b64encode(buffer.getvalue()).decode("ascii")
+    )
+
+    async def _stream(_task):
+        yield {
+            "event": "final",
+            "output": (
+                '{"edits":[{"target":"Built reliable software systems.",'
+                '"replacement":"Built C#/.NET services and REST APIs for enterprise workflows."}],'
+                '"summary":"Tailored the experience bullet for the .NET role."}'
+            ),
+            "usage": {},
+        }
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "docx-editor-bot",
+                "name": "DOCX Editor Bot",
+                "role": "assistant",
+                "backends": [],
+                "routing_rules": {"chat_profile": {"document_editing": True}},
+                "enabled": True,
+            },
+        )
+        assert bot.status_code == 200
+        conversation = await client.post("/v1/chat/conversations", json={"title": "Resume"})
+        response = await client.post(
+            f"/v1/chat/conversations/{conversation.json()['id']}/stream",
+            json={
+                "content": "Tailor this resume for a .NET position and preserve the formatting.",
+                "bot_id": "docx-editor-bot",
+                "attachments": [
+                    {
+                        "name": "source_resume.docx",
+                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "kind": "document",
+                        "data_url": data_url,
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 200
+        messages = await client.get(f"/v1/chat/conversations/{conversation.json()['id']}/messages")
+
+    assistant = messages.json()[-1]
+    attachment = assistant["metadata"]["attachments"][0]
+    assert attachment["generated_by"] == "chat_document_editor"
+    assert attachment["preserved_source_formatting"] is True
+    assert attachment["applied_edit_count"] == 1
+    assert "formatting-preserving" in assistant["content"]
+    from shared.chat_attachments import decode_attachment_data_url
+
+    _, edited_raw = decode_attachment_data_url(attachment["data_url"])
+    edited = Document(BytesIO(edited_raw))
+    assert edited.paragraphs[0].text == "Jacob Derifield"
+    changed = next(p for p in edited.paragraphs if "Built C#/.NET" in p.text)
+    assert changed.style.name == bullet.style.name
+    assert changed.runs[0].bold is True
+    assert changed.runs[0].font.name == "Arial"
+
+
+@pytest.mark.anyio
 async def test_stream_message_does_not_return_docx_artifact_when_bot_capability_is_disabled(cp_app):
     async def _stream(_task):
         yield {"event": "final", "output": "A normal response.", "usage": {}}

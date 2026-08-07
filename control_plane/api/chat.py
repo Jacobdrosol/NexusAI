@@ -31,9 +31,13 @@ from shared.chat_attachments import (
     extract_document_text,
 )
 from shared.chat_document_artifacts import (
+    build_edited_docx_attachment,
     build_docx_attachment,
+    document_editing_enabled,
+    document_editing_instruction,
     document_generation_enabled,
     document_generation_instruction,
+    requested_docx_edit,
     requested_docx_artifact,
 )
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
@@ -5733,7 +5737,25 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 body.content,
                 enabled=document_generation_enabled(bot),
             )
-            if requested_docx_filename:
+            docx_edit_request = requested_docx_edit(
+                body.content,
+                attachments,
+                enabled=document_editing_enabled(bot),
+            )
+            if docx_edit_request:
+                source_attachment, edited_docx_filename = docx_edit_request
+                requested_docx_filename = None
+                payload.insert(
+                    0,
+                    {
+                        "role": "system",
+                        "content": document_editing_instruction(
+                            filename=edited_docx_filename,
+                            source_name=str(source_attachment.get("name") or "document.docx"),
+                        ),
+                    },
+                )
+            elif requested_docx_filename:
                 payload.insert(
                     0,
                     {"role": "system", "content": document_generation_instruction(requested_docx_filename)},
@@ -6345,7 +6367,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     chunk = str(event.get("text") or "")
                     if chunk:
                         streamed_chunks.append(chunk)
-                        if require_repo_evidence:
+                        if require_repo_evidence or docx_edit_request:
                             token_counter += 1
                             if token_counter % 32 == 0:
                                 yield (
@@ -6391,7 +6413,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 model=stream_model,
                                 provider=stream_provider,
                             )
-                    if not require_repo_evidence:
+                    if not require_repo_evidence and not docx_edit_request:
                         yield f'event: token\ndata: {json.dumps({"text": chunk})}\n\n'
                 elif event_name == "final":
                     result = dict(event)
@@ -6440,7 +6462,34 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 },
             )
             metadata["streaming"] = False
-            if requested_docx_filename:
+            if docx_edit_request:
+                source_attachment, edited_docx_filename = docx_edit_request
+                edited_attachment, applied_edit_count, edit_summary = build_edited_docx_attachment(
+                    source_attachment=source_attachment,
+                    filename=edited_docx_filename,
+                    model_output=assistant_output,
+                )
+                if edited_attachment:
+                    metadata["attachments"] = [edited_attachment]
+                    metadata["document_artifact"] = {
+                        "format": "docx",
+                        "name": edited_attachment["name"],
+                        "generated": True,
+                        "edited_source": True,
+                        "preserved_source_formatting": True,
+                        "applied_edit_count": applied_edit_count,
+                    }
+                    detail = f" {edit_summary}" if edit_summary else ""
+                    assistant_output = (
+                        f"Created an edited copy of {source_attachment.get('name') or 'the source DOCX'} "
+                        f"with {applied_edit_count} formatting-preserving paragraph update(s).{detail}"
+                    )
+                else:
+                    assistant_output = (
+                        "I could not safely apply a formatting-preserving edit to the attached DOCX. "
+                        f"{edit_summary or 'Please retry with a new message and the source document attached.'}"
+                    )
+            elif requested_docx_filename:
                 generated_attachment = build_docx_attachment(
                     filename=requested_docx_filename,
                     content=assistant_output,
