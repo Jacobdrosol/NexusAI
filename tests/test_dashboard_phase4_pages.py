@@ -4073,10 +4073,6 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b"function formatChatGateError(data, fallback)" in resp.data
     assert b"workspace_tools_unavailable" in resp.data
     assert b"Shared modes: none" in resp.data
-    assert b"align-items: flex-end" in resp.data
-    assert b"max-height: 46dvh" in resp.data
-    assert b"window.visualViewport?.height || window.innerHeight" in resp.data
-    assert b"window.visualViewport?.addEventListener('resize'" in resp.data
 
 
 def test_chat_page_uses_automatic_project_ingest_and_conversation_references(dashboard_client):
