@@ -776,6 +776,26 @@ def _message_attachment_parts(metadata: Any) -> List[Dict[str, Any]]:
     return parts
 
 
+def _has_unrecoverable_legacy_attachments(metadata: Any) -> bool:
+    """Detect attachments stored before raw document/binary bytes were retained."""
+    if not isinstance(metadata, dict):
+        return False
+    attachments = metadata.get("attachments")
+    if not isinstance(attachments, list):
+        return False
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        kind = str(attachment.get("kind") or "").strip().lower()
+        if kind not in {"document", "binary"}:
+            continue
+        if not str(attachment.get("data_url") or "").strip() and not str(
+            attachment.get("text_content") or ""
+        ).strip():
+            return True
+    return False
+
+
 def _model_supports_image_attachments(*, provider: str, model_name: str, capabilities: Any = None) -> bool:
     caps = {str(item or "").strip().lower() for item in (capabilities or [])}
     if caps:
@@ -5329,6 +5349,14 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
         if rerun_source_index is None:
             raise HTTPException(status_code=400, detail="The original user message for this response is unavailable.")
         rerun_source_message = raw_messages[rerun_source_index]
+        if _has_unrecoverable_legacy_attachments(rerun_source_message.metadata):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This response uses document or binary attachments from before their file bytes were retained. "
+                    "Regeneration cannot recover those files. Send a new message and attach the files again."
+                ),
+            )
         rerun_history = raw_messages[: rerun_source_index + 1]
         group_id = str(target_metadata.get("response_group_id") or target.id).strip()
         existing_variants = [

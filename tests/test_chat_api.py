@@ -1582,6 +1582,44 @@ async def test_stream_message_regeneration_reuses_user_turn_and_preserves_respon
 
 
 @pytest.mark.anyio
+async def test_stream_message_regeneration_rejects_unrecoverable_legacy_binary_attachments(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        conversation = await client.post("/v1/chat/conversations", json={"title": "Legacy file turn"})
+        conversation_id = conversation.json()["id"]
+        user = await cp_app.state.chat_manager.add_message(
+            conversation_id,
+            "user",
+            "Please read this file.",
+            metadata={
+                "attachments": [
+                    {
+                        "name": "old.docx",
+                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "kind": "binary",
+                        "size_bytes": 42,
+                    }
+                ]
+            },
+        )
+        assistant = await cp_app.state.chat_manager.add_message(
+            conversation_id,
+            "assistant",
+            "I cannot read the old attachment.",
+        )
+
+        regenerated = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={
+                "content": user.content,
+                "rerun_assistant_message_id": assistant.id,
+            },
+        )
+
+    assert regenerated.status_code == 409
+    assert "attach the files again" in str(regenerated.json().get("detail") or "")
+
+
+@pytest.mark.anyio
 async def test_stream_message_uses_bot_config_provider_model_when_backend_event_missing(cp_app):
     async def _stream(_task):
         yield {"event": "token", "text": "config "}
