@@ -1113,6 +1113,9 @@ let chatSpeechPrefix = '';
 let chatSpeechSuffix = '';
 let chatSpeechFinalTranscript = '';
 let chatSpeechInterimTranscript = '';
+let chatSpeechIgnoreResultsThrough = 0;
+let chatSpeechLastResultCount = 0;
+let chatSpeechStatusVisible = false;
 
 function scrollMessagesToLatest() {
   const container = document.getElementById('messages');
@@ -1624,8 +1627,26 @@ function renderChatVoiceTranscript() {
   persistChatComposerDraft();
 }
 
+function preserveManualChatVoiceEdit(textarea) {
+  if (!chatSpeechListening || !textarea) return;
+  // A direct user edit becomes the baseline for later transcription events.
+  // This prevents delayed recognition results from restoring stale text.
+  chatSpeechPrefix = textarea.value;
+  chatSpeechSuffix = '';
+  chatSpeechFinalTranscript = '';
+  chatSpeechInterimTranscript = '';
+  chatSpeechIgnoreResultsThrough = chatSpeechLastResultCount;
+}
+
+function clearChatVoiceStatus() {
+  if (!chatSpeechStatusVisible) return;
+  chatSpeechStatusVisible = false;
+  clearChatComposerStatus();
+}
+
 function stopChatVoiceInput() {
   if (!chatSpeechRecognition || !chatSpeechListening) return;
+  clearChatVoiceStatus();
   try {
     chatSpeechRecognition.stop();
   } catch (_) {
@@ -1653,6 +1674,9 @@ function toggleChatVoiceInput() {
   chatSpeechSuffix = textarea.value.slice(selectionEnd);
   chatSpeechFinalTranscript = '';
   chatSpeechInterimTranscript = '';
+  chatSpeechIgnoreResultsThrough = 0;
+  chatSpeechLastResultCount = 0;
+  chatSpeechStatusVisible = false;
   const recognition = new SpeechRecognition();
   chatSpeechRecognition = recognition;
   chatSpeechListening = true;
@@ -1663,27 +1687,36 @@ function toggleChatVoiceInput() {
   recognition.onstart = () => {
     chatSpeechListening = true;
     updateChatVoiceInputButton();
-    showChatComposerStatus('Listening. Say "new line", "comma", or "period" when needed.', 'info');
+    chatSpeechStatusVisible = true;
+    showChatComposerStatus('Listening.', 'info');
   };
   recognition.onresult = (event) => {
     let finalTranscript = '';
     let interimTranscript = '';
-    for (let index = 0; index < event.results.length; index += 1) {
+    const startIndex = Math.max(Number(event.resultIndex || 0), chatSpeechIgnoreResultsThrough);
+    for (let index = startIndex; index < event.results.length; index += 1) {
       const result = event.results[index];
       if (result.isFinal) finalTranscript += result[0].transcript;
       else interimTranscript += result[0].transcript;
     }
-    chatSpeechFinalTranscript = finalTranscript;
+    chatSpeechLastResultCount = event.results.length;
+    if (finalTranscript) {
+      chatSpeechFinalTranscript += chatSpeechFinalTranscript && !/\s$/.test(chatSpeechFinalTranscript)
+        ? ' ' + finalTranscript
+        : finalTranscript;
+    }
     chatSpeechInterimTranscript = interimTranscript;
     renderChatVoiceTranscript();
   };
   recognition.onerror = (event) => {
     const code = String(event?.error || 'unknown error');
+    chatSpeechStatusVisible = false;
     showChatComposerStatus(code === 'not-allowed'
       ? 'Microphone permission was denied. Allow microphone access in the browser to use voice typing.'
       : 'Voice typing stopped: ' + code + '.');
   };
   recognition.onend = () => {
+    clearChatVoiceStatus();
     chatSpeechListening = false;
     chatSpeechRecognition = null;
     updateChatVoiceInputButton();
@@ -1703,6 +1736,7 @@ function bindChatTextareaBehavior() {
   if (!textarea) return;
   resizeChatTextarea(textarea);
   textarea.addEventListener('input', () => {
+    preserveManualChatVoiceEdit(textarea);
     resizeChatTextarea(textarea);
     persistChatComposerDraft();
   });

@@ -4096,6 +4096,10 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b'id="chat-voice-input-button"' in resp.data
     assert b"function toggleChatVoiceInput()" in resp.data
     assert b"window.SpeechRecognition || window.webkitSpeechRecognition" in resp.data
+    assert b"showChatComposerStatus('Listening.', 'info')" in resp.data
+    assert b"function preserveManualChatVoiceEdit(textarea)" in resp.data
+    assert b"chatSpeechIgnoreResultsThrough = chatSpeechLastResultCount" in resp.data
+    assert b"function clearChatVoiceStatus()" in resp.data
     assert b"function persistChatComposerDraft()" in resp.data
     assert b"function restoreChatComposerDraft()" in resp.data
     assert b"window.addEventListener('beforeunload', persistChatComposerDraft)" in resp.data
