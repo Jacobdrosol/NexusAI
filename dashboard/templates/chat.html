@@ -114,6 +114,18 @@
   font-size: 1.25rem;
   line-height: 1;
 }
+.chat-voice-input-button {
+  width: 72px;
+  height: 36px;
+  padding: 0 0.45rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+.chat-voice-input-button.is-listening {
+  border-color: rgba(96, 165, 250, 0.9);
+  background: rgba(30, 64, 175, 0.45);
+  color: #dbeafe;
+}
 .chat-stream-btn-inline {
   width: 72px;
   min-width: 72px;
@@ -121,7 +133,8 @@
   padding: 0 0.6rem;
 }
 .chat-stream-btn-inline[disabled],
-.chat-attachment-trigger[disabled] {
+.chat-attachment-trigger[disabled],
+.chat-voice-input-button[disabled] {
   cursor: wait;
   opacity: 0.72;
 }
@@ -334,6 +347,7 @@
       <div
         class="list-item chat-conversation-row {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}"
         data-filterable="true"
+        data-conversation-id="{{ c.id }}"
         data-project-id="{{ c.project_id or '' }}"
         data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
         data-search-text="{{ [c.title, c.id, c.scope, c.project_id, (c.bridge_project_ids or [])|join(' '), c.default_bot_id, bot_display_labels.get(c.default_bot_id, ''), c.default_model_id, model_display_labels.get(c.default_model_id, '')] | join(' ') | lower }}"
@@ -386,6 +400,7 @@
         <div
           class="list-item chat-conversation-row {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}"
           data-filterable="true"
+          data-conversation-id="{{ c.id }}"
           data-project-id="{{ c.project_id or '' }}"
           data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
           data-search-text="{{ [c.title, c.id, c.scope, c.project_id, (c.bridge_project_ids or [])|join(' '), c.default_bot_id, bot_display_labels.get(c.default_bot_id, ''), c.default_model_id, model_display_labels.get(c.default_model_id, '')] | join(' ') | lower }}"
@@ -746,6 +761,7 @@
               +
               <span class="chat-attachment-trigger-label">Attach Files</span>
             </button>
+            <button type="button" id="chat-voice-input-button" class="btn chat-voice-input-button" aria-label="Start voice typing" title="Start voice typing">Voice</button>
             <button type="button" class="btn btn-primary chat-stream-btn-inline" onclick="sendMessage(true)">Send</button>
           </div>
           </div>
@@ -1059,7 +1075,6 @@ const selectedConversationProjectId = {{ (selected_conversation.project_id if se
 const selectedConversation = {{ (selected_conversation if selected_conversation else {})|tojson }};
 const selectedProjectMemoryProfilesEnabled = {{ selected_project_memory_profiles_enabled|tojson }};
 const selectedProjectChatToolAccess = {{ selected_project_chat_tool_access|tojson }};
-const activeProjectFilter = {{ (active_project_filter or "")|tojson }};
 const unscopedProjectFilter = {{ unscoped_project_filter|tojson }};
 const preselectedChatBotId = {{ (preselected_chat_bot_id or "")|tojson }};
 const availableProjects = {{ projects|tojson }};
@@ -1068,6 +1083,7 @@ const assignmentBots = {{ assignment_bots|tojson }};
 const availableBots = {{ chat_bots|tojson }};
 const availableModels = {{ model_catalog|tojson }};
 const CHAT_FONT_SCALE_STORAGE_KEY = 'nexusai.chat.fontScale';
+const CHAT_COMPOSER_DRAFT_STORAGE_PREFIX = 'nexusai.chat.composerDraft.v1:';
 const botDisplayLabels = {{ bot_display_labels|tojson }};
 const modelDisplayLabels = {{ model_display_labels|tojson }};
 const chatAttachmentLimits = {{ chat_attachment_limits|tojson }};
@@ -1091,6 +1107,12 @@ let activeAssignmentPreview = null;
 let chatSendInFlight = false;
 let lastServerEffectiveContext = null;
 let serverEffectiveContextRefreshController = null;
+let chatSpeechRecognition = null;
+let chatSpeechListening = false;
+let chatSpeechPrefix = '';
+let chatSpeechSuffix = '';
+let chatSpeechFinalTranscript = '';
+let chatSpeechInterimTranscript = '';
 
 function scrollMessagesToLatest() {
   const container = document.getElementById('messages');
@@ -1177,6 +1199,41 @@ function setChatComposerBusy(isBusy) {
   });
   const attachmentTrigger = document.getElementById('chat-attachment-trigger');
   if (attachmentTrigger) attachmentTrigger.disabled = !!isBusy;
+  const voiceButton = document.getElementById('chat-voice-input-button');
+  if (voiceButton) voiceButton.disabled = !!isBusy || !getChatSpeechRecognitionConstructor();
+  if (isBusy) stopChatVoiceInput();
+}
+
+function chatComposerDraftKey() {
+  return selectedConversationId ? CHAT_COMPOSER_DRAFT_STORAGE_PREFIX + selectedConversationId : '';
+}
+
+function persistChatComposerDraft() {
+  const key = chatComposerDraftKey();
+  const textarea = document.querySelector('#chat-send-form textarea[name=content]');
+  if (!key || !textarea) return;
+  try {
+    if (textarea.value) window.localStorage.setItem(key, textarea.value);
+    else window.localStorage.removeItem(key);
+  } catch (_) {
+    // Local draft persistence must never block chat use.
+  }
+}
+
+function restoreChatComposerDraft() {
+  const key = chatComposerDraftKey();
+  const textarea = document.querySelector('#chat-send-form textarea[name=content]');
+  if (!key || !textarea || textarea.value) return;
+  try {
+    const draft = window.localStorage.getItem(key);
+    if (draft) {
+      textarea.value = draft;
+      resizeChatTextarea(textarea);
+      showChatComposerStatus('Restored an unsent draft for this conversation.', 'info');
+    }
+  } catch (_) {
+    // Ignore unavailable browser storage.
+  }
 }
 
 function clearAcceptedComposerDraft(form) {
@@ -1186,6 +1243,10 @@ function clearAcceptedComposerDraft(form) {
     textarea.value = '';
     resizeChatTextarea(textarea);
   }
+  try {
+    const key = chatComposerDraftKey();
+    if (key) window.localStorage.removeItem(key);
+  } catch (_) {}
   const codingToggle = document.getElementById('enable-inline-coding-message');
   if (codingToggle) codingToggle.checked = false;
   pendingComposerAttachments = [];
@@ -1199,6 +1260,13 @@ function buildChatUrl(params = {}) {
   if (conversationId) url.searchParams.set('conversation_id', conversationId);
   if (projectId) url.searchParams.set('project_id', projectId);
   return url.pathname + url.search;
+}
+
+function syncChatProjectFilterUrl(projectId) {
+  const url = new URL(window.location.href);
+  if (projectId) url.searchParams.set('project_id', projectId);
+  else url.searchParams.delete('project_id');
+  window.history.replaceState({}, '', url.pathname + url.search + url.hash);
 }
 
 function applyConversationProjectFilter() {
@@ -1228,7 +1296,8 @@ function applyConversationProjectFilter() {
     const searchText = String(row.dataset.searchText || row.textContent || '').toLowerCase();
     const matchesSearch = !searchTerms.length || searchTerms.every((term) => searchText.includes(term));
     const matches = matchesProject && matchesSearch;
-    row.hidden = !matches;
+    const isSelectedConversation = selectedConversationId && String(row.dataset.conversationId || '') === selectedConversationId;
+    row.hidden = !matches && !isSelectedConversation;
     const archived = !!row.closest('.chat-archived-list');
     if (matches) {
       if (archived) archivedVisible += 1;
@@ -1255,15 +1324,12 @@ function applyConversationProjectFilter() {
 }
 
 function clearConversationFilters() {
-  if (activeProjectFilter) {
-    window.location = buildChatUrl({conversation_id: selectedConversationId});
-    return;
-  }
   const filterEl = document.getElementById('chat-project-filter');
   const searchEl = document.getElementById('chat-conversation-search');
   if (filterEl) filterEl.value = '';
   if (searchEl) searchEl.value = '';
   applyConversationProjectFilter();
+  syncChatProjectFilterUrl('');
 }
 
 function setConversationPanelOpen(isOpen) {
@@ -1516,16 +1582,137 @@ function resizeChatTextarea(textarea) {
   textarea.style.height = Math.min(textarea.scrollHeight, Math.round(window.innerHeight * 0.28)) + 'px';
 }
 
+function getChatSpeechRecognitionConstructor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function updateChatVoiceInputButton() {
+  const button = document.getElementById('chat-voice-input-button');
+  if (!button) return;
+  const supported = !!getChatSpeechRecognitionConstructor();
+  button.disabled = chatSendInFlight || !supported;
+  button.classList.toggle('is-listening', chatSpeechListening);
+  button.textContent = chatSpeechListening ? 'Stop' : 'Voice';
+  button.setAttribute('aria-label', chatSpeechListening ? 'Stop voice typing' : 'Start voice typing');
+  button.title = supported
+    ? (chatSpeechListening ? 'Stop voice typing' : 'Start voice typing')
+    : 'Voice typing is not supported by this browser';
+}
+
+function formatChatVoiceTranscript(transcript) {
+  return String(transcript || '')
+    .replace(/\bnew paragraph\b/gi, '\n\n')
+    .replace(/\b(new line|newline)\b/gi, '\n')
+    .replace(/\bcomma\b/gi, ',')
+    .replace(/\b(period|full stop)\b/gi, '.')
+    .replace(/\bquestion mark\b/gi, '?')
+    .replace(/\b(exclamation point|exclamation mark)\b/gi, '!')
+    .replace(/\s+([,?.!])/g, '$1')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+}
+
+function renderChatVoiceTranscript() {
+  const textarea = document.querySelector('#chat-send-form textarea[name=content]');
+  if (!textarea) return;
+  const transcript = formatChatVoiceTranscript(chatSpeechFinalTranscript + (chatSpeechInterimTranscript ? ' ' + chatSpeechInterimTranscript : ''));
+  const separator = chatSpeechPrefix && transcript && !/[\s\n]$/.test(chatSpeechPrefix) ? ' ' : '';
+  textarea.value = chatSpeechPrefix + separator + transcript + chatSpeechSuffix;
+  const cursor = (chatSpeechPrefix + separator + transcript).length;
+  textarea.setSelectionRange(cursor, cursor);
+  resizeChatTextarea(textarea);
+  persistChatComposerDraft();
+}
+
+function stopChatVoiceInput() {
+  if (!chatSpeechRecognition || !chatSpeechListening) return;
+  try {
+    chatSpeechRecognition.stop();
+  } catch (_) {
+    chatSpeechListening = false;
+    chatSpeechRecognition = null;
+    updateChatVoiceInputButton();
+  }
+}
+
+function toggleChatVoiceInput() {
+  if (chatSpeechListening) {
+    stopChatVoiceInput();
+    return;
+  }
+  const SpeechRecognition = getChatSpeechRecognitionConstructor();
+  const textarea = document.querySelector('#chat-send-form textarea[name=content]');
+  if (!SpeechRecognition || !textarea) {
+    showChatComposerStatus('Voice typing is not supported by this browser.');
+    updateChatVoiceInputButton();
+    return;
+  }
+  const selectionStart = Number.isInteger(textarea.selectionStart) ? textarea.selectionStart : textarea.value.length;
+  const selectionEnd = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : selectionStart;
+  chatSpeechPrefix = textarea.value.slice(0, selectionStart);
+  chatSpeechSuffix = textarea.value.slice(selectionEnd);
+  chatSpeechFinalTranscript = '';
+  chatSpeechInterimTranscript = '';
+  const recognition = new SpeechRecognition();
+  chatSpeechRecognition = recognition;
+  chatSpeechListening = true;
+  updateChatVoiceInputButton();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = navigator.language || 'en-US';
+  recognition.onstart = () => {
+    chatSpeechListening = true;
+    updateChatVoiceInputButton();
+    showChatComposerStatus('Listening. Say "new line", "comma", or "period" when needed.', 'info');
+  };
+  recognition.onresult = (event) => {
+    let finalTranscript = '';
+    let interimTranscript = '';
+    for (let index = 0; index < event.results.length; index += 1) {
+      const result = event.results[index];
+      if (result.isFinal) finalTranscript += result[0].transcript;
+      else interimTranscript += result[0].transcript;
+    }
+    chatSpeechFinalTranscript = finalTranscript;
+    chatSpeechInterimTranscript = interimTranscript;
+    renderChatVoiceTranscript();
+  };
+  recognition.onerror = (event) => {
+    const code = String(event?.error || 'unknown error');
+    showChatComposerStatus(code === 'not-allowed'
+      ? 'Microphone permission was denied. Allow microphone access in the browser to use voice typing.'
+      : 'Voice typing stopped: ' + code + '.');
+  };
+  recognition.onend = () => {
+    chatSpeechListening = false;
+    chatSpeechRecognition = null;
+    updateChatVoiceInputButton();
+  };
+  try {
+    recognition.start();
+  } catch (_) {
+    showChatComposerStatus('Voice typing could not start. Try again after checking microphone permissions.');
+    chatSpeechRecognition = null;
+    chatSpeechListening = false;
+    updateChatVoiceInputButton();
+  }
+}
+
 function bindChatTextareaBehavior() {
   const textarea = document.querySelector('#chat-send-form textarea[name=content]');
   if (!textarea) return;
   resizeChatTextarea(textarea);
-  textarea.addEventListener('input', () => resizeChatTextarea(textarea));
+  textarea.addEventListener('input', () => {
+    resizeChatTextarea(textarea);
+    persistChatComposerDraft();
+  });
   textarea.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
     event.preventDefault();
     sendMessage(true);
   });
+  restoreChatComposerDraft();
+  updateChatVoiceInputButton();
 }
 
 function syncCreateConversationToolFields() {
@@ -4609,7 +4796,8 @@ async function openDagViewer(orchestrationId) {
 bindConversationActions();
 replayPersistedChatComposerStatus();
 document.getElementById('chat-project-filter')?.addEventListener('change', function() {
-  window.location = buildChatUrl({project_id: this.value});
+  applyConversationProjectFilter();
+  syncChatProjectFilterUrl(String(this.value || '').trim());
 });
 document.getElementById('chat-conversation-search')?.addEventListener('input', applyConversationProjectFilter);
 document.getElementById('chat-clear-filters')?.addEventListener('click', clearConversationFilters);
@@ -4647,9 +4835,11 @@ document.getElementById('chat-font-scale-reset')?.addEventListener('click', () =
 });
 document.querySelectorAll('.chat-conversation-link').forEach((link) => {
   link.addEventListener('click', () => {
+    persistChatComposerDraft();
     if (window.matchMedia('(max-width: 900px)').matches) setConversationPanelOpen(false);
   });
 });
+document.getElementById('chat-voice-input-button')?.addEventListener('click', toggleChatVoiceInput);
 setConversationPanelOpen(!window.matchMedia('(max-width: 900px)').matches);
 document.getElementById('create-convo-scope')?.addEventListener('change', () => {
   syncConversationScopeFields();
@@ -4710,6 +4900,7 @@ refreshServerEffectiveContextSummary().catch(() => {});
 bindChatTextareaBehavior();
 renderComposerAttachments();
 setupChatComposerDragDrop();
+window.addEventListener('beforeunload', persistChatComposerDraft);
 setTaskEventsVisible(false);
 startMessagePolling();
 document.querySelectorAll('#messages .message').forEach((messageEl) => {

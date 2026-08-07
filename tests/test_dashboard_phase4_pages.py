@@ -960,7 +960,8 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert b'id="chat-clear-filters"' in resp.data
     assert b"function clearConversationFilters" in resp.data
     assert b"addEventListener('click', clearConversationFilters)" in resp.data
-    assert b"window.location = buildChatUrl({conversation_id: selectedConversationId})" in resp.data
+    assert b"syncChatProjectFilterUrl('');" in resp.data
+    assert b"window.location = buildChatUrl({conversation_id: selectedConversationId})" not in resp.data
 
 
 def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_client):
@@ -1038,7 +1039,7 @@ def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_cli
     assert "if (preselectedChatBotId && !selectedConversationId) showCreateConversation();" in page_html
 
 
-def test_chat_page_project_filter_limits_conversation_list(dashboard_client):
+def test_chat_page_project_filter_is_client_side_and_keeps_full_conversation_list(dashboard_client):
     _login_admin(dashboard_client)
 
     class FakeCP:
@@ -1104,15 +1105,15 @@ def test_chat_page_project_filter_limits_conversation_list(dashboard_client):
     assert resp.status_code == 200
     assert b"Primary Project Chat" in resp.data
     assert b"Bridged Project Chat" in resp.data
-    assert b"Other Project Chat" not in resp.data
+    assert b"Other Project Chat" in resp.data
     assert b'option value="globeiq" selected' in resp.data
     assert b"Unscoped chats" in resp.data
     assert b"This chat will be scoped to the selected project." in resp.data
     assert b"Select a project before creating this scoped chat." in resp.data
     assert b"create-convo-project-id" in resp.data
-    assert b"addEventListener('change', syncConversationScopeFields)" in resp.data
     assert b"conversation_id=c-primary" in resp.data
-    assert b"project_id=globeiq" in resp.data
+    assert b"syncChatProjectFilterUrl(String(this.value || '').trim())" in resp.data
+    assert b"window.location = buildChatUrl({project_id: this.value})" not in resp.data
 
 
 def test_chat_page_surfaces_selected_project_work_snapshot(dashboard_client):
@@ -2234,8 +2235,8 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
 
     assert resp.status_code == 200
     assert b"One-off Chat" in resp.data
-    assert b"Project Chat" not in resp.data
-    assert b"Bridged Chat" not in resp.data
+    assert b"Project Chat" in resp.data
+    assert b"Bridged Chat" in resp.data
     assert b'option value="__unscoped__" selected' in resp.data
     assert b"All projects (3 active / 0 archived)" in resp.data
     assert b"Unscoped chats (1 active / 0 archived)" in resp.data
@@ -2249,14 +2250,14 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     assert b"targetProjectFilter = scope === 'global' ? unscopedProjectFilter" in resp.data
     assert b'id="chat-conversation-search"' in resp.data
     assert b'id="chat-clear-filters"' in resp.data
-    assert b"if (activeProjectFilter)" in resp.data
+    assert b"syncChatProjectFilterUrl" in resp.data
     assert b'placeholder="Title, project, bot, or model"' in resp.data
     assert b'data-search-text="one-off chat c-unscoped global' in resp.data
     assert b"personal-general-chat" in resp.data
     assert b"ollama-qwen" in resp.data
     assert b"applyConversationProjectFilter" in resp.data
     assert b'id="chat-conversation-filter-summary"' in resp.data
-    assert b"Active 1 / Archived 0" in resp.data
+    assert b"Active 3 / Archived 0" in resp.data
     assert b"Showing ${activeVisible} of ${activeTotal} active" in resp.data
 
 
@@ -4087,6 +4088,12 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b"function formatChatGateError(data, fallback)" in resp.data
     assert b"workspace_tools_unavailable" in resp.data
     assert b"Shared modes: none" in resp.data
+    assert b'id="chat-voice-input-button"' in resp.data
+    assert b"function toggleChatVoiceInput()" in resp.data
+    assert b"window.SpeechRecognition || window.webkitSpeechRecognition" in resp.data
+    assert b"function persistChatComposerDraft()" in resp.data
+    assert b"function restoreChatComposerDraft()" in resp.data
+    assert b"window.addEventListener('beforeunload', persistChatComposerDraft)" in resp.data
 
 
 def test_chat_page_uses_automatic_project_ingest_and_conversation_references(dashboard_client):

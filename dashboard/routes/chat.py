@@ -1906,8 +1906,9 @@ def chat_page() -> str:
             model_catalog_available = False
 
         conversation_scope_counts = _conversation_scope_counts(conversations)
-        if active_project_filter:
-            conversations = [c for c in conversations if _conversation_matches_project(c, active_project_filter)]
+        # The sidebar filters this complete list in the browser. Keeping every
+        # conversation here preserves the open chat and unsent drafts when its
+        # project filter changes without navigating away.
 
         selected_id = str(request.args.get("conversation_id") or "").strip()
         selected = None
