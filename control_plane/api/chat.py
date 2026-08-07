@@ -54,7 +54,9 @@ _CONVERSATION_REFERENCE_RE = re.compile(
 _STALE_DATE_DENIAL_RE = re.compile(
     r"(?:it\s+is\s+not\s+(?:august\s+)?20\d{2}|"
     r"(?:august\s+)?20\d{2}\s+(?:has\s+)?not\s+happened|"
-    r"(?:the\s+)?current\s+(?:real.world\s+)?date\s+is\s+early\s+20\d{2})",
+    r"(?:the\s+)?current\s+(?:real.world\s+)?date\s+is\s+early\s+20\d{2}|"
+    r"early\s+20\d{2}.*(?:future|not\s+happened)|"
+    r"(?:future|not\s+happened).{0,100}(?:august\s+)?20\d{2})",
     re.IGNORECASE,
 )
 

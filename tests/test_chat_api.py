@@ -17,6 +17,7 @@ def test_web_search_only_matches_current_or_lookup_prompts():
     assert should_search_web("What is the current market price for this part?") is True
     assert should_search_web("Look up this serial number for me") is True
     assert should_search_web("Your knowledge cutoff is old. Get up-to-date facts.") is True
+    assert should_search_web("Do a web search to confirm the best models") is True
     assert should_search_web("Help me word a private message to my colleague") is False
 
 
@@ -56,7 +57,7 @@ def test_chat_payload_excludes_disproven_assistant_date_denials():
         [
             SimpleNamespace(
                 role="assistant",
-                content="It is not August 2026 because that date has not happened yet.",
+                content="My access is limited to early 2025, and August 2026 is in the future.",
                 metadata={},
             ),
             SimpleNamespace(role="user", content="Use current information.", metadata={}),
