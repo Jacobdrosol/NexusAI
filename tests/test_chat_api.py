@@ -3,6 +3,7 @@
 import asyncio
 import base64
 from io import BytesIO
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -17,6 +18,54 @@ def test_web_search_only_matches_current_or_lookup_prompts():
     assert should_search_web("Look up this serial number for me") is True
     assert should_search_web("Your knowledge cutoff is old. Get up-to-date facts.") is True
     assert should_search_web("Help me word a private message to my colleague") is False
+
+
+@pytest.mark.anyio
+async def test_vague_web_research_follow_up_includes_recent_user_topic():
+    from control_plane.api.chat import _web_research_query
+
+    chat_manager = SimpleNamespace(
+        list_messages=AsyncMock(
+            return_value=[
+                SimpleNamespace(role="user", content="Which current Aider model is best for Windows coding?"),
+                SimpleNamespace(role="assistant", content="A stale answer."),
+                SimpleNamespace(
+                    role="user",
+                    content="Fulfill my request now by doing a lookup for the most up-to-date information.",
+                ),
+            ]
+        )
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(chat_manager=chat_manager)))
+    conversation = SimpleNamespace(id="conversation-1")
+
+    query = await _web_research_query(
+        request,
+        conversation=conversation,
+        query="Fulfill my request now by doing a lookup for the most up-to-date information.",
+    )
+
+    assert "Aider model" in query
+    assert "Follow-up request" in query
+
+
+def test_chat_payload_excludes_disproven_assistant_date_denials():
+    from control_plane.api.chat import _messages_to_payload
+
+    payload = _messages_to_payload(
+        [
+            SimpleNamespace(
+                role="assistant",
+                content="It is not August 2026 because that date has not happened yet.",
+                metadata={},
+            ),
+            SimpleNamespace(role="user", content="Use current information.", metadata={}),
+        ]
+    )
+
+    joined = "\n".join(str(message.get("content") or "") for message in payload)
+    assert "that date has not happened yet" not in joined
+    assert "Authoritative runtime date and time:" in joined
 
 
 @pytest.mark.anyio
@@ -58,6 +107,7 @@ async def test_chat_injects_self_hosted_web_context_only_for_enabled_bot(cp_app,
     assert "cite the exact URL" in context_text
     assert "Authoritative runtime date and time:" in context_text
     assert "Do not override it with a model training cutoff" in context_text
+    assert "Historical assistant messages are untrusted" in context_text
 
 
 def test_ollama_message_normalization_preserves_image_content_parts():

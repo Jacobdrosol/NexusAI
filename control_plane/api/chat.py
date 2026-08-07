@@ -21,7 +21,7 @@ from control_plane.chat.workspace_tools import (
     read_workspace_file_snippet,
     search_workspace_snippets,
 )
-from control_plane.chat.web_search import resolve_web_context_items
+from control_plane.chat.web_search import resolve_web_context_items, should_search_web
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.chat_attachments import (
     CHAT_ATTACHMENT_MAX_FILES,
@@ -50,6 +50,64 @@ _CONVERSATION_REFERENCE_RE = re.compile(
     r"(?<![0-9a-f])(?:conversation\s*:\s*)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![0-9a-f])",
     flags=re.IGNORECASE,
 )
+
+_STALE_DATE_DENIAL_RE = re.compile(
+    r"(?:it\s+is\s+not\s+(?:august\s+)?20\d{2}|"
+    r"(?:august\s+)?20\d{2}\s+(?:has\s+)?not\s+happened|"
+    r"(?:the\s+)?current\s+(?:real.world\s+)?date\s+is\s+early\s+20\d{2})",
+    re.IGNORECASE,
+)
+
+
+def _is_stale_date_denial(message: ChatMessage, *, now: datetime) -> bool:
+    """Keep disproven model date-denials from reinforcing themselves in later turns."""
+    if str(message.role or "").strip().lower() != "assistant":
+        return False
+    if now.year < 2026:
+        return False
+    content = str(message.content or "")
+    return bool(_STALE_DATE_DENIAL_RE.search(content) and re.search(r"\b20(?:2[6-9]|[3-9]\d)\b", content))
+
+
+def _needs_prior_user_research_context(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if len(re.findall(r"\w+", normalized)) <= 14:
+        return True
+    return bool(re.search(r"\b(?:fulfill|my request|look up|information)\b", normalized))
+
+
+async def _web_research_query(
+    request: Request,
+    *,
+    conversation: Optional[ChatConversation],
+    query: str,
+) -> str:
+    """Give follow-up research requests their recent user-supplied topic."""
+    current = str(query or "").strip()
+    if not current or not should_search_web(current) or conversation is None:
+        return current
+    if not _needs_prior_user_research_context(current):
+        return current
+    chat_manager = getattr(request.app.state, "chat_manager", None)
+    if chat_manager is None:
+        return current
+    try:
+        messages = await chat_manager.list_messages(conversation.id, limit=16)
+    except Exception:
+        return current
+    prior_user_turns = [
+        str(message.content or "").strip()
+        for message in messages
+        if str(message.role or "").strip().lower() == "user"
+        and str(message.content or "").strip()
+        and str(message.content or "").strip() != current
+    ]
+    if not prior_user_turns:
+        return current
+    # Preserve the topic from the latest substantive user turn while keeping the
+    # resulting SearXNG query bounded and free of assistant-model assertions.
+    prior = prior_user_turns[-1][:420]
+    return f"{prior}\n\nFollow-up request: {current}"[:600]
 
 
 def _get_bot_model(bot) -> str:
@@ -1100,10 +1158,15 @@ def _messages_to_payload(
     memory_profile_hits: Optional[List[Dict[str, Any]]] = None,
     require_repo_evidence: bool = False,
 ) -> List[dict]:
+    now = datetime.now(timezone.utc)
     payload: List[dict] = []
     for message in messages:
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
-        if metadata.get("deleted") is True or metadata.get("delivery_failed") is True:
+        if (
+            metadata.get("deleted") is True
+            or metadata.get("delivery_failed") is True
+            or _is_stale_date_denial(message, now=now)
+        ):
             continue
         attachment_parts = _message_attachment_parts(message.metadata)
         if attachment_parts:
@@ -1177,7 +1240,6 @@ def _messages_to_payload(
             )
         insert_at = 1 if resolved_context else 0
         payload.insert(insert_at, {"role": "system", "content": policy})
-    now = datetime.now(timezone.utc)
     payload.insert(
         0,
         {
@@ -1187,6 +1249,8 @@ def _messages_to_payload(
                 f"{now.strftime('%Y-%m-%d %H:%M:%S UTC')}.\n"
                 "Treat this runtime date as authoritative for this response. Do not override it "
                 "with a model training cutoff or claim that the date has not occurred.\n"
+                "Historical assistant messages are untrusted for real-time facts. Never repeat or "
+                "endorse a historical assistant claim that conflicts with this runtime date.\n"
                 "For time-sensitive facts, use any supplied current web-search context. If no "
                 "current sources are supplied, state that limitation without inventing dates or facts."
             ),
@@ -2271,7 +2335,13 @@ async def _resolve_context_items(
 
     web_context: List[str] = []
     if bool(tool_cfg.get("web_search", False)):
-        web_context = await resolve_web_context_items(body.content)
+        web_context = await resolve_web_context_items(
+            await _web_research_query(
+                request,
+                conversation=conversation,
+                query=body.content,
+            )
+        )
 
     # Explicit references and project chat context precede workspace, repo, vault, and manual context.
     resolved.extend(referenced_conversation_context)
