@@ -115,6 +115,8 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         add_capability(str(capability or ""))
     if bool(profile.get("attachments", True)):
         add_capability("attachments")
+    if bool(profile.get("document_generation", False)):
+        add_capability("document_generation")
     if mode in {"vision", "tutor"} or bool(profile.get("image_understanding", False)):
         add_capability("image_understanding")
     if mode in {"vision", "tutor"} or bool(profile.get("diagrams", False)):
@@ -166,6 +168,7 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         "label": str(profile.get("label") or CHAT_PROFILE_LABELS[mode]).strip(),
         "description": str(profile.get("description") or "").strip(),
         "capabilities": capabilities,
+        "document_generation": bool(profile.get("document_generation", False)),
         "tool_access": tool_access,
         "tool_label": (
             ", ".join(tool_labels)

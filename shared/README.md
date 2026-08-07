@@ -17,7 +17,8 @@ attachment constants.
 | `config_loader.py` | YAML loading and deep-merge utilities |
 | `settings_manager.py` | SQLite-backed runtime settings singleton |
 | `tool_catalog.py` | Tool definitions, presets, and helpers |
-| `chat_attachments.py` | Constants governing chat file attachment limits |
+| `chat_attachments.py` | Constants and helpers governing chat file attachment limits |
+| `chat_document_artifacts.py` | Bot-gated DOCX artifact generation for chat responses |
 
 ---
 

@@ -118,6 +118,79 @@ def test_document_and_binary_attachments_are_retained_and_described_to_the_model
 
 
 @pytest.mark.anyio
+async def test_stream_message_returns_docx_artifact_for_explicitly_enabled_bot(cp_app):
+    async def _stream(_task):
+        yield {
+            "event": "final",
+            "output": "# Tailored Resume\n\n## Experience\n- Built reliable software systems.",
+            "usage": {},
+        }
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "docx-chat-bot",
+                "name": "DOCX Chat Bot",
+                "role": "assistant",
+                "backends": [],
+                "routing_rules": {"chat_profile": {"document_generation": True}},
+                "enabled": True,
+            },
+        )
+        assert bot.status_code == 200
+        conversation = await client.post("/v1/chat/conversations", json={"title": "Resume"})
+        assert conversation.status_code == 200
+        response = await client.post(
+            f"/v1/chat/conversations/{conversation.json()['id']}/stream",
+            json={
+                "content": "Tailor my resume and return it as tailored_resume.docx.",
+                "bot_id": "docx-chat-bot",
+            },
+        )
+        assert response.status_code == 200
+        messages = await client.get(f"/v1/chat/conversations/{conversation.json()['id']}/messages")
+
+    assistant = messages.json()[-1]
+    attachment = assistant["metadata"]["attachments"][0]
+    assert attachment["name"] == "tailored_resume.docx"
+    assert attachment["kind"] == "document"
+    assert attachment["generated_by"] == "chat_document_artifact"
+    assert attachment["data_url"].startswith("data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,")
+    assert "Tailored Resume" in attachment["text_content"]
+    assert assistant["metadata"]["document_artifact"]["generated"] is True
+    from shared.chat_attachments import decode_attachment_data_url, extract_document_text
+
+    mime_type, raw = decode_attachment_data_url(attachment["data_url"])
+    extracted, status = extract_document_text(name=attachment["name"], mime_type=mime_type, raw=raw)
+    assert status == "extracted"
+    assert "Tailored Resume" in extracted
+
+
+@pytest.mark.anyio
+async def test_stream_message_does_not_return_docx_artifact_when_bot_capability_is_disabled(cp_app):
+    async def _stream(_task):
+        yield {"event": "final", "output": "A normal response.", "usage": {}}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post(
+            "/v1/bots",
+            json={"id": "plain-chat-bot", "name": "Plain Chat", "role": "assistant", "backends": [], "enabled": True},
+        )
+        conversation = await client.post("/v1/chat/conversations", json={"title": "No document"})
+        response = await client.post(
+            f"/v1/chat/conversations/{conversation.json()['id']}/stream",
+            json={"content": "Return this as a document.docx", "bot_id": "plain-chat-bot"},
+        )
+        assert response.status_code == 200
+        messages = await client.get(f"/v1/chat/conversations/{conversation.json()['id']}/messages")
+
+    assert "attachments" not in (messages.json()[-1]["metadata"] or {})
+
+
+@pytest.mark.anyio
 async def test_create_conversation_and_post_message(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(
         return_value={"output": "assistant reply", "usage": {"prompt_tokens": 12, "completion_tokens": 8}}

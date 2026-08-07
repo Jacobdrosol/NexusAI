@@ -75,6 +75,19 @@ def test_bot_chat_profile_exposes_web_search_without_workspace_access():
     assert profile["use_label"] == "Tool-enabled chat"
 
 
+def test_bot_chat_profile_exposes_explicit_document_generation_capability():
+    profile = bot_chat_profile(
+        {
+            "routing_rules": {
+                "chat_profile": {"mode": "chat", "document_generation": True},
+            }
+        }
+    )
+
+    assert profile["document_generation"] is True
+    assert "document_generation" in profile["capabilities"]
+
+
 def test_with_bot_chat_profiles_preserves_bot_fields_and_adds_profile():
     rows = with_bot_chat_profiles(
         [

@@ -30,6 +30,12 @@ from shared.chat_attachments import (
     decode_attachment_data_url,
     extract_document_text,
 )
+from shared.chat_document_artifacts import (
+    build_docx_attachment,
+    document_generation_enabled,
+    document_generation_instruction,
+    requested_docx_artifact,
+)
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage, Task, TaskMetadata
 from shared.settings_manager import SettingsManager, get_context_limits_for_model
@@ -5723,6 +5729,15 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 memory_profile_hits=memory_hits,
                 require_repo_evidence=require_repo_evidence,
             )
+            requested_docx_filename = requested_docx_artifact(
+                body.content,
+                enabled=document_generation_enabled(bot),
+            )
+            if requested_docx_filename:
+                payload.insert(
+                    0,
+                    {"role": "system", "content": document_generation_instruction(requested_docx_filename)},
+                )
             if inline_code_mode:
                 integration_required = _inline_code_existing_edits_expected(body.content)
                 payload = _inline_code_compact_payload(
@@ -6425,6 +6440,18 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 },
             )
             metadata["streaming"] = False
+            if requested_docx_filename:
+                generated_attachment = build_docx_attachment(
+                    filename=requested_docx_filename,
+                    content=assistant_output,
+                )
+                if generated_attachment:
+                    metadata["attachments"] = [generated_attachment]
+                    metadata["document_artifact"] = {
+                        "format": "docx",
+                        "name": generated_attachment["name"],
+                        "generated": True,
+                    }
             if isinstance(result, dict) and result.get("partial"):
                 metadata["partial"] = True
             if assistant_message is None:

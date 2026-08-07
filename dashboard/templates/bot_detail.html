@@ -585,6 +585,9 @@
     <div class="form-group">
       <label><input type="checkbox" id="bot-chat-profile-diagrams"> Diagrams</label>
     </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="bot-chat-profile-document-generation"> Document generation (.docx)</label>
+    </div>
   </div>
   <div class="form-group">
     <label><input type="checkbox" id="bot-chat-tool-enabled"> Enable workspace tools for this bot</label>
@@ -1827,6 +1830,7 @@ function normalizedChatProfile() {
     attachments: cfg.attachments !== false,
     image_understanding: cfg.image_understanding === true,
     diagrams: cfg.diagrams === true,
+    document_generation: cfg.document_generation === true,
   };
 }
 
@@ -1857,6 +1861,7 @@ function loadChatToolAccessEditor() {
   const profileAttachments = document.getElementById('bot-chat-profile-attachments');
   const profileImages = document.getElementById('bot-chat-profile-images');
   const profileDiagrams = document.getElementById('bot-chat-profile-diagrams');
+  const profileDocumentGeneration = document.getElementById('bot-chat-profile-document-generation');
   const memoryEnabled = document.getElementById('bot-memory-enabled');
   const directChatEnabled = document.getElementById('bot-direct-chat-enabled');
   if (profileMode) profileMode.value = profile.mode;
@@ -1865,6 +1870,7 @@ function loadChatToolAccessEditor() {
   if (profileAttachments) profileAttachments.checked = profile.attachments !== false;
   if (profileImages) profileImages.checked = profile.image_understanding === true;
   if (profileDiagrams) profileDiagrams.checked = profile.diagrams === true;
+  if (profileDocumentGeneration) profileDocumentGeneration.checked = profile.document_generation === true;
   if (memoryEnabled) memoryEnabled.checked = BOT.memory_profiles_enabled === true;
   if (directChatEnabled) directChatEnabled.checked = normalizedDirectChatAccess().enabled;
   const cfg = normalizedChatToolAccess();
@@ -1887,6 +1893,7 @@ function saveChatToolAccess() {
     attachments: !!document.getElementById('bot-chat-profile-attachments')?.checked,
     image_understanding: !!document.getElementById('bot-chat-profile-images')?.checked,
     diagrams: !!document.getElementById('bot-chat-profile-diagrams')?.checked,
+    document_generation: !!document.getElementById('bot-chat-profile-document-generation')?.checked,
   };
   BOT.chat_tool_access = {
     enabled: !!document.getElementById('bot-chat-tool-enabled')?.checked,
