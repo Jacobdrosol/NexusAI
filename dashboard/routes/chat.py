@@ -15,7 +15,11 @@ from dashboard.bot_tooling_status import build_bot_tooling_status
 from dashboard.cp_client import get_cp_client
 from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
 from dashboard.work_overview import manager_id_for_task, project_id_for_task
-from shared.chat_attachments import CHAT_ATTACHMENT_MAX_FILES, CHAT_ATTACHMENT_MAX_TOTAL_BYTES
+from shared.chat_attachments import (
+    CHAT_ATTACHMENT_MAX_FILES,
+    CHAT_ATTACHMENT_MAX_INLINE_BYTES,
+    CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
+)
 
 bp = Blueprint("chat", __name__)
 
@@ -1405,6 +1409,18 @@ def _is_safe_attachment_preview_data_url(value: Any) -> bool:
     )
 
 
+def _is_safe_attachment_download_data_url(attachment: dict[str, Any]) -> bool:
+    """Raw document/binary data is only exposed for Blob-backed viewing or download."""
+    kind = str(attachment.get("kind") or "").strip().lower()
+    data_url = str(attachment.get("data_url") or "").strip()
+    return bool(
+        kind in {"document", "binary"}
+        and data_url.startswith("data:")
+        and ";base64," in data_url
+        and len(data_url) <= (CHAT_ATTACHMENT_MAX_INLINE_BYTES * 2)
+    )
+
+
 def _sanitize_attachment_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     safe = _json_safe(metadata)
     if not isinstance(safe, dict):
@@ -1418,7 +1434,10 @@ def _sanitize_attachment_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
             continue
         row = dict(attachment)
         data_url = str(row.get("data_url") or "").strip()
-        if data_url and not _is_safe_attachment_preview_data_url(data_url):
+        if data_url and not (
+            _is_safe_attachment_preview_data_url(data_url)
+            or _is_safe_attachment_download_data_url(row)
+        ):
             row.pop("data_url", None)
         cleaned_attachments.append(row)
     safe["attachments"] = cleaned_attachments
@@ -2033,6 +2052,7 @@ def chat_page() -> str:
             model_display_labels=_model_display_labels(model_catalog),
             chat_attachment_limits={
                 "max_files": CHAT_ATTACHMENT_MAX_FILES,
+                "max_inline_bytes": CHAT_ATTACHMENT_MAX_INLINE_BYTES,
                 "max_total_bytes": CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
             },
             error=page_error,
@@ -2068,6 +2088,7 @@ def chat_page() -> str:
             model_display_labels={},
             chat_attachment_limits={
                 "max_files": CHAT_ATTACHMENT_MAX_FILES,
+                "max_inline_bytes": CHAT_ATTACHMENT_MAX_INLINE_BYTES,
                 "max_total_bytes": CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
             },
             error="Chat view is temporarily unavailable. Start a new chat or refresh.",

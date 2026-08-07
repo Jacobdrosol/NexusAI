@@ -1,6 +1,5 @@
 import asyncio
 from collections import Counter
-import base64
 from datetime import datetime, timezone
 import json
 import logging
@@ -28,6 +27,8 @@ from shared.chat_attachments import (
     CHAT_ATTACHMENT_MAX_FILES,
     CHAT_ATTACHMENT_MAX_TEXT_BYTES,
     CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
+    decode_attachment_data_url,
+    extract_document_text,
 )
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage, Task, TaskMetadata
@@ -381,7 +382,7 @@ class PostMessageRequest(BaseModel):
 class ChatAttachmentInput(BaseModel):
     name: str
     mime_type: str
-    kind: Literal["image", "text", "binary"]
+    kind: Literal["image", "text", "document", "binary"]
     size_bytes: int = 0
     data_url: Optional[str] = None
     text_content: Optional[str] = None
@@ -605,14 +606,11 @@ def _attachment_size_bytes(item: ChatAttachmentInput) -> int:
     kind = str(item.kind or "").strip().lower()
     if kind == "text":
         return len(str(item.text_content or "").encode("utf-8"))
-    if kind == "image":
-        data_url = str(item.data_url or "").strip()
-        if "," not in data_url:
-            return 0
-        _, encoded = data_url.split(",", 1)
+    if kind in {"image", "document", "binary"}:
         try:
-            return len(base64.b64decode(encoded, validate=False))
-        except Exception:
+            _, raw = decode_attachment_data_url(item.data_url)
+            return len(raw)
+        except ValueError:
             return 0
     return 0
 
@@ -641,15 +639,19 @@ def _attachment_payload_dicts(attachments: List[ChatAttachmentInput]) -> List[Di
         size_bytes = max(0, _attachment_size_bytes(item))
         if kind == "image":
             data_url = str(item.data_url or "").strip()
-            if not data_url.startswith("data:image/"):
+            try:
+                data_mime_type, raw = decode_attachment_data_url(data_url)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Attachment '{name}' {exc}.") from exc
+            if not data_mime_type.startswith("image/"):
                 raise HTTPException(status_code=400, detail=f"Attachment '{name}' must provide an image data URL.")
             normalized.append(
                 {
                     "name": name,
-                    "mime_type": mime_type,
+                    "mime_type": data_mime_type,
                     "kind": "image",
                     "data_url": data_url,
-                    "size_bytes": size_bytes,
+                    "size_bytes": len(raw),
                 }
             )
             continue
@@ -668,12 +670,47 @@ def _attachment_payload_dicts(attachments: List[ChatAttachmentInput]) -> List[Di
                 }
             )
             continue
+        data_url = str(item.data_url or "").strip()
+        if not data_url:
+            normalized.append(
+                {
+                    "name": name,
+                    "mime_type": mime_type,
+                    "kind": "binary",
+                    "size_bytes": size_bytes,
+                }
+            )
+            continue
+        try:
+            data_mime_type, raw = decode_attachment_data_url(data_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Attachment '{name}' {exc}.") from exc
+        if kind == "document":
+            text_content, extraction_status = extract_document_text(
+                name=name,
+                mime_type=data_mime_type,
+                raw=raw,
+            )
+            normalized.append(
+                {
+                    "name": name,
+                    "mime_type": data_mime_type,
+                    "kind": "document",
+                    "data_url": data_url,
+                    "text_content": text_content[:CHAT_ATTACHMENT_MAX_TEXT_BYTES],
+                    "size_bytes": len(raw),
+                    "truncated": len(text_content) > CHAT_ATTACHMENT_MAX_TEXT_BYTES,
+                    "extraction_status": extraction_status,
+                }
+            )
+            continue
         normalized.append(
             {
                 "name": name,
-                "mime_type": mime_type,
+                "mime_type": data_mime_type,
                 "kind": "binary",
-                "size_bytes": size_bytes,
+                "data_url": data_url,
+                "size_bytes": len(raw),
             }
         )
     return normalized
@@ -718,14 +755,19 @@ def _message_attachment_parts(metadata: Any) -> List[Dict[str, Any]]:
                 }
             )
             continue
-        if kind == "binary":
+        if kind in {"binary", "document"}:
             size_bytes = int(item.get("size_bytes") or 0)
+            detail = (
+                "Document text could not be extracted; the original file is retained for download."
+                if kind == "document"
+                else "Binary attachment was included with the message but its raw contents were not inlined."
+            )
             parts.append(
                 {
                     "type": "text",
                     "text": (
                         f"[Attached file: {name} ({mime_type}, {size_bytes} bytes)]\n"
-                        "Binary attachment was included with the message but its raw contents were not inlined."
+                        f"{detail}"
                     ),
                     "name": name,
                     "mime_type": mime_type,

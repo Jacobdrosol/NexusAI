@@ -752,7 +752,7 @@
         </details>
         <div id="chat-attachment-list" class="chat-attachment-list" aria-live="polite"></div>
         <div id="chat-composer-status" class="chat-composer-status" role="status" aria-live="polite" hidden></div>
-        <div class="mini-note chat-attachment-hint">Drag files here, use +, or paste an image. Max {{ chat_attachment_limits.max_files }} files, 1 GB total.</div>
+        <div class="mini-note chat-attachment-hint">Drag files here, use +, or paste an image. Text, code, PDF, DOCX, and other files are supported. Max {{ chat_attachment_limits.max_files }} files and {{ (chat_attachment_limits.max_inline_bytes / 1048576)|round(0)|int }} MB per retained file.</div>
         <div class="chat-compose-footer">
           <label class="context-item chat-message-tools-toggle">
             <input type="checkbox" id="enable-inline-coding-message">
@@ -1072,6 +1072,7 @@ const botDisplayLabels = {{ bot_display_labels|tojson }};
 const modelDisplayLabels = {{ model_display_labels|tojson }};
 const chatAttachmentLimits = {{ chat_attachment_limits|tojson }};
 const CHAT_ATTACHMENT_MAX_FILES = Number(chatAttachmentLimits?.max_files || 15);
+const CHAT_ATTACHMENT_MAX_INLINE_BYTES = Number(chatAttachmentLimits?.max_inline_bytes || 26214400);
 const CHAT_ATTACHMENT_MAX_TOTAL_BYTES = Number(chatAttachmentLimits?.max_total_bytes || 1073741824);
 const CHAT_ATTACHMENT_MAX_TEXT_BYTES = 120000;
 const CHAT_MESSAGE_CONTENT_MAX_CHARS = 120000;
@@ -1839,13 +1840,46 @@ function openMessageAttachment(button) {
     code.className = 'chat-attachment-viewer-text';
     code.textContent = text + (attachment?.truncated ? '\n\n[Preview truncated before model delivery.]' : '');
     body.appendChild(code);
-  } else {
+  }
+  const fileBlob = attachmentBlobFromDataUrl(dataUrl);
+  const isPdf = kind === 'document' && (mime === 'application/pdf' || name.toLowerCase().endsWith('.pdf'));
+  if (isPdf && fileBlob) {
+    const frame = document.createElement('iframe');
+    frame.className = 'chat-attachment-viewer-text';
+    frame.title = name;
+    frame.src = URL.createObjectURL(fileBlob);
+    body.prepend(frame);
+  }
+  if (!text && !(isPdf && fileBlob)) {
     const note = document.createElement('p');
     note.className = 'mini-note';
-    note.textContent = 'This binary attachment was recorded with its name and type, but its bytes were not retained by the older chat upload flow, so it cannot be opened now.';
+    note.textContent = fileBlob
+      ? 'This file has no readable text preview. Download it to open it in an appropriate app.'
+      : 'This older binary attachment was recorded with its name and type, but its bytes were not retained and cannot be opened.';
     body.appendChild(note);
   }
+  if (fileBlob) {
+    const download = document.createElement('a');
+    download.className = 'btn';
+    download.href = URL.createObjectURL(fileBlob);
+    download.download = name;
+    download.textContent = 'Download file';
+    body.appendChild(download);
+  }
   document.getElementById('modal-attachment-viewer').style.display = 'flex';
+}
+
+function attachmentBlobFromDataUrl(dataUrl) {
+  const match = /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/i.exec(String(dataUrl || '').trim());
+  if (!match) return null;
+  try {
+    const decoded = atob(match[2]);
+    const bytes = new Uint8Array(decoded.length);
+    for (let index = 0; index < decoded.length; index += 1) bytes[index] = decoded.charCodeAt(index);
+    return new Blob([bytes], {type: match[1]});
+  } catch (_) {
+    return null;
+  }
 }
 
 function activeChatBotId() {
@@ -2467,29 +2501,53 @@ function isTextAttachmentFile(file) {
   const name = String(file?.name || '').toLowerCase();
   if (mime.startsWith('text/')) return true;
   if (['application/json', 'application/xml', 'application/javascript'].includes(mime)) return true;
-  return ['.md', '.txt', '.json', '.js', '.ts', '.tsx', '.jsx', '.py', '.cs', '.cpp', '.h', '.html', '.css', '.xml', '.yml', '.yaml', '.sql'].some((ext) => name.endsWith(ext));
+  return ['.md', '.txt', '.json', '.jsonl', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.pyi', '.cs', '.fs', '.fsx', '.vb', '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx', '.html', '.htm', '.css', '.scss', '.sass', '.less', '.xml', '.yml', '.yaml', '.toml', '.ini', '.cfg', '.conf', '.sql', '.ps1', '.psm1', '.sh', '.bash', '.zsh', '.fish', '.bat', '.cmd', '.go', '.rs', '.java', '.kt', '.swift', '.php', '.rb', '.lua', '.r', '.csv', '.tsv', '.log'].some((ext) => name.endsWith(ext)) || ['dockerfile', 'makefile', 'readme', 'license'].includes(name);
+}
+
+function isDocumentAttachmentFile(file) {
+  const mime = String(file?.type || '').toLowerCase();
+  const name = String(file?.name || '').toLowerCase();
+  return mime === 'application/pdf'
+    || mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    || name.endsWith('.pdf')
+    || name.endsWith('.docx');
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Failed to read attachment: ' + file.name));
+    reader.readAsDataURL(file);
+  });
 }
 
 async function readComposerAttachment(file) {
-  if (String(file?.type || '').toLowerCase().startsWith('image/')) {
-    return await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve({
-        name: file.name,
-        mime_type: file.type || 'image/*',
-        kind: 'image',
-        data_url: String(reader.result || ''),
-        size_bytes: Number(file.size || 0),
-      });
-      reader.onerror = () => reject(new Error('Failed to read image attachment: ' + file.name));
-      reader.readAsDataURL(file);
-    });
+  const mime = String(file?.type || '').toLowerCase();
+  if (mime.startsWith('image/')) {
+    return {
+      name: file.name,
+      mime_type: file.type || 'image/*',
+      kind: 'image',
+      data_url: await readFileAsDataUrl(file),
+      size_bytes: Number(file.size || 0),
+    };
+  }
+  if (isDocumentAttachmentFile(file)) {
+    return {
+      name: file.name,
+      mime_type: file.type || 'application/octet-stream',
+      kind: 'document',
+      data_url: await readFileAsDataUrl(file),
+      size_bytes: Number(file.size || 0),
+    };
   }
   if (!isTextAttachmentFile(file)) {
     return {
       name: file.name,
       mime_type: file.type || 'application/octet-stream',
       kind: 'binary',
+      data_url: await readFileAsDataUrl(file),
       size_bytes: Number(file.size || 0),
     };
   }
@@ -2507,6 +2565,11 @@ async function readComposerAttachment(file) {
 function validateIncomingAttachmentBatch(files) {
   const nextFiles = Array.from(files || []);
   if (!nextFiles.length) return true;
+  const oversized = nextFiles.find((file) => Number(file?.size || 0) > CHAT_ATTACHMENT_MAX_INLINE_BYTES);
+  if (oversized) {
+    alert(`'${oversized.name}' exceeds the ${formatAttachmentBytes(CHAT_ATTACHMENT_MAX_INLINE_BYTES)} retained-file limit.`);
+    return false;
+  }
   const nextCount = pendingComposerAttachments.length + nextFiles.length;
   if (nextCount > CHAT_ATTACHMENT_MAX_FILES) {
     alert(`You can attach at most ${CHAT_ATTACHMENT_MAX_FILES} files to one message.`);

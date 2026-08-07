@@ -1,6 +1,8 @@
 """Integration tests for chat API routes."""
 
 import asyncio
+import base64
+from io import BytesIO
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -71,6 +73,48 @@ def test_ollama_message_normalization_preserves_image_content_parts():
     normalized = _messages_for_ollama(_payload_to_messages(payload))
 
     assert normalized == [{"role": "user", "content": "Inspect this image.", "images": ["aGVsbG8="]}]
+
+
+def test_document_and_binary_attachments_are_retained_and_described_to_the_model():
+    from docx import Document
+
+    from control_plane.api.chat import ChatAttachmentInput, _attachment_payload_dicts, _message_attachment_parts
+
+    document = Document()
+    document.add_paragraph("The attached DOCX contains this exact note.")
+    buffer = BytesIO()
+    document.save(buffer)
+    docx_data_url = (
+        "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,"
+        + base64.b64encode(buffer.getvalue()).decode("ascii")
+    )
+
+    attachments = _attachment_payload_dicts(
+        [
+            ChatAttachmentInput(
+                name="brief.docx",
+                mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                kind="document",
+                data_url=docx_data_url,
+            ),
+            ChatAttachmentInput(
+                name="archive.zip",
+                mime_type="application/zip",
+                kind="binary",
+                data_url="data:application/zip;base64,AAEC",
+            ),
+        ]
+    )
+
+    assert attachments[0]["kind"] == "document"
+    assert attachments[0]["data_url"] == docx_data_url
+    assert attachments[0]["extraction_status"] == "extracted"
+    assert "exact note" in attachments[0]["text_content"]
+    assert attachments[1]["data_url"] == "data:application/zip;base64,AAEC"
+
+    parts = _message_attachment_parts({"attachments": attachments})
+    assert any("The attached DOCX contains this exact note." in part["text"] for part in parts)
+    assert any("raw contents were not inlined" in part["text"] for part in parts)
 
 
 @pytest.mark.anyio

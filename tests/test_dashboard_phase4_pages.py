@@ -4077,6 +4077,8 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b"confirmDeleteMessagePair" in resp.data
     assert b"id=\"modal-attachment-viewer\"" in resp.data
     assert b"function openMessageAttachment(button)" in resp.data
+    assert b"function attachmentBlobFromDataUrl(dataUrl)" in resp.data
+    assert b"function isDocumentAttachmentFile(file)" in resp.data
     assert b"function retryFailedMessage(btn)" in resp.data
     assert b"clearAcceptedComposerDraft(form)" in resp.data
     assert b"Response stream finished without a saved assistant message." in resp.data
@@ -4335,6 +4337,20 @@ def test_chat_message_api_sanitizes_send_response_attachment_preview_urls(dashbo
                                 "data_url": "data:image/png;base64,aGVsbG8=",
                                 "size_bytes": 1024,
                             },
+                            {
+                                "name": "report.pdf",
+                                "mime_type": "application/pdf",
+                                "kind": "document",
+                                "data_url": "data:application/pdf;base64,JVBERi0=",
+                                "size_bytes": 5,
+                            },
+                            {
+                                "name": "archive.zip",
+                                "mime_type": "application/zip",
+                                "kind": "binary",
+                                "data_url": "data:application/zip;base64,AAEC",
+                                "size_bytes": 3,
+                            },
                         ]
                     },
                 },
@@ -4352,6 +4368,8 @@ def test_chat_message_api_sanitizes_send_response_attachment_preview_urls(dashbo
     assert attachments[0]["name"] == "unsafe.svg"
     assert "data_url" not in attachments[0]
     assert attachments[1]["data_url"] == "data:image/png;base64,aGVsbG8="
+    assert attachments[2]["data_url"] == "data:application/pdf;base64,JVBERi0="
+    assert attachments[3]["data_url"] == "data:application/zip;base64,AAEC"
 
 
 def test_chat_message_api_sanitizes_no_id_send_response_metadata(dashboard_client):
