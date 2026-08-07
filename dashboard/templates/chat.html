@@ -2997,7 +2997,7 @@ async function saveConversationMemoryProfile() {
 async function saveConversationRouteDefaults() {
   if (!selectedConversationId) return;
   const botId = activeChatBotId();
-  const readinessBlocker = activeBotReadinessBlocker();
+  const readinessBlocker = isResponseRegeneration ? '' : activeBotReadinessBlocker();
   if (readinessBlocker) {
     showChatComposerStatus(readinessBlocker);
     return;
@@ -3111,20 +3111,22 @@ async function sendMessage(streamMode, options = {}) {
   const localImageBlocker = hasImageAttachment && !activeBotSupportsImages()
     ? 'The selected chat bot model does not support image attachments. Switch bots or remove the screenshots.'
     : '';
-  const toolBlocker = workspaceToolRequestBlocker();
+  const toolBlocker = isResponseRegeneration ? '' : workspaceToolRequestBlocker();
   if (toolBlocker) {
     showChatComposerStatus(toolBlocker);
     renderChatEffectiveContextSummary();
     return;
   }
-  const codingBlocker = inlineCodingRequestBlocker();
+  const codingBlocker = isResponseRegeneration ? '' : inlineCodingRequestBlocker();
   if (codingBlocker) {
     showChatComposerStatus(codingBlocker);
     return;
   }
-  const useWorkspaceTools = !!document.getElementById('use-workspace-tools-message')?.checked;
-  const inlineCodingEnabled = !!document.getElementById('enable-inline-coding-message')?.checked;
-  const serverBlocker = await serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodingEnabled, hasImageAttachment});
+  const useWorkspaceTools = !isResponseRegeneration && !!document.getElementById('use-workspace-tools-message')?.checked;
+  const inlineCodingEnabled = !isResponseRegeneration && !!document.getElementById('enable-inline-coding-message')?.checked;
+  const serverBlocker = isResponseRegeneration
+    ? ''
+    : await serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodingEnabled, hasImageAttachment});
   if (serverBlocker) {
     showChatComposerStatus(serverBlocker);
     renderChatEffectiveContextSummary();
@@ -3135,6 +3137,7 @@ async function sendMessage(streamMode, options = {}) {
     return;
   }
   setChatComposerBusy(true);
+  if (isResponseRegeneration) showChatComposerStatus('Regenerating response...', 'info');
 
   const payload = {
     ...(function() {
@@ -3148,7 +3151,7 @@ async function sendMessage(streamMode, options = {}) {
         inline_coding_enabled: inlineCodingEnabled,
       };
     })(),
-    conversation_id: fd.get('conversation_id'),
+    conversation_id: selectedConversationId,
     content,
     bot_id: options.botId || fd.get('bot_id') || null,
     attachments: requestAttachments,
@@ -3500,18 +3503,9 @@ function copyConversationReference(conversationId) {
 function rerunMessage(btn) {
   const m = getMessageData(btn);
   if (!m.id || String(m.role).trim() !== 'assistant') return;
-  const messageEl = btn.closest('.message');
-  let sourceEl = messageEl?.previousElementSibling || null;
-  while (sourceEl && String(sourceEl.dataset?.role || '').trim() !== 'user') {
-    sourceEl = sourceEl.previousElementSibling;
-  }
-  const sourceContent = sourceEl?.dataset?.content || '';
-  if (!sourceContent) {
-    alert('The original user message is unavailable for regeneration.');
-    return;
-  }
   sendMessage(true, {
-    content: sourceContent,
+    // The control plane resolves the exact preceding user turn by message ID.
+    content: 'Regenerate the selected response.',
     botId: m.bot_id || null,
     rerunAssistantMessageId: m.id,
   });
