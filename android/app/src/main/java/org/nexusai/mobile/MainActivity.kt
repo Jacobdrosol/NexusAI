@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,9 +60,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -399,32 +409,121 @@ private fun ConversationScreen(modifier: Modifier, conversation: ChatConversatio
 private fun MessageRow(message: ChatMessage) {
     val context = LocalContext.current
     var actionsOpen by remember(message.id) { mutableStateOf(false) }
+    val isUser = message.role == "user"
+    val messageColor = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    val contentColor = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    val shape = if (isUser) {
+        RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
+    } else {
+        RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
+    }
 
-    Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (message.role == "user") "You" else "NexusAI",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.labelMedium,
-            )
-            Box {
-                IconButton(onClick = { actionsOpen = true }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "Open message actions")
-                }
-                DropdownMenu(expanded = actionsOpen, onDismissRequest = { actionsOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Copy") },
-                        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                        onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("NexusAI message", message.content))
-                            actionsOpen = false
-                        },
+    Box(Modifier.fillMaxWidth()) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.92f).align(if (isUser) Alignment.CenterEnd else Alignment.CenterStart),
+            color = messageColor,
+            contentColor = contentColor,
+            shape = shape,
+        ) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (isUser) "You" else "NexusAI",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelMedium,
                     )
+                    Box {
+                        IconButton(onClick = { actionsOpen = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Open message actions")
+                        }
+                        DropdownMenu(expanded = actionsOpen, onDismissRequest = { actionsOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Copy") },
+                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("NexusAI message", message.content))
+                                    actionsOpen = false
+                                },
+                            )
+                        }
+                    }
                 }
+                MarkdownMessageContent(message.content)
             }
         }
-        Text(message.content)
+    }
+}
+
+@Composable
+private fun MarkdownMessageContent(markdown: String) {
+    var inCodeFence = false
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        markdown.lines().forEach { rawLine ->
+            val trimmed = rawLine.trim()
+            if (trimmed.startsWith("```")) {
+                inCodeFence = !inCodeFence
+                return@forEach
+            }
+            if (inCodeFence) {
+                Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(4.dp)) {
+                    Text(rawLine, modifier = Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                }
+                return@forEach
+            }
+            val heading = trimmed.takeWhile { it == '#' }.length
+            when {
+                heading in 1..6 && trimmed.length > heading && trimmed[heading].isWhitespace() -> Text(
+                    markdownInline(trimmed.drop(heading).trim()),
+                    style = if (heading <= 2) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleSmall,
+                )
+                trimmed.startsWith(">") -> Text(
+                    markdownInline(trimmed.drop(1).trim()),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+                )
+                trimmed.matches(Regex("""[-+*]\s+.*""")) -> Text(
+                    markdownInline("• " + trimmed.drop(1).trim()),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                trimmed.matches(Regex("""\d+\.\s+.*""")) -> Text(markdownInline(trimmed), style = MaterialTheme.typography.bodyMedium)
+                trimmed.isNotEmpty() -> Text(markdownInline(rawLine), style = MaterialTheme.typography.bodyMedium)
+                else -> Spacer(Modifier.heightIn(min = 4.dp))
+            }
+        }
+    }
+}
+
+private fun markdownInline(source: String): AnnotatedString = buildAnnotatedString {
+    var index = 0
+    while (index < source.length) {
+        fun appendStyled(end: Int, style: SpanStyle, markerLength: Int) {
+            withStyle(style) { append(source.substring(index + markerLength, end)) }
+            index = end + markerLength
+        }
+        when {
+            source.startsWith("**", index) -> {
+                val end = source.indexOf("**", index + 2)
+                if (end > index + 2) appendStyled(end, SpanStyle(fontWeight = FontWeight.Bold), 2) else { append(source[index]); index += 1 }
+            }
+            source[index] == '`' -> {
+                val end = source.indexOf('`', index + 1)
+                if (end > index + 1) appendStyled(end, SpanStyle(fontFamily = FontFamily.Monospace), 1) else { append(source[index]); index += 1 }
+            }
+            source[index] == '*' || source[index] == '_' -> {
+                val marker = source[index]
+                val end = source.indexOf(marker, index + 1)
+                if (end > index + 1) appendStyled(end, SpanStyle(fontStyle = FontStyle.Italic), 1) else { append(marker); index += 1 }
+            }
+            source[index] == '[' -> {
+                val labelEnd = source.indexOf("](", index + 1)
+                val urlEnd = if (labelEnd >= 0) source.indexOf(')', labelEnd + 2) else -1
+                if (labelEnd > index + 1 && urlEnd > labelEnd + 2) {
+                    withStyle(SpanStyle(textDecoration = TextDecoration.Underline)) { append(source.substring(index + 1, labelEnd)) }
+                    index = urlEnd + 1
+                } else { append(source[index]); index += 1 }
+            }
+            else -> { append(source[index]); index += 1 }
+        }
     }
 }
 

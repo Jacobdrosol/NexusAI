@@ -10,6 +10,7 @@ This native Android client connects to a user-owned NexusAI dashboard deployment
 - Session restoration when the app is reopened.
 - Instance-driven update checks through `/api/mobile/bootstrap`.
 - Project and unscoped conversation selection, new chat creation, message history, refresh, and normal text messages.
+- Native Markdown rendering for headings, lists, emphasis, inline code, links, block quotes, and fenced code, with distinct user and assistant message surfaces.
 - A compact chat menu for new chats, refresh, chat settings, app settings, and sign-out.
 - Per-message `...` actions. The current native action is Copy; server-side message mutations remain unavailable in the Android client.
 - App settings for the connected instance, persistent system/dark/light appearance, installed version/build, and advertised updates.
