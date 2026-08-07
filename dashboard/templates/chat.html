@@ -711,7 +711,7 @@
         </details>
         <div id="chat-attachment-list" class="chat-attachment-list" aria-live="polite"></div>
         <div id="chat-composer-status" class="chat-composer-status" role="status" aria-live="polite" hidden></div>
-        <div class="mini-note chat-attachment-hint">Drag files here or use +. Max {{ chat_attachment_limits.max_files }} files, 1 GB total.</div>
+        <div class="mini-note chat-attachment-hint">Drag files here, use +, or paste an image. Max {{ chat_attachment_limits.max_files }} files, 1 GB total.</div>
         <div class="chat-compose-footer">
           <label class="context-item chat-message-tools-toggle">
             <input type="checkbox" id="enable-inline-coding-message">
@@ -1764,7 +1764,10 @@ function modelSupportsImages(provider, modelName, capabilities = null) {
     ))
     : null;
   if (catalogEntry) {
-    return modelCatalogCapabilities(catalogEntry).some((item) => ['image', 'images', 'vision', 'multimodal'].includes(item));
+    const catalogCapabilities = modelCatalogCapabilities(catalogEntry);
+    if (catalogCapabilities.length) {
+      return catalogCapabilities.some((item) => ['image', 'images', 'vision', 'multimodal'].includes(item));
+    }
   }
   const lowered = name.toLowerCase();
   if (providerKey === 'gemini') return true;
@@ -2417,9 +2420,35 @@ async function handleChatAttachmentSelect(event) {
   }
 }
 
+async function handleChatComposerPaste(event) {
+  const imageItems = Array.from(event?.clipboardData?.items || []).filter((item) => (
+    item.kind === 'file' && String(item.type || '').toLowerCase().startsWith('image/')
+  ));
+  if (!imageItems.length) return;
+
+  const pastedAt = Date.now();
+  const files = imageItems.map((item, index) => {
+    const source = item.getAsFile();
+    if (!source) return null;
+    const mimeType = String(item.type || source.type || 'image/png').toLowerCase();
+    const extension = mimeType.split('/')[1] || 'png';
+    return new File([source], `pasted-image-${pastedAt}-${index + 1}.${extension}`, { type: mimeType });
+  }).filter(Boolean);
+  if (!files.length) return;
+
+  event.preventDefault();
+  await addComposerFiles(files);
+}
+
 function setupChatComposerDragDrop() {
   const dropzone = document.getElementById('chat-compose-dropzone');
   if (!dropzone) return;
+  const textarea = dropzone.querySelector('textarea[name="content"]');
+  textarea?.addEventListener('paste', (event) => {
+    handleChatComposerPaste(event).catch(() => {
+      showChatComposerStatus('Unable to read the pasted image. Try attaching the file directly.');
+    });
+  });
   ['dragenter', 'dragover'].forEach((eventName) => {
     dropzone.addEventListener(eventName, (event) => {
       event.preventDefault();
