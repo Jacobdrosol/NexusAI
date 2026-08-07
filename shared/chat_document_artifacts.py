@@ -13,7 +13,10 @@ from docx import Document
 from shared.chat_attachments import CHAT_ATTACHMENT_MAX_INLINE_BYTES, CHAT_ATTACHMENT_MAX_TEXT_BYTES
 
 _DOCX_REQUEST_RE = re.compile(r"(?:\.docx\b|\bword\s+document\b|\bmicrosoft\s+word\b)", re.IGNORECASE)
-_DOCX_FILENAME_RE = re.compile(r"(?:named|called|as)\s+[\"']?([^\"'\n]{1,120}?\.docx)\b", re.IGNORECASE)
+_DOCX_FILENAME_RE = re.compile(
+    r"(?:\bnamed\b|\bcalled\b|\bas\b)\s+[\"']?([A-Za-z0-9][^\"'\n.?!]{0,95}\.docx)\b",
+    re.IGNORECASE,
+)
 _INVALID_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._ -]+")
 _DOCX_EDIT_REQUEST_RE = re.compile(
     r"\b(?:edit|tailor|revise|update|modify)\b.*\b(?:resume|document|docx|word)\b|"

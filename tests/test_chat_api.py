@@ -117,6 +117,18 @@ def test_document_and_binary_attachments_are_retained_and_described_to_the_model
     assert any("raw contents were not inlined" in part["text"] for part in parts)
 
 
+def test_docx_output_filename_ignores_ordinary_sentence_uses_of_as():
+    from shared.chat_document_artifacts import requested_docx_artifact
+
+    filename = requested_docx_artifact(
+        "Replace this line with a description that says the work was tailored for a .NET role. "
+        "Return the edited document as NexusAI_DOCX_Edit_Smoke_Test.docx.",
+        enabled=True,
+    )
+
+    assert filename == "NexusAI_DOCX_Edit_Smoke_Test.docx"
+
+
 @pytest.mark.anyio
 async def test_stream_message_returns_docx_artifact_for_explicitly_enabled_bot(cp_app):
     async def _stream(_task):
