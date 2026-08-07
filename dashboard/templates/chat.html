@@ -559,6 +559,12 @@
           {% if bot_meta.get('updated_at') %}<span>bot updated {{ (bot_meta.get('updated_at')[:19]) | replace('T', ' ') }}</span>{% endif %}
         </div>
         {% endif %}
+        {% if m.role == 'assistant' and m.metadata and m.metadata.get('response_variant_count', 0)|int > 1 %}
+        <div class="message-response-variant">
+          {% if m.metadata.get('response_variant_index', 1)|int == 1 %}Original response{% else %}Regenerated response{% endif %}
+          · Version {{ m.metadata.get('response_variant_index', 1) }} of {{ m.metadata.get('response_variant_count') }}
+        </div>
+        {% endif %}
         {% if m.metadata and (m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false) %}
         <div class="message-indicator message-indicator-failed">
           {% if m.metadata.get('operator_marked_failed') %}Operator marked PM run failed{% else %}PM pipeline failed{% endif %}
@@ -656,7 +662,7 @@
           {% if m.metadata and m.metadata.get('response_variants') %}
             {% for variant in m.metadata.get('response_variants') %}
               {% if variant.get('id') != m.id %}
-              <button class="btn btn-sm" onclick="selectResponseVariant('{{ variant.get('id') }}')">Response {{ variant.get('index') }}</button>
+              <button class="btn btn-sm" onclick="selectResponseVariant('{{ variant.get('id') }}')">Switch to {% if variant.get('index') == 1 %}original response{% else %}regenerated response {{ variant.get('index') }}{% endif %}</button>
               {% endif %}
             {% endfor %}
           {% endif %}
@@ -1497,7 +1503,7 @@ function responseVariantActions(meta, messageId) {
   const variants = Array.isArray(meta?.response_variants) ? meta.response_variants : [];
   if (variants.length < 2) return '';
   return variants.filter((variant) => String(variant?.id || '') !== String(messageId || '')).map((variant) => (
-    `<button class="btn btn-sm" onclick="selectResponseVariant('${String(variant.id || '')}')">Response ${Number(variant.index || 0)}</button>`
+    `<button class="btn btn-sm" onclick="selectResponseVariant('${String(variant.id || '')}')">Switch to ${Number(variant.index || 0) === 1 ? 'original response' : `regenerated response ${Number(variant.index || 0)}`}</button>`
   )).join('');
 }
 
@@ -1598,6 +1604,14 @@ function renderMessageTimestampHtml(message) {
   if (!raw) return '';
   const label = raw.slice(0, 19).replace('T', ' ');
   return `<div class="message-timestamp" title="${esc(raw)}">${esc(label)}</div>`;
+}
+
+function renderResponseVariantHtml(meta) {
+  const count = Number(meta?.response_variant_count || 0);
+  const index = Number(meta?.response_variant_index || 0);
+  if (count < 2 || index < 1) return '';
+  const label = index === 1 ? 'Original response' : 'Regenerated response';
+  return `<div class="message-response-variant">${label} · Version ${index} of ${count}</div>`;
 }
 
 function formatMessageUsageLabel(usage) {
@@ -2627,6 +2641,7 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
     <div class="message-role">${role}</div>
     ${renderMessageTimestampHtml(messageShell)}
     ${renderMessageProvenanceHtml(messageShell)}
+    ${renderResponseVariantHtml(meta)}
     ${renderMessageIndicators(meta)}
     ${renderAssignmentContextHtml(meta)}
     <div class="message-body"></div>
@@ -2705,6 +2720,7 @@ function hydrateMessageElement(el, message) {
   const roleEl = el.querySelector('.message-role');
   const existingTimestamp = el.querySelector('.message-timestamp');
   const existingProvenance = el.querySelector('.message-provenance');
+  const existingResponseVariant = el.querySelector('.message-response-variant');
   const existingIndicator = el.querySelector('.message-indicator');
   const existingContext = el.querySelector('.message-context');
   const bodyEl = el.querySelector('.message-body');
@@ -2745,6 +2761,16 @@ function hydrateMessageElement(el, message) {
     }
   } else if (existingProvenance) {
     existingProvenance.remove();
+  }
+  const responseVariantHtml = renderResponseVariantHtml(message.metadata || null);
+  if (responseVariantHtml) {
+    if (existingResponseVariant) {
+      existingResponseVariant.outerHTML = responseVariantHtml;
+    } else if (bodyEl) {
+      bodyEl.insertAdjacentHTML('beforebegin', responseVariantHtml);
+    }
+  } else if (existingResponseVariant) {
+    existingResponseVariant.remove();
   }
   const indicatorHtml = renderMessageIndicators(message.metadata || null);
   if (indicatorHtml) {

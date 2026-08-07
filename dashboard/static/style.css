@@ -606,6 +606,18 @@ select.form-control {
   white-space: nowrap;
 }
 
+.message-response-variant {
+  display: inline-flex;
+  align-items: center;
+  margin: -0.1rem 0 0.48rem;
+  padding: 0.16rem 0.48rem;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 6px;
+  background: rgba(14, 116, 144, 0.14);
+  color: #bae6fd;
+  font-size: 0.76rem;
+}
+
 .message-indicator {
   display: inline-flex;
   align-items: center;
