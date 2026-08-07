@@ -2372,6 +2372,7 @@ def _validated_chat_send_payload(
         "include_project_context": data.get("include_project_context", False),
         "use_workspace_tools": use_workspace_tools,
         "inline_coding_enabled": inline_coding_enabled,
+        "rerun_assistant_message_id": str(data.get("rerun_assistant_message_id") or "").strip() or None,
     }
 
 
@@ -2589,6 +2590,16 @@ def api_list_messages(conversation_id: str):
     if messages is None:
         return _cp_error_response(cp, "chat messages unavailable")
     return jsonify(_normalize_message_rows(messages))
+
+
+@bp.post("/api/chat/conversations/<conversation_id>/messages/<message_id>/select-response")
+@login_required
+def api_select_response_variant(conversation_id: str, message_id: str):
+    cp = get_cp_client()
+    selected = cp.select_response_variant(conversation_id, message_id)
+    if selected is None:
+        return _cp_error_response(cp, "response selection failed")
+    return jsonify(selected)
 
 
 @bp.post("/api/chat/stream")

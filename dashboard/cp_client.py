@@ -772,6 +772,13 @@ class CPClient:
     def post_message(self, conversation_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/chat/conversations/{conversation_id}/messages", body, timeout=_CHAT_TIMEOUT)
 
+    def select_response_variant(self, conversation_id: str, message_id: str) -> Optional[Dict[str, Any]]:
+        return self._post(
+            f"/v1/chat/conversations/{conversation_id}/messages/{message_id}/select-response",
+            {},
+            timeout=_CHAT_TIMEOUT,
+        )
+
     # Assignments
     def preview_assignment(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/assignments/preview", body, timeout=_CHAT_TIMEOUT)

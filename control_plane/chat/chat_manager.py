@@ -944,7 +944,13 @@ class ChatManager:
         scored.sort(key=lambda item: (item["weighted_score"], item["score"], item["created_at"]), reverse=True)
         return scored[: max(1, min(int(limit or 8), 25))]
 
-    async def list_messages(self, conversation_id: str, limit: Optional[int] = None) -> List[ChatMessage]:
+    async def list_messages(
+        self,
+        conversation_id: str,
+        limit: Optional[int] = None,
+        *,
+        include_response_variants: bool = False,
+    ) -> List[ChatMessage]:
         await self.get_conversation(conversation_id)
         safe_limit = None
         if isinstance(limit, int) and limit > 0:
@@ -978,7 +984,90 @@ class ChatManager:
                     if data.get("metadata"):
                         data["metadata"] = json.loads(data["metadata"])
                     result.append(ChatMessage.model_validate(data))
-                return result
+                if include_response_variants:
+                    return result
+                return self._active_response_variants(result)
+
+    @staticmethod
+    def _active_response_variants(messages: List[ChatMessage]) -> List[ChatMessage]:
+        """Return one active assistant response for each regenerated response group."""
+        groups: Dict[str, List[ChatMessage]] = {}
+        for message in messages:
+            metadata = message.metadata if isinstance(message.metadata, dict) else {}
+            group_id = str(metadata.get("response_group_id") or "").strip()
+            if message.role == "assistant" and group_id:
+                groups.setdefault(group_id, []).append(message)
+
+        active_ids: set[str] = set()
+        presentation: Dict[str, Dict[str, Any]] = {}
+        for group_id, variants in groups.items():
+            selected = next(
+                (
+                    variant
+                    for variant in reversed(variants)
+                    if bool((variant.metadata or {}).get("response_variant_active"))
+                ),
+                variants[-1],
+            )
+            active_ids.add(selected.id)
+            variant_rows = [
+                {
+                    "id": variant.id,
+                    "index": index + 1,
+                    "active": variant.id == selected.id,
+                }
+                for index, variant in enumerate(variants)
+            ]
+            selected_metadata = dict(selected.metadata or {})
+            selected_metadata.update(
+                {
+                    "response_group_id": group_id,
+                    "response_variant_index": next(
+                        row["index"] for row in variant_rows if row["id"] == selected.id
+                    ),
+                    "response_variant_count": len(variant_rows),
+                    "response_variants": variant_rows,
+                }
+            )
+            presentation[selected.id] = selected_metadata
+
+        visible: List[ChatMessage] = []
+        for message in messages:
+            metadata = message.metadata if isinstance(message.metadata, dict) else {}
+            group_id = str(metadata.get("response_group_id") or "").strip()
+            if group_id and message.id not in active_ids:
+                continue
+            if message.id in presentation:
+                message = message.model_copy(update={"metadata": presentation[message.id]})
+            visible.append(message)
+        return visible
+
+    async def select_response_variant(self, conversation_id: str, message_id: str) -> ChatMessage:
+        """Make one persisted response variant visible for its regenerated turn."""
+        messages = await self.list_messages(conversation_id, include_response_variants=True)
+        target = next((message for message in messages if message.id == message_id), None)
+        if target is None or target.role != "assistant":
+            raise ConversationNotFoundError(f"Assistant response not found: {message_id}")
+        target_metadata = target.metadata if isinstance(target.metadata, dict) else {}
+        group_id = str(target_metadata.get("response_group_id") or target.id).strip()
+        variants = [
+            message
+            for message in messages
+            if message.role == "assistant"
+            and str((message.metadata or {}).get("response_group_id") or message.id).strip() == group_id
+        ]
+        for index, variant in enumerate(variants, start=1):
+            metadata = dict(variant.metadata or {})
+            metadata.update(
+                {
+                    "response_group_id": group_id,
+                    "response_variant_index": index,
+                    "response_variant_active": variant.id == target.id,
+                }
+            )
+            await self.update_message(variant.id, metadata=metadata)
+        refreshed = await self.list_messages(conversation_id, include_response_variants=True)
+        return next(message for message in refreshed if message.id == message_id)
 
     async def summarize_message_usage(self, *, hours: int = 24, limit_conversations: int = 25) -> Dict[str, Any]:
         await self._ensure_db()

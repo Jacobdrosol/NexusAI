@@ -1259,6 +1259,71 @@ async def test_stream_message_endpoint(cp_app):
 
 
 @pytest.mark.anyio
+async def test_stream_message_regeneration_reuses_user_turn_and_preserves_response_variants(cp_app):
+    captured_payloads = []
+
+    async def _stream(task):
+        captured_payloads.append(task.payload)
+        yield {"event": "token", "text": "replacement "}
+        yield {"event": "final", "output": "replacement answer", "usage": {}}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        conversation = await client.post("/v1/chat/conversations", json={"title": "Regenerate"})
+        conversation_id = conversation.json()["id"]
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-regenerate",
+                "name": "Regenerate Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+            },
+        )
+        original_user = await cp_app.state.chat_manager.add_message(
+            conversation_id, "user", "Explain the deployment plan."
+        )
+        original_assistant = await cp_app.state.chat_manager.add_message(
+            conversation_id,
+            "assistant",
+            "old answer that must not be sent back to the model",
+            bot_id="bot-regenerate",
+        )
+
+        regenerated = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={
+                "content": original_user.content,
+                "bot_id": "bot-regenerate",
+                "rerun_assistant_message_id": original_assistant.id,
+            },
+        )
+        assert regenerated.status_code == 200
+        assert "event: user_message" not in regenerated.text
+        assert "event: assistant_message" in regenerated.text
+
+        payload_text = "\n".join(str(row.get("content") or "") for row in captured_payloads[-1])
+        assert original_user.content in payload_text
+        assert original_assistant.content not in payload_text
+
+        visible = (await client.get(f"/v1/chat/conversations/{conversation_id}/messages")).json()
+        assert [message["content"] for message in visible] == [original_user.content, "replacement answer"]
+        variants = visible[-1]["metadata"]["response_variants"]
+        assert len(variants) == 2
+
+        switched = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages/{original_assistant.id}/select-response"
+        )
+        assert switched.status_code == 200
+        visible_after_switch = (await client.get(f"/v1/chat/conversations/{conversation_id}/messages")).json()
+        assert [message["content"] for message in visible_after_switch] == [
+            original_user.content,
+            original_assistant.content,
+        ]
+
+
+@pytest.mark.anyio
 async def test_stream_message_uses_bot_config_provider_model_when_backend_event_missing(cp_app):
     async def _stream(_task):
         yield {"event": "token", "text": "config "}
@@ -3015,7 +3080,7 @@ async def test_workspace_tools_do_not_force_repo_evidence_or_truncate_response(c
 
 
 @pytest.mark.anyio
-async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
+async def test_chat_explicit_workspace_tools_attach_project_context(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-repo-auto"
@@ -3040,6 +3105,7 @@ async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
             json={
                 "title": "Repo Auto Chat",
                 "project_id": project_id,
+                "scope": "project",
                 "tool_access_enabled": True,
                 "tool_access_repo_search": True,
             },
@@ -3080,6 +3146,7 @@ async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
             json={
                 "content": "Search the repository and explain auth hardening gaps.",
                 "bot_id": "bot-repo-auto",
+                "use_workspace_tools": True,
             },
         )
         assert resp.status_code == 200
@@ -3093,7 +3160,7 @@ async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
 
 
 @pytest.mark.anyio
-async def test_chat_repo_intent_detects_go_through_my_repo_phrase(cp_app):
+async def test_chat_explicit_workspace_tools_support_repo_review(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-repo-go-through"
@@ -3118,6 +3185,7 @@ async def test_chat_repo_intent_detects_go_through_my_repo_phrase(cp_app):
             json={
                 "title": "Repo Go Through Chat",
                 "project_id": project_id,
+                "scope": "project",
                 "tool_access_enabled": True,
                 "tool_access_repo_search": True,
             },
@@ -3176,7 +3244,7 @@ async def test_chat_repo_intent_detects_go_through_my_repo_phrase(cp_app):
 
 
 @pytest.mark.anyio
-async def test_chat_repo_intent_does_not_trigger_for_complaint_or_transcript(cp_app):
+async def test_chat_repo_prose_does_not_auto_enable_workspace_context(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-repo-noise"
@@ -3201,6 +3269,7 @@ async def test_chat_repo_intent_does_not_trigger_for_complaint_or_transcript(cp_
             json={
                 "title": "Repo Noise Chat",
                 "project_id": project_id,
+                "scope": "project",
                 "tool_access_enabled": True,
                 "tool_access_repo_search": True,
             },
@@ -3240,9 +3309,7 @@ async def test_chat_repo_intent_does_not_trigger_for_complaint_or_transcript(cp_
             f"/v1/chat/conversations/{conversation_id}/messages",
             json={
                 "content": (
-                    "It's still trying to use repo search even when it should just respond.\n\n"
-                    "user\nCan you read through the actual files?\n"
-                    "assistant\nFiles inspected (verified context)"
+                    "I am working on a repository and want to explain what I am planning before asking for any file work."
                 ),
                 "bot_id": "bot-repo-noise",
             },
@@ -3324,6 +3391,7 @@ async def test_chat_repo_context_search_uses_focused_query_terms(cp_app):
                     "related to my lesson builder system and lesson blocks and tell me what is done?"
                 ),
                 "bot_id": "bot-repo-focus-query",
+                "use_workspace_tools": True,
             },
         )
         assert resp.status_code == 200
@@ -3342,7 +3410,7 @@ async def test_chat_repo_context_search_uses_focused_query_terms(cp_app):
 
 
 @pytest.mark.anyio
-async def test_chat_repo_intent_prefers_workspace_as_source_of_truth(cp_app, tmp_path):
+async def test_chat_explicit_workspace_tools_prefers_workspace_as_source_of_truth(cp_app, tmp_path):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     workspace_root = tmp_path / "workspace-repo-truth"
     workspace_root.mkdir(parents=True, exist_ok=True)
@@ -3376,6 +3444,7 @@ async def test_chat_repo_intent_prefers_workspace_as_source_of_truth(cp_app, tmp
             json={
                 "title": "Repo Truth Chat",
                 "project_id": project_id,
+                "scope": "project",
                 "tool_access_enabled": True,
                 "tool_access_repo_search": True,
                 "tool_access_filesystem": True,
@@ -3417,6 +3486,7 @@ async def test_chat_repo_intent_prefers_workspace_as_source_of_truth(cp_app, tmp
             json={
                 "content": "Search the repository auth implementation and hardening opportunities",
                 "bot_id": "bot-repo-truth",
+                "use_workspace_tools": True,
             },
         )
         assert resp.status_code == 200
@@ -6484,6 +6554,7 @@ async def test_repo_grounded_output_does_not_hard_truncate_normal_uncited_respon
             json={
                 "content": "Search the repository and summarize the current grading pipeline.",
                 "bot_id": "bot-repo-no-hard-truncate",
+                "use_workspace_tools": True,
             },
         )
         assert resp.status_code == 200

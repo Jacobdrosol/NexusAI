@@ -374,6 +374,7 @@ class PostMessageRequest(BaseModel):
     use_workspace_tools: bool = False
     inline_coding_enabled: bool = False
     attachments: List["ChatAttachmentInput"] = Field(default_factory=list)
+    rerun_assistant_message_id: Optional[str] = None
 
 
 class ChatAttachmentInput(BaseModel):
@@ -934,7 +935,6 @@ def _context_resolution_requested(body: PostMessageRequest) -> bool:
         or body.context_item_ids
         or body.include_project_context
         or body.use_workspace_tools
-        or _repo_intent_requested(body.content)
     )
 
 
@@ -943,7 +943,7 @@ def _repo_evidence_requested(body: PostMessageRequest) -> bool:
         body.context_items
         or body.context_item_ids
         or body.include_project_context
-        or _repo_intent_requested(body.content)
+        or body.use_workspace_tools
     )
 
 
@@ -4277,6 +4277,15 @@ async def list_messages(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/conversations/{conversation_id}/messages/{message_id}/select-response", response_model=ChatMessage)
+async def select_response_variant(conversation_id: str, message_id: str, request: Request) -> ChatMessage:
+    chat_manager = request.app.state.chat_manager
+    try:
+        return await chat_manager.select_response_variant(conversation_id, message_id)
+    except ConversationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.post("/conversations/{conversation_id}/orchestrations/{orchestration_id}/mark-failed", response_model=ChatMessage)
 async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, request: Request) -> ChatMessage:
     chat_manager = request.app.state.chat_manager
@@ -4388,6 +4397,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
     pm_orchestrator = request.app.state.pm_orchestrator
     assignment_service = getattr(request.app.state, "assignment_service", None)
     try:
+        if str(body.rerun_assistant_message_id or "").strip():
+            raise HTTPException(status_code=400, detail="Response regeneration requires the streaming chat endpoint.")
         conversation = await chat_manager.get_conversation(conversation_id)
         target_bot_id = body.bot_id or conversation.default_bot_id
         preferred_model_id = _chat_turn_preferred_model_id(conversation, body.bot_id)
@@ -4588,10 +4599,9 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         user_message = await chat_manager.update_message(user_message.id, metadata=user_meta)
 
         require_repo_evidence = _repo_evidence_requested(body)
-        repo_intent = _repo_intent_requested(body.content)
         inline_code_mode = _inline_code_mode_requested(body, bot=ns_bot)
-        force_project_context = repo_intent or inline_code_mode
-        force_workspace_context = repo_intent or inline_code_mode
+        force_project_context = inline_code_mode
+        force_workspace_context = inline_code_mode
         tool_access = await _effective_tool_access(
             request,
             conversation=conversation,
@@ -5194,6 +5204,66 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
     pm_orchestrator = request.app.state.pm_orchestrator
     assignment_service = getattr(request.app.state, "assignment_service", None)
     conversation = await chat_manager.get_conversation(conversation_id)
+    rerun_source_message: Optional[ChatMessage] = None
+    rerun_history: Optional[List[ChatMessage]] = None
+    rerun_variant_metadata: Dict[str, Any] = {}
+    rerun_assistant_message_id = str(body.rerun_assistant_message_id or "").strip()
+    if rerun_assistant_message_id:
+        if body.attachments:
+            raise HTTPException(status_code=400, detail="Response regeneration does not support new attachments.")
+        raw_messages = await chat_manager.list_messages(
+            conversation_id,
+            include_response_variants=True,
+        )
+        target_index = next(
+            (index for index, message in enumerate(raw_messages) if message.id == rerun_assistant_message_id),
+            None,
+        )
+        if target_index is None:
+            raise HTTPException(status_code=404, detail="Assistant response not found for regeneration.")
+        target = raw_messages[target_index]
+        target_metadata = target.metadata if isinstance(target.metadata, dict) else {}
+        if target.role != "assistant" or str(target_metadata.get("mode") or "").strip() in {
+            "assign_request", "assign_pending", "assign_summary", "pm_run_report", "assign_error",
+        }:
+            raise HTTPException(status_code=400, detail="Only standard assistant responses can be regenerated.")
+        rerun_source_index = next(
+            (
+                index
+                for index in range(target_index - 1, -1, -1)
+                if raw_messages[index].role == "user"
+            ),
+            None,
+        )
+        if rerun_source_index is None:
+            raise HTTPException(status_code=400, detail="The original user message for this response is unavailable.")
+        rerun_source_message = raw_messages[rerun_source_index]
+        rerun_history = raw_messages[: rerun_source_index + 1]
+        group_id = str(target_metadata.get("response_group_id") or target.id).strip()
+        existing_variants = [
+            message
+            for message in raw_messages
+            if message.role == "assistant"
+            and str((message.metadata or {}).get("response_group_id") or message.id).strip() == group_id
+        ]
+        target_updated_metadata = dict(target_metadata)
+        target_updated_metadata.update(
+            {
+                "response_group_id": group_id,
+                "response_variant_index": next(
+                    index + 1 for index, message in enumerate(existing_variants) if message.id == target.id
+                ),
+                "response_variant_active": False,
+            }
+        )
+        await chat_manager.update_message(target.id, metadata=target_updated_metadata)
+        rerun_variant_metadata = {
+            "response_group_id": group_id,
+            "response_variant_index": len(existing_variants) + 1,
+            "response_variant_active": True,
+        }
+        body.content = rerun_source_message.content
+        body.bot_id = target.bot_id or body.bot_id
     target_bot_id = body.bot_id or conversation.default_bot_id
     preferred_model_id = _chat_turn_preferred_model_id(conversation, body.bot_id)
     await _validate_chat_token_governor_admission(request, bot_id=target_bot_id, body=body)
@@ -5212,7 +5282,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
 
     async def event_gen() -> AsyncGenerator[str, None]:
         try:
-            assign_instruction = _extract_assign_instruction(body.content)
+            assign_instruction = None if rerun_source_message is not None else _extract_assign_instruction(body.content)
             user_message_metadata = None
             if assign_instruction is not None:
                 requested_pm_bot_id = str(body.bot_id or "").strip()
@@ -5224,13 +5294,16 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 base_meta = dict(user_message_metadata or {})
                 base_meta["attachments"] = attachments
                 user_message_metadata = base_meta
-            user_message = await chat_manager.add_message(
-                conversation_id=conversation_id,
-                role="user",
-                content=body.content,
-                metadata=user_message_metadata,
-            )
-            yield f"event: user_message\ndata: {user_message.model_dump_json()}\n\n"
+            if rerun_source_message is not None:
+                user_message = rerun_source_message
+            else:
+                user_message = await chat_manager.add_message(
+                    conversation_id=conversation_id,
+                    role="user",
+                    content=body.content,
+                    metadata=user_message_metadata,
+                )
+                yield f"event: user_message\ndata: {user_message.model_dump_json()}\n\n"
             if assign_instruction is not None:
                 yield 'event: status\ndata: {"phase":"planning","label":"Planning task graph..."}\n\n'
                 assign_bot_id = str(body.bot_id or "").strip()
@@ -5380,7 +5453,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 yield "event: done\ndata: {}\n\n"
                 return
 
-            messages = await chat_manager.list_messages(conversation_id)
+            messages = rerun_history or await chat_manager.list_messages(conversation_id)
             if not target_bot_id:
                 yield "event: done\ndata: {}\n\n"
                 return
@@ -5406,16 +5479,16 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 decision=memory_decision,
                 query=body.content,
             )
-            user_meta = dict(user_message.metadata or {}) if isinstance(user_message.metadata, dict) else {}
-            user_meta.update(_memory_profile_metadata(memory_decision, hit_count=len(memory_hits)))
-            user_message = await chat_manager.update_message(user_message.id, metadata=user_meta)
-            yield f"event: user_message\ndata: {user_message.model_dump_json()}\n\n"
+            if rerun_source_message is None:
+                user_meta = dict(user_message.metadata or {}) if isinstance(user_message.metadata, dict) else {}
+                user_meta.update(_memory_profile_metadata(memory_decision, hit_count=len(memory_hits)))
+                user_message = await chat_manager.update_message(user_message.id, metadata=user_meta)
+                yield f"event: user_message\ndata: {user_message.model_dump_json()}\n\n"
 
             require_repo_evidence = _repo_evidence_requested(body)
-            repo_intent = _repo_intent_requested(body.content)
             inline_code_mode = _inline_code_mode_requested(body, bot=bot)
-            force_project_context = repo_intent or inline_code_mode
-            force_workspace_context = repo_intent or inline_code_mode
+            force_project_context = inline_code_mode
+            force_workspace_context = inline_code_mode
             tool_access = await _effective_tool_access(
                 request,
                 conversation=conversation,
@@ -6145,6 +6218,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             execution_provenance=stream_execution_provenance,
                             extra={
                                 "streaming": True,
+                                **rerun_variant_metadata,
                                 **_memory_profile_metadata(memory_decision, hit_count=len(memory_hits)),
                             },
                         )
@@ -6206,6 +6280,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 execution_provenance=stream_execution_provenance,
                 extra={
                     **({"usage": (result or {}).get("usage", {})} if isinstance(result, dict) else {}),
+                    **rerun_variant_metadata,
                     **_memory_profile_metadata(memory_decision, hit_count=len(memory_hits)),
                 },
             )
@@ -6233,7 +6308,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             await _index_memory_profile_turn(
                 chat_manager,
                 decision=memory_decision,
-                messages=[user_message, assistant_message],
+                messages=([assistant_message] if rerun_source_message is not None else [user_message, assistant_message]),
                 hit_count=len(memory_hits),
             )
             yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"

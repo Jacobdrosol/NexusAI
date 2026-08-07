@@ -653,6 +653,13 @@
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
           {% if m.role == 'assistant' and not (m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error']) %}
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
+          {% if m.metadata and m.metadata.get('response_variants') %}
+            {% for variant in m.metadata.get('response_variants') %}
+              {% if variant.get('id') != m.id %}
+              <button class="btn btn-sm" onclick="selectResponseVariant('{{ variant.get('id') }}')">Response {{ variant.get('index') }}</button>
+              {% endif %}
+            {% endfor %}
+          {% endif %}
           {% endif %}
           {% if m.metadata and m.metadata.get('orchestration_id') %}
           <button class="btn btn-sm" onclick="openAssignmentRecap('{{ m.metadata.get('orchestration_id') }}')">Full Recap</button>
@@ -1486,7 +1493,15 @@ function selectedContextItems() {
   return {contexts, contextItemIds};
 }
 
-function renderMessageActions(meta, role = '') {
+function responseVariantActions(meta, messageId) {
+  const variants = Array.isArray(meta?.response_variants) ? meta.response_variants : [];
+  if (variants.length < 2) return '';
+  return variants.filter((variant) => String(variant?.id || '') !== String(messageId || '')).map((variant) => (
+    `<button class="btn btn-sm" onclick="selectResponseVariant('${String(variant.id || '')}')">Response ${Number(variant.index || 0)}</button>`
+  )).join('');
+}
+
+function renderMessageActions(meta, role = '', messageId = '') {
   const orchestrationId = meta?.orchestration_id;
   const passedPmRun = isPassedPmRunReport(meta);
   const dagBtn = orchestrationId
@@ -1513,6 +1528,7 @@ function renderMessageActions(meta, role = '') {
       <div class="message-actions">
         <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
         ${rerunBtn}
+        ${responseVariantActions(meta, messageId)}
         ${recapBtn}
         ${reviewBtn}
         ${applyBtn}
@@ -2615,7 +2631,7 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
     ${renderAssignmentContextHtml(meta)}
     <div class="message-body"></div>
     ${renderMessageAttachmentsHtml(meta)}
-    ${renderMessageActions(meta, role)}
+    ${renderMessageActions(meta, role, id)}
   `;
   renderMessageBody(div.querySelector('.message-body'), content);
   container.appendChild(div);
@@ -2761,7 +2777,7 @@ function hydrateMessageElement(el, message) {
     existingAttachments.remove();
   }
   if (bodyEl) renderMessageBody(bodyEl, message.content || '');
-  if (actionsEl) actionsEl.outerHTML = renderMessageActions(message.metadata || null, message.role || '');
+  if (actionsEl) actionsEl.outerHTML = renderMessageActions(message.metadata || null, message.role || '', message.id || '');
   return el;
 }
 
@@ -3069,15 +3085,18 @@ function upsertTaskEvent(task) {
   }).join('');
 }
 
-async function sendMessage(streamMode) {
+async function sendMessage(streamMode, options = {}) {
   const form = document.getElementById('chat-send-form');
   if (!form || !selectedConversationId) return;
   if (chatSendInFlight) return;
   setTaskEventsVisible(false);
   clearChatComposerStatus();
   const fd = new FormData(form);
-  const content = (fd.get('content') || '').toString().trim();
-  if (!content && !pendingComposerAttachments.length) return;
+  const rerunAssistantMessageId = String(options.rerunAssistantMessageId || '').trim();
+  const isResponseRegeneration = !!rerunAssistantMessageId;
+  const content = String(options.content ?? fd.get('content') ?? '').trim();
+  const requestAttachments = isResponseRegeneration ? [] : pendingComposerAttachments.slice();
+  if (!content && !requestAttachments.length) return;
   const contentBlocker = chatMessageContentBlocker(content);
   if (contentBlocker) {
     showChatComposerStatus(contentBlocker);
@@ -3088,7 +3107,7 @@ async function sendMessage(streamMode) {
     showChatComposerStatus(readinessBlocker);
     return;
   }
-  const hasImageAttachment = pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image');
+  const hasImageAttachment = requestAttachments.some((item) => String(item?.kind || '') === 'image');
   const localImageBlocker = hasImageAttachment && !activeBotSupportsImages()
     ? 'The selected chat bot model does not support image attachments. Switch bots or remove the screenshots.'
     : '';
@@ -3131,8 +3150,9 @@ async function sendMessage(streamMode) {
     })(),
     conversation_id: fd.get('conversation_id'),
     content,
-    bot_id: fd.get('bot_id') || null,
-    attachments: pendingComposerAttachments.slice(),
+    bot_id: options.botId || fd.get('bot_id') || null,
+    attachments: requestAttachments,
+    rerun_assistant_message_id: rerunAssistantMessageId || null,
   };
 
   if (!streamMode) {
@@ -3213,7 +3233,9 @@ async function sendMessage(streamMode) {
     }
   }
 
-  const tempUser = appendMessage('user', content, undefined, pendingComposerAttachments.length ? {attachments: pendingComposerAttachments.slice()} : null);
+  const tempUser = isResponseRegeneration
+    ? null
+    : appendMessage('user', content, undefined, requestAttachments.length ? {attachments: requestAttachments} : null);
   if (tempUser) {
     tempUser.dataset.pending = 'true';
     tempUser.dataset.pendingUser = 'true';
@@ -3238,8 +3260,10 @@ async function sendMessage(streamMode) {
       setChatComposerBusy(false);
       return;
     }
-    clearAcceptedComposerDraft(form);
-    syncSendBotSelection();
+    if (!isResponseRegeneration) {
+      clearAcceptedComposerDraft(form);
+      syncSendBotSelection();
+    }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -3475,10 +3499,40 @@ function copyConversationReference(conversationId) {
 
 function rerunMessage(btn) {
   const m = getMessageData(btn);
-  const textarea = document.querySelector('#chat-send-form textarea[name=content]');
-  if (!textarea) return;
-  textarea.value = m.content;
-  textarea.focus();
+  if (!m.id || String(m.role).trim() !== 'assistant') return;
+  const messageEl = btn.closest('.message');
+  let sourceEl = messageEl?.previousElementSibling || null;
+  while (sourceEl && String(sourceEl.dataset?.role || '').trim() !== 'user') {
+    sourceEl = sourceEl.previousElementSibling;
+  }
+  const sourceContent = sourceEl?.dataset?.content || '';
+  if (!sourceContent) {
+    alert('The original user message is unavailable for regeneration.');
+    return;
+  }
+  sendMessage(true, {
+    content: sourceContent,
+    botId: m.bot_id || null,
+    rerunAssistantMessageId: m.id,
+  });
+}
+
+async function selectResponseVariant(messageId) {
+  if (!selectedConversationId || !messageId) return;
+  const res = await fetch(
+    `/api/chat/conversations/${encodeURIComponent(selectedConversationId)}/messages/${encodeURIComponent(messageId)}/select-response`,
+    {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+      body: '{}',
+    },
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Could not switch responses.');
+    return;
+  }
+  await refreshMessages();
 }
 
 async function sendMessageToVault(btn) {

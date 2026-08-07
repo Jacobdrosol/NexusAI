@@ -36,6 +36,8 @@ Make the dashboard chat page safe to begin using as the daily NexusAI workspace 
 - Fixed bot detail error rendering so missing or degraded history endpoints no longer turn the page into a 500.
 - Updated dashboard event-stream counts to use ID-only aggregate queries so stale local task columns do not break every page's live status connection.
 - Contained wide bot tables inside scrollable regions on small screens.
+- Changed chat context activation so ordinary references to a repository, workspace, files, or planned work do not silently request repo evidence or produce a tool-access refusal. Repository context now requires an explicit workspace-tools toggle, selected context item, or inline-coding mode.
+- Reworked assistant message re-run into response regeneration: it reuses the original user turn, excludes the original response from the model payload, persists alternate responses, and allows the active response to be switched from the message actions menu.
 
 ## Validation
 
@@ -48,6 +50,8 @@ Make the dashboard chat page safe to begin using as the daily NexusAI workspace 
 - `python -m py_compile dashboard\routes\chat.py`
 - `python -m py_compile dashboard\routes\bots.py`
 - `git diff --check`
+- `python -m pytest tests/test_chat_api.py -q -k "stream_message_regeneration or stream_message_endpoint"`
+- `python -m compileall -q control_plane\api\chat.py control_plane\chat\chat_manager.py dashboard\routes\chat.py dashboard\cp_client.py`
 - Browser verification against local dashboard and control plane:
   - desktop 1366x820: top nav only, no horizontal overflow
   - project filter `ui-globeiq`: primary and bridged conversations visible, unrelated conversation hidden
