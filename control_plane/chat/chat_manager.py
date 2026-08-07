@@ -1125,7 +1125,15 @@ class ChatManager:
         if not self._is_pairable_chat_message(target):
             raise ValueError("Only a normal user message and its assistant response can be deleted as a pair.")
 
-        if target.role == "user":
+        target_metadata = target.metadata if isinstance(target.metadata, dict) else {}
+        failed_unsatisfied_turn = bool(
+            target.role == "user" and target_metadata.get("delivery_failed") is True
+        )
+        if failed_unsatisfied_turn:
+            # A provider failure has no assistant response. Keep a single transcript
+            # placeholder while removing the failed prompt from retrieval/context.
+            paired_messages = [target]
+        elif target.role == "user":
             user_index = target_index
         else:
             user_index = next(
@@ -1139,18 +1147,19 @@ class ChatManager:
             if user_index is None:
                 raise ValueError("The user message for this assistant response is unavailable.")
 
-        next_user_index = next(
-            (index for index in range(user_index + 1, len(messages)) if messages[index].role == "user"),
-            len(messages),
-        )
-        paired_messages = [messages[user_index]]
-        paired_messages.extend(
-            item
-            for item in messages[user_index + 1:next_user_index]
-            if item.role == "assistant" and self._is_pairable_chat_message(item)
-        )
-        if len(paired_messages) < 2:
-            raise ValueError("This message does not have a completed assistant response to delete.")
+        if not failed_unsatisfied_turn:
+            next_user_index = next(
+                (index for index in range(user_index + 1, len(messages)) if messages[index].role == "user"),
+                len(messages),
+            )
+            paired_messages = [messages[user_index]]
+            paired_messages.extend(
+                item
+                for item in messages[user_index + 1:next_user_index]
+                if item.role == "assistant" and self._is_pairable_chat_message(item)
+            )
+            if len(paired_messages) < 2:
+                raise ValueError("This message does not have a completed assistant response to delete.")
 
         deleted_at = datetime.now(timezone.utc).isoformat()
         pair_id = str(uuid.uuid4())

@@ -4074,6 +4074,9 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b"Permanently delete message pair?" in resp.data
     assert b"requestDeleteMessagePair(this)" in resp.data
     assert b"confirmDeleteMessagePair" in resp.data
+    assert b"id=\"modal-attachment-viewer\"" in resp.data
+    assert b"function openMessageAttachment(button)" in resp.data
+    assert b"function retryFailedMessage(btn)" in resp.data
     assert b"clearAcceptedComposerDraft(form)" in resp.data
     assert b"Response stream finished without a saved assistant message." in resp.data
     assert b"function formatChatGateError(data, fallback)" in resp.data
@@ -4179,6 +4182,7 @@ def test_chat_page_formats_saved_attachment_sizes(dashboard_client):
     assert b"unsafe.svg" in resp.data
     assert b"data:image/svg+xml" not in resp.data
     assert b"isSafeAttachmentPreviewDataUrl(dataUrl)" in resp.data
+    assert b"openMessageAttachment(this)" in resp.data
     assert b"2097152 bytes" not in resp.data
 
 

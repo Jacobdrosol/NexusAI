@@ -452,17 +452,20 @@ async def _backend_with_preferred_model(
     return backend.model_copy(update={"model": preferred_model_id})
 
 
-def _payload_to_messages(payload: Any) -> list[dict[str, str]]:
+def _payload_to_messages(payload: Any) -> list[dict[str, Any]]:
+    """Normalize a chat payload without flattening multipart content.
+
+    Chat image attachments are represented as a list of content parts.  Serializing
+    that list to JSON here turns the image data URL into ordinary prompt text, which
+    both loses the image and can exceed upstream text limits.
+    """
     if isinstance(payload, list):
-        normalized: list[dict[str, str]] = []
+        normalized: list[dict[str, Any]] = []
         for item in payload:
             if isinstance(item, dict):
                 role = str(item.get("role") or "user")
                 content = item.get("content")
-                if isinstance(content, str):
-                    normalized.append({"role": role, "content": content})
-                else:
-                    normalized.append({"role": role, "content": json.dumps(content if content is not None else "", ensure_ascii=False)})
+                normalized.append({"role": role, "content": "" if content is None else content})
             else:
                 normalized.append({"role": "user", "content": str(item)})
         return normalized

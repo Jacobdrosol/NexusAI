@@ -8,6 +8,24 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 
+def test_ollama_message_normalization_preserves_image_content_parts():
+    from control_plane.scheduler.scheduler import _messages_for_ollama, _payload_to_messages
+
+    payload = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Inspect this image."},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
+            ],
+        }
+    ]
+
+    normalized = _messages_for_ollama(_payload_to_messages(payload))
+
+    assert normalized == [{"role": "user", "content": "Inspect this image.", "images": ["aGVsbG8="]}]
+
+
 @pytest.mark.anyio
 async def test_create_conversation_and_post_message(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(
@@ -189,6 +207,27 @@ async def test_delete_message_pair_rejects_unpaired_or_deleted_message(cp_app):
 
     assert response.status_code == 400
     assert "completed assistant response" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_delete_failed_delivery_message_replaces_single_unsatisfied_turn(cp_app):
+    manager = cp_app.state.chat_manager
+    conversation = await manager.create_conversation(title="Failed delivery")
+    message = await manager.add_message(
+        conversation.id,
+        role="user",
+        content="The provider did not answer.",
+        metadata={"delivery_failed": True, "delivery_error": "upstream unavailable"},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        response = await client.delete(f"/v1/chat/conversations/{conversation.id}/messages/{message.id}")
+
+    assert response.status_code == 200
+    assert response.json()["deleted_message_ids"] == [message.id]
+    messages = await manager.list_messages(conversation.id)
+    assert messages[0].content == "Message deleted"
+    assert messages[0].metadata["deleted"] is True
 
 
 @pytest.mark.anyio
@@ -1342,6 +1381,48 @@ async def test_stream_message_endpoint(cp_app):
         assert usage["by_bot"][0]["bot_id"] == "bot-stream"
         assert usage["by_provider_model"][0]["provider"] == "ollama"
         assert usage["by_provider_model"][0]["model"] == "llama3.1:8b"
+
+
+@pytest.mark.anyio
+async def test_stream_error_marks_user_turn_failed_and_excludes_it_from_later_context(cp_app):
+    captured_payloads = []
+
+    async def _failing_stream(_task):
+        yield {"event": "error", "error": "Ollama Cloud request failed (500)"}
+
+    cp_app.state.scheduler.stream = _failing_stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        conversation = await client.post("/v1/chat/conversations", json={"title": "Failed stream"})
+        conversation_id = conversation.json()["id"]
+        await client.post(
+            "/v1/bots",
+            json={"id": "bot-failed-stream", "name": "Failed Stream Bot", "role": "assistant", "backends": [], "enabled": True},
+        )
+
+        failed = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "Image request that failed", "bot_id": "bot-failed-stream"},
+        )
+        assert failed.status_code == 200
+        assert "event: error" in failed.text
+
+        failed_messages = (await client.get(f"/v1/chat/conversations/{conversation_id}/messages")).json()
+        assert len(failed_messages) == 1
+        assert failed_messages[0]["metadata"]["delivery_failed"] is True
+        assert "Ollama Cloud request failed" in failed_messages[0]["metadata"]["delivery_error"]
+
+        async def _successful_stream(task):
+            captured_payloads.append(task.payload)
+            yield {"event": "final", "output": "new response"}
+
+        cp_app.state.scheduler.stream = _successful_stream
+        retried = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "A new message", "bot_id": "bot-failed-stream"},
+        )
+        assert retried.status_code == 200
+
+    assert all("Image request that failed" not in str(row.get("content") or "") for row in captured_payloads[-1])
 
 
 @pytest.mark.anyio

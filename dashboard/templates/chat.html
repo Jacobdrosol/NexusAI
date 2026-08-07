@@ -221,6 +221,41 @@
   border-radius: 6px;
   background: rgba(255,255,255,0.05);
 }
+.message-attachment-button {
+  appearance: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.message-attachment-button:hover,
+.message-attachment-button:focus-visible {
+  border-color: rgba(96, 165, 250, 0.9);
+  background: rgba(59, 130, 246, 0.12);
+}
+.chat-attachment-viewer-modal {
+  width: min(100%, 1100px);
+  max-height: min(88dvh, 900px);
+  display: flex;
+  flex-direction: column;
+}
+.chat-attachment-viewer-body {
+  min-height: 0;
+  overflow: auto;
+}
+.chat-attachment-viewer-image {
+  display: block;
+  max-width: 100%;
+  max-height: 68dvh;
+  margin: 0 auto;
+  object-fit: contain;
+}
+.chat-attachment-viewer-text {
+  margin: 0;
+  max-height: 62dvh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .message-attachment-preview {
   max-width: 96px;
   max-height: 72px;
@@ -636,7 +671,7 @@
           <div class="message-attachments-label">Attachments</div>
           <div class="message-attachment-list">
             {% for attachment in m.metadata.get('attachments') %}
-            <div class="message-attachment">
+            <button type="button" class="message-attachment message-attachment-button" data-message-id="{{ m.id }}" data-attachment-index="{{ loop.index0 }}" onclick="openMessageAttachment(this)">
               {% set attachment_data_url = (attachment.get('data_url') or '') | string %}
               {% if attachment.get('kind') == 'image' and (attachment_data_url.startswith('data:image/png') or attachment_data_url.startswith('data:image/jpeg') or attachment_data_url.startswith('data:image/jpg') or attachment_data_url.startswith('data:image/webp') or attachment_data_url.startswith('data:image/gif')) %}
               <img class="message-attachment-preview" src="{{ attachment.get('data_url') }}" alt="{{ attachment.get('name') }}">
@@ -648,7 +683,7 @@
                   {% if attachment.get('mime_type') %}{{ attachment.get('mime_type') }}{% endif %}{% if attachment.get('mime_type') and attachment_size %} · {% endif %}{% if attachment_size >= 1073741824 %}{{ (attachment_size / 1073741824)|round(1) }} GB{% elif attachment_size >= 1048576 %}{{ (attachment_size / 1048576)|round(1) }} MB{% elif attachment_size >= 1024 %}{{ (attachment_size / 1024)|round(1) }} KB{% elif attachment_size %}{{ attachment_size }} B{% endif %}
                 </span>
               </div>
-            </div>
+            </button>
             {% endfor %}
           </div>
         </div>
@@ -658,7 +693,10 @@
           <div class="message-actions">
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
           {% if not (m.metadata and m.metadata.get('deleted')) and m.role in ['user', 'assistant'] and not (m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error']) %}
-          <button class="btn btn-sm btn-danger" onclick="requestDeleteMessagePair(this)">Delete pair</button>
+          <button class="btn btn-sm btn-danger" onclick="requestDeleteMessagePair(this)">{% if m.metadata and m.metadata.get('delivery_failed') %}Delete failed message{% else %}Delete pair{% endif %}</button>
+          {% endif %}
+          {% if m.role == 'user' and m.metadata and m.metadata.get('delivery_failed') and not m.metadata.get('deleted') %}
+          <button class="btn btn-sm" onclick="retryFailedMessage(this)">Retry</button>
           {% endif %}
           {% if m.role == 'assistant' and not (m.metadata and (m.metadata.get('deleted') or m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error'])) %}
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
@@ -809,6 +847,15 @@
       <button type="button" class="btn btn-danger" id="delete-message-pair-confirm">Permanently delete pair</button>
       <button type="button" class="btn" onclick="cancelDeleteMessagePair()">Cancel</button>
     </div>
+  </div>
+</div>
+
+<div id="modal-attachment-viewer" class="modal" style="display:none;">
+  <div class="modal-content chat-attachment-viewer-modal">
+    <h2 id="attachment-viewer-title">Attachment</h2>
+    <div id="attachment-viewer-meta" class="mini-note" style="margin-bottom:0.75rem;"></div>
+    <div id="attachment-viewer-body" class="chat-attachment-viewer-body"></div>
+    <div class="modal-actions"><button type="button" class="btn" onclick="hideModal('modal-attachment-viewer')">Close</button></div>
   </div>
 </div>
 
@@ -1299,6 +1346,10 @@ function canRerunMessage(metadata) {
   return !['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error'].includes(mode);
 }
 
+function isFailedDelivery(metadata, role) {
+  return String(role || '').trim() === 'user' && metadata?.delivery_failed === true && metadata?.deleted !== true;
+}
+
 function canDeleteMessagePair(metadata, role) {
   if (metadata?.deleted === true) return false;
   if (!['user', 'assistant'].includes(String(role || '').trim())) return false;
@@ -1552,8 +1603,11 @@ function renderMessageActions(meta, role = '', messageId = '') {
   const rerunBtn = role === 'assistant' && canRerunMessage(meta)
     ? `<button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>`
     : '';
+  const retryBtn = isFailedDelivery(meta, role)
+    ? '<button class="btn btn-sm" onclick="retryFailedMessage(this)">Retry</button>'
+    : '';
   const deleteBtn = canDeleteMessagePair(meta, role)
-    ? '<button class="btn btn-sm btn-danger" onclick="requestDeleteMessagePair(this)">Delete pair</button>'
+    ? `<button class="btn btn-sm btn-danger" onclick="requestDeleteMessagePair(this)">${isFailedDelivery(meta, role) ? 'Delete failed message' : 'Delete pair'}</button>`
     : '';
   return `
     <details class="message-actions-menu">
@@ -1561,6 +1615,7 @@ function renderMessageActions(meta, role = '', messageId = '') {
       <div class="message-actions">
         <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
         ${deleteBtn}
+        ${retryBtn}
         ${rerunBtn}
         ${responseVariantActions(meta, messageId)}
         ${recapBtn}
@@ -1574,6 +1629,9 @@ function renderMessageActions(meta, role = '', messageId = '') {
 }
 
 function renderMessageIndicators(meta) {
+  if (meta?.delivery_failed === true && meta?.deleted !== true) {
+    return '<div class="message-indicator message-indicator-failed">Response failed. Retry or delete this message.</div>';
+  }
   const mode = String(meta?.mode || '').trim();
   if (isFailedPmLikeMessage(meta)) {
     const label = meta?.operator_marked_failed === true
@@ -1709,14 +1767,14 @@ function renderAssignmentContextHtml(meta) {
   `;
 }
 
-function renderMessageAttachmentsHtml(meta) {
+function renderMessageAttachmentsHtml(meta, messageId = '') {
   const attachments = Array.isArray(meta?.attachments) ? meta.attachments : [];
   if (!attachments.length) return '';
   return `
     <div class="message-attachments">
       <div class="message-attachments-label">Attachments</div>
       <div class="message-attachment-list">
-      ${attachments.map((attachment) => {
+      ${attachments.map((attachment, index) => {
         const name = esc(String(attachment?.name || 'attachment'));
         const mime = esc(String(attachment?.mime_type || ''));
         const kind = String(attachment?.kind || '').trim().toLowerCase();
@@ -1727,13 +1785,13 @@ function renderMessageAttachmentsHtml(meta) {
           : '';
         const detail = [mime, sizeText].filter(Boolean).join(' · ');
         return `
-          <div class="message-attachment">
+          <button type="button" class="message-attachment message-attachment-button" data-message-id="${esc(String(messageId))}" data-attachment-index="${index}" onclick="openMessageAttachment(this)">
             ${preview}
             <div class="message-attachment-meta">
               <span class="message-attachment-name">${name}</span>
               <span class="message-attachment-detail">${detail}</span>
             </div>
-          </div>
+          </button>
         `;
       }).join('')}
       </div>
@@ -1748,6 +1806,46 @@ function isSafeAttachmentPreviewDataUrl(dataUrl) {
     || value.startsWith('data:image/jpg')
     || value.startsWith('data:image/webp')
     || value.startsWith('data:image/gif');
+}
+
+function openMessageAttachment(button) {
+  const messageId = String(button?.dataset?.messageId || '').trim();
+  const attachmentIndex = Number(button?.dataset?.attachmentIndex);
+  const message = messageMap.get(messageId) || initialMessages.find((item) => String(item?.id || '') === messageId);
+  const attachments = Array.isArray(message?.metadata?.attachments) ? message.metadata.attachments : [];
+  const attachment = Number.isInteger(attachmentIndex) ? attachments[attachmentIndex] : null;
+  if (!attachment) return;
+
+  const name = String(attachment?.name || 'attachment');
+  const mime = String(attachment?.mime_type || 'application/octet-stream');
+  const kind = String(attachment?.kind || '').trim().toLowerCase();
+  const dataUrl = String(attachment?.data_url || '').trim();
+  const text = String(attachment?.text_content || '');
+  const title = document.getElementById('attachment-viewer-title');
+  const meta = document.getElementById('attachment-viewer-meta');
+  const body = document.getElementById('attachment-viewer-body');
+  if (!title || !meta || !body) return;
+  title.textContent = name;
+  meta.textContent = [mime, formatAttachmentBytes(attachment?.size_bytes || 0)].filter(Boolean).join(' · ');
+  body.replaceChildren();
+  if (kind === 'image' && isSafeAttachmentPreviewDataUrl(dataUrl)) {
+    const image = document.createElement('img');
+    image.className = 'chat-attachment-viewer-image';
+    image.src = dataUrl;
+    image.alt = name;
+    body.appendChild(image);
+  } else if (text) {
+    const code = document.createElement('pre');
+    code.className = 'chat-attachment-viewer-text';
+    code.textContent = text + (attachment?.truncated ? '\n\n[Preview truncated before model delivery.]' : '');
+    body.appendChild(code);
+  } else {
+    const note = document.createElement('p');
+    note.className = 'mini-note';
+    note.textContent = 'This binary attachment was recorded with its name and type, but its bytes were not retained by the older chat upload flow, so it cannot be opened now.';
+    body.appendChild(note);
+  }
+  document.getElementById('modal-attachment-viewer').style.display = 'flex';
 }
 
 function activeChatBotId() {
@@ -2703,7 +2801,7 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
     ${renderMessageIndicators(meta)}
     ${renderAssignmentContextHtml(meta)}
     <div class="message-body"></div>
-    ${renderMessageAttachmentsHtml(meta)}
+    ${renderMessageAttachmentsHtml(meta, id)}
     ${renderMessageActions(meta, role, id)}
   `;
   renderMessageBody(div.querySelector('.message-body'), content);
@@ -2850,7 +2948,7 @@ function hydrateMessageElement(el, message) {
   } else if (existingContext) {
     existingContext.remove();
   }
-  const attachmentsHtml = renderMessageAttachmentsHtml(message.metadata || null);
+  const attachmentsHtml = renderMessageAttachmentsHtml(message.metadata || null, message.id || '');
   if (attachmentsHtml) {
     if (existingAttachments) {
       existingAttachments.outerHTML = attachmentsHtml;
@@ -3188,7 +3286,8 @@ async function sendMessage(streamMode, options = {}) {
   const rerunAssistantMessageId = String(options.rerunAssistantMessageId || '').trim();
   const isResponseRegeneration = !!rerunAssistantMessageId;
   const content = String(options.content ?? fd.get('content') ?? '').trim();
-  const requestAttachments = isResponseRegeneration ? [] : pendingComposerAttachments.slice();
+  const retryAttachments = Array.isArray(options.attachments) ? options.attachments.slice() : null;
+  const requestAttachments = isResponseRegeneration ? [] : (retryAttachments || pendingComposerAttachments.slice());
   if (!content && !requestAttachments.length) return;
   const contentBlocker = chatMessageContentBlocker(content);
   if (contentBlocker) {
@@ -3602,6 +3701,13 @@ function rerunMessage(btn) {
     botId: m.bot_id || null,
     rerunAssistantMessageId: m.id,
   });
+}
+
+function retryFailedMessage(btn) {
+  const message = getMessageData(btn);
+  if (!message.id || !isFailedDelivery(message.metadata || null, message.role)) return;
+  const attachments = Array.isArray(message.metadata?.attachments) ? message.metadata.attachments : [];
+  sendMessage(true, {content: message.content || '', attachments});
 }
 
 let pendingDeleteMessagePairId = '';

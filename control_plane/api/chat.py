@@ -1030,7 +1030,7 @@ def _messages_to_payload(
     payload: List[dict] = []
     for message in messages:
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
-        if metadata.get("deleted") is True:
+        if metadata.get("deleted") is True or metadata.get("delivery_failed") is True:
             continue
         attachment_parts = _message_attachment_parts(message.metadata)
         if attachment_parts:
@@ -5305,6 +5305,23 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
         raise HTTPException(status_code=400, detail="content or attachments are required")
 
     async def event_gen() -> AsyncGenerator[str, None]:
+        user_message: Optional[ChatMessage] = None
+
+        async def mark_delivery_failed(error: Any) -> None:
+            """Persist a failed unsatisfied user turn without polluting later context."""
+            nonlocal user_message
+            if user_message is None or rerun_source_message is not None:
+                return
+            metadata = dict(user_message.metadata or {})
+            metadata.update(
+                {
+                    "delivery_failed": True,
+                    "delivery_error": str(error or "Response generation failed.")[:1000],
+                    "delivery_failed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            user_message = await chat_manager.update_message(user_message.id, metadata=metadata)
+
         try:
             assign_instruction = None if rerun_source_message is not None else _extract_assign_instruction(body.content)
             user_message_metadata = None
@@ -6269,7 +6286,9 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 elif event_name == "final":
                     result = dict(event)
                 elif event_name == "error":
-                    payload = json.dumps({"error": event.get("error") or "stream_error"})
+                    error = event.get("error") or "stream_error"
+                    await mark_delivery_failed(error)
+                    payload = json.dumps({"error": error})
                     yield f"event: error\ndata: {payload}\n\n"
                     return
             if result is None and streamed_chunks:
@@ -6279,7 +6298,9 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     "partial": True,
                 }
             if result is None:
-                payload = json.dumps({"error": "stream ended before final response"})
+                error = "stream ended before final response"
+                await mark_delivery_failed(error)
+                payload = json.dumps({"error": error})
                 yield f"event: error\ndata: {payload}\n\n"
                 return
             assistant_output = _extract_task_output(result)
@@ -6344,6 +6365,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             payload = json.dumps({"error": "bot_not_found"})
             yield f"event: error\ndata: {payload}\n\n"
         except Exception as e:
+            await mark_delivery_failed(e)
             payload = json.dumps({"error": str(e)})
             yield f"event: error\ndata: {payload}\n\n"
 
