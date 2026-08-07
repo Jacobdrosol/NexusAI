@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -27,6 +28,44 @@ def should_search_web(query: str) -> bool:
     return bool(_WEB_LOOKUP_RE.search(str(query or "")))
 
 
+def _search_query(query: str) -> str:
+    """Convert common conversational lookup wording into a useful search query."""
+    normalized = re.sub(r"\s+", " ", str(query or "").strip())
+    lowered = normalized.lower()
+    if not normalized:
+        return ""
+
+    model_terms: list[str] = []
+    display_names = {
+        "deepseek": "DeepSeek",
+        "qwen": "Qwen",
+        "kimi": "Kimi",
+        "llama": "Llama",
+        "gemini": "Gemini",
+        "claude": "Claude",
+        "gpt": "GPT",
+        "mistral": "Mistral",
+    }
+    for name, display_name in display_names.items():
+        if re.search(rf"\b{re.escape(name)}\b", lowered):
+            model_terms.append(display_name)
+    if model_terms and re.search(r"\b(?:model|models|coding|release|released|newest|latest|best)\b", lowered):
+        intent = "latest model release"
+        if re.search(r"\b(?:best|coding|code)\b", lowered):
+            intent += " best coding models"
+        return f"{' '.join(model_terms[:3])} {intent} {datetime.now(timezone.utc).year}"
+
+    # Remove leading conversational filler that otherwise becomes the dominant
+    # search term in metasearch engines.
+    normalized = re.sub(
+        r"^(?:i\s+)?(?:want|need|would\s+like)\s+(?:to\s+)?(?:know|find|learn)\s+",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    return normalized
+
+
 def _safe_result_text(result: dict[str, Any]) -> str:
     title = str(result.get("title") or "Untitled result").strip()
     url = str(result.get("url") or "").strip()
@@ -47,12 +86,15 @@ async def resolve_web_context_items(query: str, *, limit: int = 5) -> list[str]:
     normalized_query = str(query or "").strip()
     if not normalized_query or not should_search_web(normalized_query):
         return []
+    search_query = _search_query(normalized_query)
+    if not search_query:
+        return []
     endpoint = os.environ.get("NEXUSAI_SEARXNG_URL", "http://searxng:8080").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), follow_redirects=False) as client:
             response = await client.get(
                 f"{endpoint}/search",
-                params={"q": normalized_query[:600], "format": "json", "language": "en-US"},
+                params={"q": search_query[:600], "format": "json", "language": "en-US"},
                 headers={"Accept": "application/json"},
             )
             response.raise_for_status()

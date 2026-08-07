@@ -12,13 +12,18 @@ from httpx import ASGITransport, AsyncClient
 
 
 def test_web_search_only_matches_current_or_lookup_prompts():
-    from control_plane.chat.web_search import should_search_web
+    from control_plane.chat.web_search import _search_query, should_search_web
 
     assert should_search_web("What is the current market price for this part?") is True
     assert should_search_web("Look up this serial number for me") is True
     assert should_search_web("Your knowledge cutoff is old. Get up-to-date facts.") is True
     assert should_search_web("Do a web search to confirm the best models") is True
     assert should_search_web("Help me word a private message to my colleague") is False
+    query = _search_query(
+        "I want to know the best models to date. I heard DeepSeek released a new model. Do a web search."
+    )
+    assert "DeepSeek latest model release" in query
+    assert "best coding models" in query
 
 
 @pytest.mark.anyio
