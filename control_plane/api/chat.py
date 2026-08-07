@@ -1177,6 +1177,21 @@ def _messages_to_payload(
             )
         insert_at = 1 if resolved_context else 0
         payload.insert(insert_at, {"role": "system", "content": policy})
+    now = datetime.now(timezone.utc)
+    payload.insert(
+        0,
+        {
+            "role": "system",
+            "content": (
+                "Authoritative runtime date and time: "
+                f"{now.strftime('%Y-%m-%d %H:%M:%S UTC')}.\n"
+                "Treat this runtime date as authoritative for this response. Do not override it "
+                "with a model training cutoff or claim that the date has not occurred.\n"
+                "For time-sensitive facts, use any supplied current web-search context. If no "
+                "current sources are supplied, state that limitation without inventing dates or facts."
+            ),
+        },
+    )
     return payload
 
 

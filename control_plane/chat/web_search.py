@@ -13,6 +13,7 @@ _WEB_LOOKUP_RE = re.compile(
     r"\b("
     r"current|currently|today|latest|recent|newest|price|pricing|cost|quote|market|"
     r"stock|weather|forecast|news|score|schedule|availability|lookup|look\s+up|"
+    r"up[-\s]?to[-\s]?date|knowledge\s+cutoff|training\s+cutoff|"
     r"search\s+(?:the\s+)?(?:web|internet|online)|serial(?:\s+number)?|part\s+number|"
     r"model\s+number|registry|recall"
     r")\b",

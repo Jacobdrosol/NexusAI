@@ -15,6 +15,7 @@ def test_web_search_only_matches_current_or_lookup_prompts():
 
     assert should_search_web("What is the current market price for this part?") is True
     assert should_search_web("Look up this serial number for me") is True
+    assert should_search_web("Your knowledge cutoff is old. Get up-to-date facts.") is True
     assert should_search_web("Help me word a private message to my colleague") is False
 
 
@@ -55,6 +56,8 @@ async def test_chat_injects_self_hosted_web_context_only_for_enabled_bot(cp_app,
     context_text = "\n".join(str(item.get("content") or "") for item in captured_payloads[0])
     assert "https://example.test/price" in context_text
     assert "cite the exact URL" in context_text
+    assert "Authoritative runtime date and time:" in context_text
+    assert "Do not override it with a model training cutoff" in context_text
 
 
 def test_ollama_message_normalization_preserves_image_content_parts():
