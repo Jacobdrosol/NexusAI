@@ -15,11 +15,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
@@ -56,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -276,7 +280,7 @@ private fun ChatApp(
             }
         } else {
             ConversationScreen(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 conversation = selectedConversation!!,
                 messages = messages,
                 loading = loading,
@@ -358,18 +362,35 @@ private fun ChatApp(
 @Composable
 private fun ConversationScreen(modifier: Modifier, conversation: ChatConversation, messages: List<ChatMessage>, loading: Boolean, status: String, onBack: () -> Unit, onSend: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    val sendDraft = {
+        val content = draft.trim()
+        if (!loading && content.isNotBlank()) {
+            onSend(content)
+            draft = ""
+        }
+    }
+    Column(modifier.imePadding().navigationBarsPadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Button(onClick = onBack) { Text("Chats") }
         Text(conversation.title, style = MaterialTheme.typography.titleMedium)
     }
-    LazyColumn(Modifier.fillMaxWidth().height(360.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(messages) { message ->
             MessageRow(message)
         }
     }
-    OutlinedTextField(value = draft, onValueChange = { draft = it }, label = { Text("Message") }, modifier = Modifier.fillMaxWidth(), minLines = 2, enabled = !loading)
-    Button(enabled = !loading && draft.isNotBlank(), onClick = { onSend(draft.trim()); draft = "" }, modifier = Modifier.fillMaxWidth()) { Text(if (loading) "Sending…" else "Send") }
+    OutlinedTextField(
+        value = draft,
+        onValueChange = { draft = it },
+        label = { Text("Message") },
+        modifier = Modifier.fillMaxWidth().heightIn(max = 176.dp),
+        minLines = 2,
+        maxLines = 6,
+        enabled = !loading,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+        keyboardActions = KeyboardActions(onSend = { sendDraft() }),
+    )
+    Button(enabled = !loading && draft.isNotBlank(), onClick = sendDraft, modifier = Modifier.fillMaxWidth()) { Text(if (loading) "Sending…" else "Send") }
     if (status.isNotBlank()) Text(status, color = MaterialTheme.colorScheme.error)
     }
 }
