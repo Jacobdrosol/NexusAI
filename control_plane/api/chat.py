@@ -34,6 +34,11 @@ from shared.settings_manager import SettingsManager, get_context_limits_for_mode
 
 logger = logging.getLogger(__name__)
 
+_CONVERSATION_REFERENCE_RE = re.compile(
+    r"(?<![0-9a-f])(?:conversation\s*:\s*)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![0-9a-f])",
+    flags=re.IGNORECASE,
+)
+
 
 def _get_bot_model(bot) -> str:
     """Extract model name from bot's first backend config.
@@ -1962,6 +1967,130 @@ async def _resolve_project_repo_context_items(
     return resolved
 
 
+def _referenced_conversation_ids(content: str) -> List[str]:
+    return list(dict.fromkeys(match.group(1).lower() for match in _CONVERSATION_REFERENCE_RE.finditer(content or "")))
+
+
+def _message_is_context_eligible(message: ChatMessage) -> bool:
+    if str(message.role or "").strip().lower() not in {"user", "assistant"}:
+        return False
+    metadata = message.metadata if isinstance(message.metadata, dict) else {}
+    mode = str(metadata.get("mode") or "").strip().lower()
+    if mode == "assign_error":
+        return False
+    if mode in {"assign_request", "assign_pending", "pm_run_report", "assign_summary"}:
+        return metadata.get("ingest_allowed") is True
+    return True
+
+
+async def _resolve_conversation_reference_context_items(
+    request: Request,
+    *,
+    conversation: ChatConversation,
+    body: PostMessageRequest,
+) -> List[str]:
+    """Load an explicitly cited conversation without relying on project vector storage."""
+    reference_ids = _referenced_conversation_ids(body.content)
+    if not reference_ids:
+        return []
+    chat_manager = request.app.state.chat_manager
+    requester_user_id = str(body.user_id or conversation.owner_user_id or "").strip()
+    resolved: List[str] = []
+    used_chars = 0
+    for reference_id in reference_ids[:5]:
+        if reference_id == conversation.id:
+            continue
+        try:
+            referenced = await chat_manager.get_conversation(reference_id)
+        except ConversationNotFoundError:
+            continue
+        referenced_owner_id = str(referenced.owner_user_id or "").strip()
+        if requester_user_id and referenced_owner_id and requester_user_id != referenced_owner_id:
+            continue
+        try:
+            messages = await chat_manager.list_message_slice(reference_id, limit=80, newest=True)
+        except ConversationNotFoundError:
+            continue
+        lines: List[str] = []
+        for message in messages:
+            if not _message_is_context_eligible(message):
+                continue
+            text = str(message.content or "").strip()
+            if text:
+                lines.append(f"[{message.role}] {text}")
+        if not lines:
+            continue
+        item = f"[conversation:{reference_id}] {referenced.title}\n" + "\n\n".join(lines)
+        if used_chars + len(item) > 12_000:
+            available = 12_000 - used_chars
+            if available < 160:
+                break
+            item = item[:available].rstrip() + "..."
+        resolved.append(item)
+        used_chars += len(item)
+        if used_chars >= 12_000:
+            break
+    return resolved
+
+
+async def _resolve_project_chat_context_items(
+    request: Request,
+    *,
+    conversation: ChatConversation,
+    query: str,
+) -> List[str]:
+    """Retrieve relevant automatic message vectors from the conversation's project vault."""
+    vault_manager = getattr(request.app.state, "vault_manager", None)
+    if vault_manager is None:
+        return []
+    project_ids = _conversation_project_ids(conversation)
+    if not project_ids:
+        return []
+    focused_query = build_focus_query(query, max_terms=12) or str(query or "").strip()[:800]
+    if not focused_query:
+        return []
+    resolved: List[str] = []
+    seen_items: set[str] = set()
+    used_chars = 0
+    for project_id in project_ids:
+        try:
+            rows = await vault_manager.search(
+                query=focused_query,
+                namespace=f"project:{project_id}:chat",
+                project_id=project_id,
+                limit=8,
+            )
+        except Exception:
+            logger.exception("Automatic project chat context search failed for project %s", project_id)
+            continue
+        for row in rows:
+            if float(row.get("score") or 0.0) <= 0.05:
+                continue
+            item_id = str(row.get("item_id") or "").strip()
+            if not item_id or item_id in seen_items:
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            if str(metadata.get("conversation_id") or "").strip() == conversation.id:
+                continue
+            content = str(row.get("content") or "").strip()
+            if not content:
+                continue
+            seen_items.add(item_id)
+            source_id = str(metadata.get("conversation_id") or "").strip()
+            title = str(row.get("title") or "project chat").strip() or "project chat"
+            label = f"[project-chat:{project_id}] {title}"
+            if source_id:
+                label += f" (conversation:{source_id})"
+            item = f"{label}\n{content[:1800]}"
+            if used_chars + len(item) > 8_000:
+                return resolved
+            resolved.append(item)
+            used_chars += len(item)
+            if len(resolved) >= 8:
+                return resolved
+    return resolved
+
+
 async def _resolve_context_items(
     request: Request,
     body: PostMessageRequest,
@@ -1995,6 +2124,20 @@ async def _resolve_context_items(
             except Exception:
                 continue
 
+    referenced_conversation_context: List[str] = []
+    project_chat_context: List[str] = []
+    if conversation is not None:
+        referenced_conversation_context = await _resolve_conversation_reference_context_items(
+            request,
+            conversation=conversation,
+            body=body,
+        )
+        project_chat_context = await _resolve_project_chat_context_items(
+            request,
+            conversation=conversation,
+            query=body.content,
+        )
+
     workspace_context: List[str] = []
     if (body.use_workspace_tools or force_workspace_context) and filesystem_allowed and workspace_root:
         workspace_context = await _resolve_workspace_context_items(
@@ -2014,7 +2157,9 @@ async def _resolve_context_items(
             query=body.content,
         )
 
-    # Source-of-truth ordering: workspace -> ingested repo -> explicitly-selected vault -> manual context
+    # Explicit references and project chat context precede workspace, repo, vault, and manual context.
+    resolved.extend(referenced_conversation_context)
+    resolved.extend(project_chat_context)
     resolved.extend(repo_profile_context)
     resolved.extend(workspace_context)
     resolved.extend(repo_context)

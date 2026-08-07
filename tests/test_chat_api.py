@@ -64,6 +64,186 @@ async def test_create_conversation_and_post_message(cp_app):
 
 
 @pytest.mark.anyio
+async def test_project_chat_messages_are_automatically_ingested_and_unscoped_messages_are_not(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "project response"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-project-ingest",
+                "name": "Project Ingest Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+        project_conversation = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Project context", "scope": "project", "project_id": "project-vector"},
+        )
+        project_id = project_conversation.json()["id"]
+        sent = await client.post(
+            f"/v1/chat/conversations/{project_id}/messages",
+            json={"content": "The release checklist requires browser verification.", "bot_id": "bot-project-ingest"},
+        )
+        assert sent.status_code == 200
+        project_items = await cp_app.state.vault_manager.list_items(
+            namespace="project:project-vector:chat",
+            project_id="project-vector",
+        )
+        assert len(project_items) == 2
+        assert {item.metadata["conversation_id"] for item in project_items} == {project_id}
+        assert all(item.metadata["automatic"] is True for item in project_items)
+
+        unscoped_conversation = await client.post("/v1/chat/conversations", json={"title": "Unscoped"})
+        unscoped_id = unscoped_conversation.json()["id"]
+        unscoped_sent = await client.post(
+            f"/v1/chat/conversations/{unscoped_id}/messages",
+            json={"content": "This remains in its own conversation.", "bot_id": "bot-project-ingest"},
+        )
+        assert unscoped_sent.status_code == 200
+        assert await cp_app.state.vault_manager.list_items(namespace="project:project-vector:chat") == project_items
+
+
+@pytest.mark.anyio
+async def test_project_chat_context_is_retrieved_across_project_conversations(cp_app):
+    captured_payloads = []
+
+    async def _capture_schedule(task):
+        captured_payloads.append(task.payload)
+        return {"output": "retrieval response"}
+
+    cp_app.state.scheduler.schedule = _capture_schedule
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-project-retrieval",
+                "name": "Project Retrieval Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+        source = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Release notes", "scope": "project", "project_id": "project-retrieval"},
+        )
+        source_id = source.json()["id"]
+        await cp_app.state.chat_manager.add_message(
+            source_id,
+            "user",
+            "The release checklist requires browser verification before production deployment.",
+        )
+        target = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Deployment review", "scope": "project", "project_id": "project-retrieval"},
+        )
+        target_id = target.json()["id"]
+        sent = await client.post(
+            f"/v1/chat/conversations/{target_id}/messages",
+            json={"content": "What does the release checklist require for browser verification?", "bot_id": "bot-project-retrieval"},
+        )
+        assert sent.status_code == 200
+
+    payload_text = "\n".join(str(item.get("content") or "") for item in captured_payloads[-1])
+    assert "[project-chat:project-retrieval]" in payload_text
+    assert "browser verification before production deployment" in payload_text
+    assert source_id in payload_text
+
+
+@pytest.mark.anyio
+async def test_explicit_conversation_reference_includes_unscoped_transcript_for_same_user(cp_app):
+    captured_payloads = []
+
+    async def _capture_schedule(task):
+        captured_payloads.append(task.payload)
+        return {"output": "reference response"}
+
+    cp_app.state.scheduler.schedule = _capture_schedule
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-conversation-reference",
+                "name": "Conversation Reference Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+        source = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Private unscoped notes", "owner_user_id": "jacob@example.com"},
+        )
+        source_id = source.json()["id"]
+        await cp_app.state.chat_manager.add_message(source_id, "user", "My telescope calibration uses a 12 minute warmup.")
+        target = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Follow up", "owner_user_id": "jacob@example.com"},
+        )
+        target_id = target.json()["id"]
+        sent = await client.post(
+            f"/v1/chat/conversations/{target_id}/messages",
+            json={
+                "content": f"Use conversation:{source_id} to answer the calibration question.",
+                "bot_id": "bot-conversation-reference",
+                "user_id": "jacob@example.com",
+            },
+        )
+        assert sent.status_code == 200
+
+    payload_text = "\n".join(str(item.get("content") or "") for item in captured_payloads[-1])
+    assert f"[conversation:{source_id}]" in payload_text
+    assert "12 minute warmup" in payload_text
+
+
+@pytest.mark.anyio
+async def test_explicit_conversation_reference_does_not_cross_owner_boundary(cp_app):
+    captured_payloads = []
+
+    async def _capture_schedule(task):
+        captured_payloads.append(task.payload)
+        return {"output": "private response"}
+
+    cp_app.state.scheduler.schedule = _capture_schedule
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-private-reference",
+                "name": "Private Reference Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+        source = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Another user", "owner_user_id": "other@example.com"},
+        )
+        source_id = source.json()["id"]
+        await cp_app.state.chat_manager.add_message(source_id, "user", "This private conversation must not leak.")
+        target = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Jacob", "owner_user_id": "jacob@example.com"},
+        )
+        target_id = target.json()["id"]
+        sent = await client.post(
+            f"/v1/chat/conversations/{target_id}/messages",
+            json={
+                "content": f"Use conversation:{source_id}.",
+                "bot_id": "bot-private-reference",
+                "user_id": "jacob@example.com",
+            },
+        )
+        assert sent.status_code == 200
+
+    payload_text = "\n".join(str(item.get("content") or "") for item in captured_payloads[-1])
+    assert "This private conversation must not leak." not in payload_text
+
+
+@pytest.mark.anyio
 async def test_chat_usage_recovers_provider_model_from_assistant_metadata(cp_app):
     chat_manager = cp_app.state.chat_manager
     conversation = await chat_manager.create_conversation("Legacy Metadata Usage")

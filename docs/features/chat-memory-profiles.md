@@ -29,6 +29,16 @@ Unscoped conversations do not require the project gate because there is no scope
 
 If any required gate is disabled, the turn does not retrieve profile memories and the sent/received messages are not added to the profile. Ordinary chat history and explicit project context still work normally.
 
+## Project Chat Retrieval
+
+Project chat retrieval is separate from personal memory. Every eligible user or assistant message in a project-scoped or bridged conversation is automatically upserted as an independent vault item in `project:<project_id>:chat`. This makes relevant prior chat evidence available to later chats in the same project without requiring a manual ingest action.
+
+Unscoped conversations are not added to a project chat vault. They remain ordinary conversation history.
+
+To intentionally include another conversation, paste its reference in the form `conversation:<UUID>` into a new message. NexusAI loads a bounded transcript directly from that conversation, whether it is scoped or unscoped. When both conversations have an owner, the owners must match; a reference does not bypass team-user boundaries. The conversation settings menu provides a copy action for this reference.
+
+Project chat retrieval is bounded and labeled as retrieved chat context. It does not enable, train, or retrieve a personal memory profile, and it does not replace repository or file evidence for coding claims.
+
 ## Stored Metadata
 
 Messages record compact memory decision metadata:

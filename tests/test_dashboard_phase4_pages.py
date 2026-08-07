@@ -4075,6 +4075,39 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b"Shared modes: none" in resp.data
 
 
+def test_chat_page_uses_automatic_project_ingest_and_conversation_references(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "title": "Project Chat", "scope": "project", "project_id": "project-1"}]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return [{"id": "project-1", "name": "Project 1", "enabled": True}]
+
+        def list_models(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c1")
+
+    assert resp.status_code == 200
+    assert b"Copy conversation reference" in resp.data
+    assert b"copyConversationReference" in resp.data
+    assert b"Project chat messages are indexed automatically." in resp.data
+    assert b"Ingest this chat" not in resp.data
+    assert b"Send to Vault" not in resp.data
+
+
 def test_chat_page_formats_saved_attachment_sizes(dashboard_client):
     _login_admin(dashboard_client)
 

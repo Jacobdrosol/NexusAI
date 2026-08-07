@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import os
 import uuid
@@ -16,6 +17,7 @@ from shared.exceptions import ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage
 
 _DEFAULT_DB_PATH = str(Path(__file__).parent.parent.parent / "data" / "nexusai.db")
+logger = logging.getLogger(__name__)
 
 
 def _normalize_tool_access_flags(
@@ -125,10 +127,11 @@ ON conversations(archived_at, updated_at)
 
 
 class ChatManager:
-    def __init__(self, db_path: Optional[str] = None) -> None:
+    def __init__(self, db_path: Optional[str] = None, vault_manager: Optional[Any] = None) -> None:
         self._lock = asyncio.Lock()
         self._init_lock = asyncio.Lock()
         self._db_ready = False
+        self._vault_manager = vault_manager
 
         if db_path is not None:
             self._db_path = db_path
@@ -197,6 +200,45 @@ class ChatManager:
         if mode in {"assign_request", "assign_pending", "pm_run_report", "assign_summary"}:
             return metadata.get("ingest_allowed") is True
         return True
+
+    @staticmethod
+    def _conversation_project_ids(conversation: ChatConversation) -> List[str]:
+        project_ids = [str(conversation.project_id or "").strip()]
+        project_ids.extend(str(project_id or "").strip() for project_id in conversation.bridge_project_ids)
+        return list(dict.fromkeys(project_id for project_id in project_ids if project_id))
+
+    async def _ingest_project_message(self, conversation: ChatConversation, message: ChatMessage) -> None:
+        """Persist project-scoped chat content as independently searchable vault items."""
+        if self._vault_manager is None or not self._message_is_indexable(role=message.role, metadata=message.metadata):
+            return
+        project_ids = self._conversation_project_ids(conversation)
+        if not project_ids:
+            return
+        content = str(message.content or "").strip()
+        if not content:
+            return
+        metadata = {
+            "automatic": True,
+            "conversation_id": conversation.id,
+            "message_id": message.id,
+            "role": message.role,
+            "created_at": message.created_at,
+            "owner_user_id": conversation.owner_user_id,
+        }
+        for project_id in project_ids:
+            try:
+                await self._vault_manager.upsert_text(
+                    title=f"Chat: {conversation.title} ({message.role})",
+                    content=content,
+                    namespace=f"project:{project_id}:chat",
+                    project_id=project_id,
+                    source_type="chat",
+                    source_ref=f"chat-message:{message.id}",
+                    metadata=metadata,
+                )
+            except Exception:
+                # Chat persistence must not fail solely because optional retrieval storage is unavailable.
+                logger.exception("Automatic project chat ingest failed for message %s", message.id)
 
     async def _reindex_message(
         self,
@@ -557,7 +599,7 @@ class ChatManager:
         provider: Optional[str] = None,
         metadata: Optional[Any] = None,
     ) -> ChatMessage:
-        await self.get_conversation(conversation_id)
+        conversation = await self.get_conversation(conversation_id)
         now = datetime.now(timezone.utc).isoformat()
         message = ChatMessage(
             id=str(uuid.uuid4()),
@@ -605,6 +647,7 @@ class ChatManager:
                     created_at=message.created_at,
                 )
                 await db.commit()
+        await self._ingest_project_message(conversation, message)
         return message
 
     async def add_memory_profile_item(
@@ -1175,6 +1218,7 @@ class ChatManager:
         provider: Optional[str] = None,
     ) -> ChatMessage:
         await self._ensure_db()
+        updated_message: Optional[ChatMessage] = None
         async with self._lock:
             async with open_sqlite(self._db_path) as db:
                 db.row_factory = aiosqlite.Row
@@ -1222,7 +1266,12 @@ class ChatManager:
                     )
                     await db.commit()
                     data.update(updated)
-                    return ChatMessage.model_validate(data)
+                    updated_message = ChatMessage.model_validate(data)
+        if updated_message is None:
+            raise ConversationNotFoundError(f"Message not found: {message_id}")
+        conversation = await self.get_conversation(updated_message.conversation_id)
+        await self._ingest_project_message(conversation, updated_message)
+        return updated_message
 
     async def count_messages(self, conversation_id: str) -> int:
         await self.get_conversation(conversation_id)

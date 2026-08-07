@@ -654,9 +654,6 @@
           {% if m.role == 'assistant' and not (m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error']) %}
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
           {% endif %}
-          {% if not (m.metadata and (m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false)) %}
-          <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
-          {% endif %}
           {% if m.metadata and m.metadata.get('orchestration_id') %}
           <button class="btn btn-sm" onclick="openAssignmentRecap('{{ m.metadata.get('orchestration_id') }}')">Full Recap</button>
           {% endif %}
@@ -779,7 +776,8 @@
     </details>
     <details class="chat-route-details">
       <summary>Conversation actions</summary>
-      <div class="chat-route-actions"><button class="btn btn-sm" type="button" onclick="ingestConversation('{{ selected_conversation.id }}')">Ingest this chat</button><button class="btn btn-sm" type="button" onclick="openAssignModal()">Assign message to PM</button></div>
+      <div class="chat-route-actions"><button class="btn btn-sm" type="button" onclick="copyConversationReference('{{ selected_conversation.id }}')">Copy conversation reference</button><button class="btn btn-sm" type="button" onclick="openAssignModal()">Assign message to PM</button></div>
+      <p class="mini-note">Project chat messages are indexed automatically. Paste the copied reference into any chat to include that conversation's messages.</p>
     </details>
     <div class="modal-actions"><button type="button" class="btn" onclick="hideModal('modal-chat-settings')">Close</button></div>
   </div>
@@ -1506,9 +1504,6 @@ function renderMessageActions(meta, role = '') {
   const markFailedBtn = orchestrationId && canMarkPmRunFailed(meta)
     ? `<button class="btn btn-sm btn-danger" onclick="markPmRunFailed('${orchestrationId}', this)">Mark Failed</button>`
     : '';
-  const sendToVaultBtn = canIngestMessageToVault(meta)
-    ? `<button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>`
-    : '';
   const rerunBtn = role === 'assistant' && canRerunMessage(meta)
     ? `<button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>`
     : '';
@@ -1518,7 +1513,6 @@ function renderMessageActions(meta, role = '') {
       <div class="message-actions">
         <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
         ${rerunBtn}
-        ${sendToVaultBtn}
         ${recapBtn}
         ${reviewBtn}
         ${applyBtn}
@@ -3472,6 +3466,11 @@ function getMessageData(buttonEl) {
 function copyMessage(btn) {
   const m = getMessageData(btn);
   navigator.clipboard?.writeText(m.content);
+}
+
+function copyConversationReference(conversationId) {
+  const reference = 'conversation:' + String(conversationId || '').trim();
+  if (!reference.endsWith(':')) navigator.clipboard?.writeText(reference);
 }
 
 function rerunMessage(btn) {

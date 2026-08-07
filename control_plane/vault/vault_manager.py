@@ -429,7 +429,9 @@ class VaultManager:
                 c.embedding,
                 i.title,
                 i.namespace,
-                i.project_id
+                i.project_id,
+                i.source_ref,
+                i.metadata
             FROM vault_chunks c
             JOIN vault_items i ON i.id = c.item_id
             {where_clause}
@@ -452,6 +454,8 @@ class VaultManager:
                     "title": row["title"],
                     "namespace": row["namespace"],
                     "project_id": row["project_id"],
+                    "source_ref": row["source_ref"],
+                    "metadata": json.loads(row["metadata"]) if row["metadata"] else None,
                     "score": score,
                 }
             )
