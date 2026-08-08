@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
@@ -299,8 +300,14 @@ private fun ChatApp(
                 onSend = { content ->
                     loading = true
                     scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { api.sendMessage(selectedConversation!!.id, content) } }
-                            .onSuccess { loadMessages(selectedConversation!!) }
+                        val conversation = selectedConversation ?: return@launch
+                        status = ""
+                        runCatching {
+                            withContext(Dispatchers.IO) {
+                                api.sendMessage(conversation.id, content, conversation.defaultBotId)
+                            }
+                        }
+                            .onSuccess { loadMessages(conversation) }
                             .onFailure { status = it.message ?: "Message failed."; if (it.message?.contains("session", true) == true) onSessionExpired() }
                         loading = false
                     }
@@ -372,6 +379,10 @@ private fun ChatApp(
 @Composable
 private fun ConversationScreen(modifier: Modifier, conversation: ChatConversation, messages: List<ChatMessage>, loading: Boolean, status: String, onBack: () -> Unit, onSend: (String) -> Unit) {
     var draft by remember { mutableStateOf("") }
+    val messageListState = rememberLazyListState()
+    LaunchedEffect(conversation.id, messages.lastOrNull()?.id) {
+        if (messages.isNotEmpty()) messageListState.scrollToItem(messages.lastIndex)
+    }
     val sendDraft = {
         val content = draft.trim()
         if (!loading && content.isNotBlank()) {
@@ -384,8 +395,12 @@ private fun ConversationScreen(modifier: Modifier, conversation: ChatConversatio
         Button(onClick = onBack) { Text("Chats") }
         Text(conversation.title, style = MaterialTheme.typography.titleMedium)
     }
-    LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(messages) { message ->
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth().weight(1f),
+        state = messageListState,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(messages, key = { it.id }) { message ->
             MessageRow(message)
         }
     }

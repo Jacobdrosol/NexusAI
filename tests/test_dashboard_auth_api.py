@@ -30,6 +30,7 @@ def test_dashboard_auth_api_login_session_and_logout(dashboard_client):
         json={"email": "admin@test.com", "password": password},
     )
     assert login.status_code == 200
+    assert "remember_token=" in "\n".join(login.headers.getlist("Set-Cookie"))
     payload = login.get_json()
     assert payload["ok"] is True
     assert payload["user"]["email"] == "admin@test.com"

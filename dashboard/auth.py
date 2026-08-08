@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from flask import (
     Blueprint,
+    current_app,
     flash,
     jsonify,
     redirect,
@@ -142,7 +143,9 @@ def api_login_post():
     user = _authenticate_user(email, password)
     if user is None:
         return jsonify({"error": "invalid email or password"}), 401
-    login_user(user, remember=False)
+    # Native clients persist the encrypted remember cookie and validate it at
+    # launch. The normal dashboard form remains an ordinary browser session.
+    login_user(user, remember=True)
     import time
     session["last_activity_ts"] = int(time.time())
     return jsonify(_login_success_payload(user))
@@ -183,7 +186,9 @@ def api_mobile_bootstrap():
 def api_logout_post():
     logout_user()
     session.clear()
-    return jsonify({"ok": True})
+    response = jsonify({"ok": True})
+    response.delete_cookie(str(current_app.config.get("REMEMBER_COOKIE_NAME", "remember_token")))
+    return response
 
 
 @bp.get("/logout")

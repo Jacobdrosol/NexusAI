@@ -206,18 +206,22 @@ class NexusApiClient(private val store: InstanceStore) {
     ).toChatMessages()
 
     @Throws(IOException::class)
-    fun sendMessage(conversationId: String, content: String): List<ChatMessage> {
+    fun sendMessage(conversationId: String, content: String, botId: String?): List<ChatMessage> {
         val csrf = csrfToken()
+        val payload = JSONObject().put("conversation_id", conversationId).put("content", content)
+        if (!botId.isNullOrBlank()) payload.put("bot_id", botId)
         val request = Request.Builder()
             .url(requireInstanceUrl().newBuilder().addPathSegments("api/chat/messages").build())
             .header("X-CSRFToken", csrf)
             .post(
-                JSONObject().put("conversation_id", conversationId).put("content", content).toString()
-                    .toRequestBody("application/json".toMediaType()),
+                payload.toString().toRequestBody("application/json".toMediaType()),
             )
             .build()
         return client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
+            if (response.code == 401 || response.code == 403) {
+                throw IOException("Your NexusAI session expired. Sign in again.")
+            }
             if (!response.isSuccessful) throw IOException(jsonError(body, "Message failed (${response.code})."))
             val payload = JSONObject(body)
             listOfNotNull(payload.optJSONObject("user_message"), payload.optJSONObject("assistant_message"))
