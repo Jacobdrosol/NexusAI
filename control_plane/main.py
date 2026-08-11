@@ -183,6 +183,8 @@ async def lifespan(app: FastAPI):
             task_manager=task_manager,
             schedule_engine=agent_schedule_engine,
             supervision_store=supervision_store,
+            project_registry=project_registry,
+            key_vault=key_vault,
         )
 
     agent_schedule_engine = AgentScheduleEngine(

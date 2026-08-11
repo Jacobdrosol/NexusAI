@@ -18,6 +18,7 @@ FLEET_HEALTH_SUMMARY_SOURCE = "control_plane_fleet_summary_v1"
 OPERATIONAL_QUALITY_SNAPSHOT_SOURCE = "control_plane_operational_quality_v1"
 CSV_WORK_ITEMS_SOURCE = "csv_work_items_v1"
 SUPERVISION_PORTFOLIO_SOURCE = "control_plane_supervision_portfolio_v1"
+GITHUB_ISSUES_SOURCE = "github_issues_v1"
 _SYSTEM_PAYLOAD_SOURCE_KEY = "system_payload_source"
 _SYSTEM_PAYLOAD_SOURCES_KEY = "system_payload_sources"
 _MAX_SYSTEM_PAYLOAD_SOURCES = 4
@@ -283,6 +284,62 @@ def _csv_source_config(raw: Dict[str, Any], *, target_field: str) -> Dict[str, A
     }
 
 
+def _github_issues_source_config(raw: Any, *, field_name: str) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise SystemPayloadSourceError(f"{field_name} must be an object")
+    target_field = str(raw.get("target_field") or "github_issues").strip()
+    if not _SAFE_FIELD_NAME.fullmatch(target_field):
+        raise SystemPayloadSourceError(f"{field_name} target_field must be a simple payload field name")
+    state = str(raw.get("state") or "open").strip().lower()
+    if state not in {"open", "closed", "all"}:
+        raise SystemPayloadSourceError("github_issues_v1 state must be one of: open, closed, all")
+    labels_raw = raw.get("labels")
+    if labels_raw is not None:
+        if not isinstance(labels_raw, list) or not all(isinstance(l, str) for l in labels_raw):
+            raise SystemPayloadSourceError("github_issues_v1 labels must be a list of strings")
+        if len(labels_raw) > 20:
+            raise SystemPayloadSourceError("github_issues_v1 labels cannot exceed 20 labels")
+        labels = [str(lbl).strip() for lbl in labels_raw if str(lbl).strip()]
+    else:
+        labels = None
+    label_filter = str(raw.get("label_filter") or "any").strip().lower()
+    if label_filter not in {"any", "all", "none"}:
+        raise SystemPayloadSourceError("github_issues_v1 label_filter must be one of: any, all, none")
+    max_items = raw.get("max_items", 10)
+    if isinstance(max_items, bool) or not isinstance(max_items, int) or not 1 <= max_items <= 50:
+        raise SystemPayloadSourceError("github_issues_v1 max_items must be between 1 and 50")
+    since_hours = raw.get("since_hours")
+    if since_hours is not None:
+        if isinstance(since_hours, bool) or not isinstance(since_hours, int) or not 1 <= since_hours <= 8760:
+            raise SystemPayloadSourceError("github_issues_v1 since_hours must be between 1 and 8760")
+    since_timestamp = raw.get("since_timestamp")
+    if since_timestamp is not None:
+        if not isinstance(since_timestamp, str) or not since_timestamp.strip():
+            raise SystemPayloadSourceError("github_issues_v1 since_timestamp must be a non-empty ISO timestamp string")
+        try:
+            datetime.fromisoformat(since_timestamp.strip().replace("Z", "+00:00"))
+        except ValueError:
+            raise SystemPayloadSourceError("github_issues_v1 since_timestamp must be a valid ISO 8601 timestamp")
+    sort = str(raw.get("sort") or "updated").strip().lower()
+    if sort not in {"created", "updated", "comments"}:
+        raise SystemPayloadSourceError("github_issues_v1 sort must be one of: created, updated, comments")
+    direction = str(raw.get("direction") or "desc").strip().lower()
+    if direction not in {"asc", "desc"}:
+        raise SystemPayloadSourceError("github_issues_v1 direction must be one of: asc, desc")
+    return {
+        "type": GITHUB_ISSUES_SOURCE,
+        "target_field": target_field,
+        "state": state,
+        "labels": labels,
+        "label_filter": label_filter,
+        "max_items": max_items,
+        "since_hours": since_hours,
+        "since_timestamp": since_timestamp,
+        "sort": sort,
+        "direction": direction,
+    }
+
+
 def _system_payload_source_config(raw: Any, *, field_name: str) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise SystemPayloadSourceError(f"{field_name} must be an object")
@@ -293,12 +350,15 @@ def _system_payload_source_config(raw: Any, *, field_name: str) -> Dict[str, Any
         OPERATIONAL_QUALITY_SNAPSHOT_SOURCE,
         CSV_WORK_ITEMS_SOURCE,
         SUPERVISION_PORTFOLIO_SOURCE,
+        GITHUB_ISSUES_SOURCE,
     }:
         raise SystemPayloadSourceError(f"unsupported {field_name} type: {source_type or 'unset'}")
     if not _SAFE_FIELD_NAME.fullmatch(target_field):
         raise SystemPayloadSourceError(f"{field_name} target_field must be a simple payload field name")
     if source_type == CSV_WORK_ITEMS_SOURCE:
         return _csv_source_config(raw, target_field=target_field)
+    if source_type == GITHUB_ISSUES_SOURCE:
+        return _github_issues_source_config(raw, field_name=field_name)
     return {"type": source_type, "target_field": target_field}
 
 
@@ -380,6 +440,10 @@ def validate_system_payload_source(schedule: Dict[str, Any], bot: Any) -> None:
         if source_config["type"] == CSV_WORK_ITEMS_SOURCE and not task_scope.startswith(("read-only", "draft-only")):
             raise SystemPayloadSourceError(
                 "csv_work_items_v1 requires a worker_profile with a read-only or draft-only task scope"
+            )
+        if source_config["type"] == GITHUB_ISSUES_SOURCE and not task_scope.startswith(("read-only", "draft-only")):
+            raise SystemPayloadSourceError(
+                "github_issues_v1 requires a worker_profile with a read-only or draft-only task scope"
             )
 
 
@@ -913,6 +977,175 @@ async def supervision_portfolio_snapshot(
     }
 
 
+async def github_issues_payload(
+    config: Dict[str, Any],
+    schedule: Dict[str, Any],
+    project_registry: Any,
+    key_vault: Any,
+) -> Dict[str, Any]:
+    """Fetch recent GitHub issues from the project's connected repository.
+
+    Uses the project's GitHub PAT to poll the issues API with the configured
+    filters (state, labels, label_filter, since_hours, etc.). Returns a bounded
+    snapshot of issues for use in a scheduled task payload.
+    """
+    project_id = str(schedule.get("project_id") or "").strip()
+
+    if not project_id:
+        raise SystemPayloadSourceError("github_issues_v1 requires a project_id in schedule")
+
+    if project_registry is None:
+        raise SystemPayloadSourceError("github_issues_v1 requires project_registry to be available")
+    if key_vault is None:
+        raise SystemPayloadSourceError("github_issues_v1 requires key_vault to be available")
+
+    project = await _await_if_needed(project_registry.get(project_id))
+    if project is None:
+        raise SystemPayloadSourceError(f"project not found: {project_id}")
+
+    settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+    github_cfg = settings.get("github") if isinstance(settings.get("github"), dict) else {}
+
+    repo_full_name = str(github_cfg.get("repo_full_name") or "").strip()
+    pat_key_ref = str(github_cfg.get("pat_key_ref") or "").strip()
+    if not repo_full_name:
+        raise SystemPayloadSourceError(f"project {project_id} has no GitHub repo_full_name configured")
+    if not pat_key_ref:
+        raise SystemPayloadSourceError(f"project {project_id} has no GitHub PAT key reference configured")
+
+    try:
+        pat = await key_vault.get_secret(str(pat_key_ref))
+    except Exception as exc:
+        raise SystemPayloadSourceError(f"failed to retrieve GitHub PAT from key vault: {exc}") from exc
+
+    if not pat:
+        raise SystemPayloadSourceError("GitHub PAT is empty or not found in key vault")
+
+    state = config.get("state", "open")
+    max_items = int(config.get("max_items", 10))
+    sort = config.get("sort", "updated")
+    direction = config.get("direction", "desc")
+
+    params: Dict[str, Any] = {
+        "state": state,
+        "sort": sort,
+        "direction": direction,
+        "per_page": min(max_items, 100),
+    }
+    if config.get("labels"):
+        params["labels"] = ",".join(config["labels"])
+
+    since_param = None
+    if config.get("since_timestamp"):
+        since_param = config["since_timestamp"]
+    elif config.get("since_hours"):
+        since_dt = datetime.now(timezone.utc) - timedelta(hours=int(config["since_hours"]))
+        since_param = since_dt.isoformat().replace("+00:00", "Z")
+
+    base_url = f"https://api.github.com/repos/{repo_full_name}/issues"
+    headers = {
+        "Authorization": f"Bearer {pat}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    import urllib.request
+    import urllib.parse
+
+    all_issues: list[Dict[str, Any]] = []
+    page = 1
+    per_page = min(max_items, 100)
+
+    while len(all_issues) < max_items:
+        current_params = dict(params)
+        current_params["page"] = str(page)
+        if since_param:
+            current_params["since"] = since_param
+        query_string = urllib.parse.urlencode(current_params)
+        full_url = f"{base_url}?{query_string}"
+
+        req = urllib.request.Request(full_url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                issues = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise SystemPayloadSourceError(f"GitHub repository not found: {repo_full_name}") from exc
+            if exc.code == 401:
+                raise SystemPayloadSourceError("GitHub PAT is invalid or lacks required permissions") from exc
+            if exc.code == 403:
+                remaining = exc.headers.get("X-RateLimit-Remaining")
+                if remaining == "0":
+                    reset_time = exc.headers.get("X-RateLimit-Reset")
+                    raise SystemPayloadSourceError(f"GitHub API rate limit exceeded. Resets at {reset_time}") from exc
+                raise SystemPayloadSourceError("GitHub API access forbidden - check PAT permissions") from exc
+            error_body = exc.read().decode("utf-8", "replace")[:500] if hasattr(exc, "read") else str(exc)
+            raise SystemPayloadSourceError(f"GitHub API error {exc.code}: {error_body}") from exc
+        except urllib.error.URLError as exc:
+            raise SystemPayloadSourceError(f"GitHub API connection failed: {exc}") from exc
+
+        if not issues:
+            break
+
+        config_labels = config.get("labels") or []
+        label_filter_mode = config.get("label_filter", "any")
+        config_label_set = set(lbl.lower() for lbl in config_labels) if config_labels else set()
+
+        for issue in issues:
+            if "pull_request" in issue:
+                continue
+
+            if config_labels:
+                issue_labels = set(
+                    lbl.get("name", "").lower()
+                    for lbl in issue.get("labels", [])
+                    if isinstance(lbl, dict)
+                )
+                if label_filter_mode == "all":
+                    if not config_label_set.issubset(issue_labels):
+                        continue
+                elif label_filter_mode == "none":
+                    if config_label_set.intersection(issue_labels):
+                        continue
+                else:
+                    if not config_label_set.intersection(issue_labels):
+                        continue
+
+            all_issues.append(issue)
+
+        if len(issues) < per_page:
+            break
+        page += 1
+
+        if len(all_issues) >= max_items:
+            break
+
+    issues_to_return = all_issues[:max_items]
+    issues_data = [
+        {
+            "number": issue.get("number"),
+            "title": issue.get("title"),
+            "body": issue.get("body") or "",
+            "html_url": issue.get("html_url"),
+            "state": issue.get("state"),
+            "labels": [lbl.get("name") for lbl in issue.get("labels", []) if isinstance(lbl, dict)],
+            "user": (issue.get("user") or {}).get("login"),
+            "created_at": issue.get("created_at"),
+            "updated_at": issue.get("updated_at"),
+        }
+        for issue in issues_to_return
+    ]
+
+    return {
+        "source": GITHUB_ISSUES_SOURCE,
+        "repo_full_name": repo_full_name,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "total_fetched": len(all_issues),
+        "returned_count": len(issues_data),
+        "issues": issues_data,
+    }
+
+
 async def materialize_system_schedule_payload(
     schedule: Dict[str, Any],
     *,
@@ -922,6 +1155,8 @@ async def materialize_system_schedule_payload(
     task_manager: Any,
     schedule_engine: Any,
     supervision_store: Any = None,
+    project_registry: Any = None,
+    key_vault: Any = None,
 ) -> Dict[str, Any]:
     """Return non-secret payload additions for an approved internal source."""
     configs = system_payload_source_configs(schedule)
@@ -938,6 +1173,8 @@ async def materialize_system_schedule_payload(
             task_manager=task_manager,
             schedule_engine=schedule_engine,
             supervision_store=supervision_store,
+            project_registry=project_registry,
+            key_vault=key_vault,
         )
         duplicate_fields = set(materialized).intersection(additions)
         if duplicate_fields:
@@ -958,6 +1195,8 @@ async def _materialize_system_payload_source(
     task_manager: Any,
     schedule_engine: Any,
     supervision_store: Any = None,
+    project_registry: Any = None,
+    key_vault: Any = None,
 ) -> Dict[str, Any]:
     if config["type"] == FLEET_HEALTH_SUMMARY_SOURCE:
         summary = await fleet_health_summary(
@@ -1003,5 +1242,10 @@ async def _materialize_system_payload_source(
         return {
             config["target_field"]: json.dumps(payload, sort_keys=True, separators=(",", ":")),
             **mapped_task_payload,
+        }
+    if config["type"] == GITHUB_ISSUES_SOURCE:
+        payload = await github_issues_payload(config, schedule, project_registry, key_vault)
+        return {
+            config["target_field"]: json.dumps(payload, sort_keys=True, separators=(",", ":")),
         }
     raise SystemPayloadSourceError(f"unsupported system_payload_source type: {config['type']}")
