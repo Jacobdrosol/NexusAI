@@ -3411,7 +3411,7 @@ def _select_task_node_override(task: Task, payload: Any) -> Dict[str, Any]:
 class TaskManager:
     _TERMINAL_TASK_STATUSES = {"completed", "failed", "retried", "cancelled"}
 
-    def __init__(
+def __init__(
         self,
         scheduler: Any,
         db_path: Optional[str] = None,
@@ -3419,6 +3419,7 @@ class TaskManager:
         orchestration_workspace_store: Optional[Any] = None,
         connection_resolver: Optional[Any] = None,
         supervision_store: Optional[Any] = None,
+        orchestration_run_store: Optional[Any] = None,
     ) -> None:
         if orchestration_workspace_store is None:
             from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
@@ -3430,7 +3431,8 @@ class TaskManager:
         self._scheduler = scheduler
         self._bot_registry = bot_registry
         self._connection_resolver = connection_resolver
-        self._supervision_store = supervision_store
+self._supervision_store = supervision_store
+        self._orchestration_run_store = orchestration_run_store
         self._project_registry = getattr(scheduler, "project_registry", None)
         self._orchestration_workspace_store = orchestration_workspace_store
         self._db_ready = False
@@ -8071,6 +8073,43 @@ class TaskManager:
         is_plan_managed_orchestrated = source == "chat_assign" or (
             source == "auto_retry" and is_top_level_assignment_task
         )
+
+        # Plan approval gate: if the root PM task has plan_approval_required in its
+        # payload and it completed successfully, hold trigger dispatch for operator
+        # approval before child tasks are created.
+        if (
+            is_plan_managed_orchestrated
+            and task.status == "completed"
+            and isinstance(task.payload, dict)
+            and task.payload.get("plan_approval_required")
+            and is_top_level_assignment_task
+        ):
+            logger.info(
+                "[TRIGGER] Holding triggers for task=%s — plan_pending_approval (orchestration=%s)",
+                task.id,
+                orchestration_id,
+            )
+            if self._orchestration_run_store is not None:
+                try:
+                    run = await self._orchestration_run_store.get_run_by_orchestration(orchestration_id)
+                    if run is not None:
+                        run_id = str(run.get("id") or "")
+                        await self._orchestration_run_store.update_orch_state(
+                            run_id, "plan_pending_approval",
+                            reason="plan_approval_required",
+                            actor="system",
+                        )
+                        await self._orchestration_run_store.update_run_metadata(
+                            run_id,
+                            {
+                                "plan_approval_required": True,
+                                "plan_approval_root_task_id": task.id,
+                                "plan_approval_plan": task.result if isinstance(task.result, dict) else {"result": task.result},
+                            },
+                        )
+                except Exception:
+                    logger.warning("Failed to set plan_pending_approval state for orchestration %s", orchestration_id, exc_info=True)
+            return
 
         trigger_depth = int(metadata.trigger_depth or 0)
         max_depth = self._trigger_depth_limit(metadata)

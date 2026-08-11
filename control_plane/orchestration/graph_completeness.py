@@ -25,6 +25,7 @@ ORCH_STATES = {
     "blocked",
     "stalled",
     "needs_operator_input",
+    "plan_pending_approval",
     "failed_retryable",
     "failed_terminal",
     "completed",
