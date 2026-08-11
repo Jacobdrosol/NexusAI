@@ -59,6 +59,13 @@ class ConfigurePRReviewRequest(BaseModel):
     bot_id: Optional[str] = None
 
 
+class ConfigureIssueBridgeRequest(BaseModel):
+    enabled: bool = True
+    bot_id: Optional[str] = None
+    label_filter: Optional[List[str]] = None
+    require_approval: bool = True
+
+
 class UpdateCloudContextPolicyRequest(BaseModel):
     provider_policies: Dict[str, str] = Field(default_factory=dict)
     bot_overrides: Dict[str, Dict[str, str]] = Field(default_factory=dict)
@@ -2689,11 +2696,56 @@ async def ingest_github_webhook(project_id: str, request: Request) -> dict:
             metadata=TaskMetadata(source="github_pr_review", project_id=project_id),
         )
         review_task_id = review_task.id
+    issue_task_id = None
+    issue_cfg = github_cfg.get("issue_bridge") if isinstance(github_cfg.get("issue_bridge"), dict) else {}
+    if (
+        event_type == "issues"
+        and bool(issue_cfg.get("enabled"))
+        and issue_cfg.get("bot_id")
+        and isinstance(payload, dict)
+        and str(action or "").lower() in {"opened", "reopened", "edited"}
+    ):
+        issue = payload.get("issue") if isinstance(payload.get("issue"), dict) else {}
+        label_filter = issue_cfg.get("label_filter") if isinstance(issue_cfg.get("label_filter"), list) else []
+        issue_labels = []
+        if isinstance(issue.get("labels"), list):
+            issue_labels = [str(lbl.get("name") or "").lower() for lbl in issue.get("labels") if isinstance(lbl, dict)]
+        if label_filter and not any(str(lbl).lower() in issue_labels for lbl in label_filter):
+            pass
+        else:
+            task_manager = request.app.state.task_manager
+            issue_task = await task_manager.create_task(
+                bot_id=str(issue_cfg.get("bot_id")),
+                payload={
+                    "source": "github_issue",
+                    "project_id": project_id,
+                    "repo_full_name": repo,
+                    "action": action,
+                    "issue": {
+                        "number": issue.get("number"),
+                        "title": issue.get("title"),
+                        "body": issue.get("body"),
+                        "html_url": issue.get("html_url"),
+                        "state": issue.get("state"),
+                        "labels": [lbl.get("name") for lbl in issue.get("labels") if isinstance(lbl, dict) and lbl.get("name")],
+                        "user": (issue.get("user") or {}).get("login") if isinstance(issue.get("user"), dict) else None,
+                    },
+                },
+                metadata=TaskMetadata(source="github_issue", project_id=project_id),
+            )
+            issue_task_id = issue_task.id
+            if bool(issue_cfg.get("require_approval", True)):
+                await task_manager.set_work_dispatch_hold(
+                    project_id=project_id,
+                    reason="github_issue_pending_approval",
+                    created_by="github_issue_bridge",
+                )
     return {
         "status": "accepted",
         "event_id": event["id"],
         "event_type": event_type,
         "review_task_id": review_task_id,
+        "issue_task_id": issue_task_id,
     }
 
 
@@ -3087,6 +3139,41 @@ async def configure_github_pr_review(
         details={"enabled": review_cfg["enabled"], "bot_id": review_cfg["bot_id"]},
     )
     return {"status": "ok", "project_id": project_id, "pr_review": review_cfg}
+
+
+@router.post("/{project_id}/github/issue-bridge/config")
+async def configure_github_issue_bridge(
+    project_id: str,
+    request: Request,
+    body: ConfigureIssueBridgeRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    if body.enabled and not (body.bot_id or "").strip():
+        raise HTTPException(status_code=400, detail="bot_id is required when issue bridge is enabled")
+
+    issue_cfg = {
+        "enabled": bool(body.enabled),
+        "bot_id": (body.bot_id or "").strip() or None,
+        "label_filter": [str(lbl).strip() for lbl in (body.label_filter or []) if str(lbl).strip()] or None,
+        "require_approval": bool(body.require_approval),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    updated = project.model_copy(
+        update={"settings_overrides": _merge_settings(project, {"github": {"issue_bridge": issue_cfg}})}
+    )
+    await project_registry.update(project_id, updated)
+    await record_audit_event(
+        request,
+        action="projects.github.issue_bridge.configure",
+        resource=f"project:{project_id}",
+        details={"enabled": issue_cfg["enabled"], "bot_id": issue_cfg["bot_id"], "require_approval": issue_cfg["require_approval"]},
+    )
+    return {"status": "ok", "project_id": project_id, "issue_bridge": issue_cfg}
 
 
 @router.get("/{project_id}/cloud-context-policy")
