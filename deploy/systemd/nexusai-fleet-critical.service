@@ -1,0 +1,19 @@
+[Unit]
+Description=NexusAI critical worker fleet (always-restart workers only)
+Requires=nexusai.service
+After=nexusai.service docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Only starts workers with restart_policy "always" (critical workers).
+# Other workers (auto/manual) are started manually via:
+#   python /opt/NexusAI/scripts/nexus_fleet.py start --group auto
+#   python /opt/NexusAI/scripts/nexus_fleet.py start --worker <id>
+RemainAfterExit=yes
+TimeoutStartSec=10min
+ExecStart=/usr/bin/python3 /opt/NexusAI/scripts/nexus_fleet.py start --group critical
+ExecStop=/usr/bin/python3 /opt/NexusAI/scripts/nexus_fleet.py stop --group critical
+
+[Install]
+WantedBy=multi-user.target

@@ -890,3 +890,93 @@ def test_render_worker_fleet_rejects_cli_command_for_an_undeclared_tool(tmp_path
             tmp_path / "runtime",
             {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
         )
+
+
+def test_render_worker_fleet_default_restart_policy_is_unless_stopped(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    out = tmp_path / "runtime"
+
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    compose = yaml.safe_load((out / "docker-compose.worker-node.generated.yml").read_text())
+    assert compose["services"]["worker-content"]["restart"] == "unless-stopped"
+    worker_cfg = yaml.safe_load((out / "workers" / "content-repair-01.yaml").read_text())
+    assert worker_cfg["restart_policy"] == "auto"
+
+
+def test_render_worker_fleet_fleet_level_restart_policy_manual(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["fleet"]["restart_policy"] = "manual"
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+    out = tmp_path / "runtime"
+
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    compose = yaml.safe_load((out / "docker-compose.worker-node.generated.yml").read_text())
+    assert compose["services"]["worker-content"]["restart"] == "no"
+    worker_cfg = yaml.safe_load((out / "workers" / "content-repair-01.yaml").read_text())
+    assert worker_cfg["restart_policy"] == "manual"
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["workers"][0]["restart_policy"] == "manual"
+
+
+def test_render_worker_fleet_worker_level_restart_policy_overrides_fleet(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["fleet"]["restart_policy"] = "manual"
+    profile_data["workers"][0]["restart_policy"] = "always"
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+    out = tmp_path / "runtime"
+
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    compose = yaml.safe_load((out / "docker-compose.worker-node.generated.yml").read_text())
+    assert compose["services"]["worker-content"]["restart"] == "always"
+    worker_cfg = yaml.safe_load((out / "workers" / "content-repair-01.yaml").read_text())
+    assert worker_cfg["restart_policy"] == "always"
+
+
+def test_render_worker_fleet_rejects_invalid_fleet_restart_policy(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["fleet"]["restart_policy"] = "on-failure"
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="fleet.restart_policy must be one of"):
+        renderer.render(
+            profile,
+            tmp_path / "runtime",
+            {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+        )
+
+
+def test_render_worker_fleet_rejects_invalid_worker_restart_policy(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["workers"][0]["restart_policy"] = "unless-stopped"
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="restart_policy must be one of"):
+        renderer.render(
+            profile,
+            tmp_path / "runtime",
+            {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+        )

@@ -56,3 +56,5 @@ config/bots/*.yaml
 config/workers/*.yaml
 !config/workers/example_worker.yaml
 !config/workers/local_worker.yaml
+.aider*
+tmp-*

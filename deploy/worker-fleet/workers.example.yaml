@@ -25,6 +25,12 @@ fleet:
   backend_params:
     temperature: 0.2
     max_tokens: 1200
+  # Default restart policy for all workers in this fleet.
+  #   auto   -> Docker "unless-stopped" (restarts on reboot unless explicitly stopped)
+  #   always -> Docker "always" (restarts unconditionally, even after explicit stop)
+  #   manual -> Docker "no" (never restarts automatically; must be started manually)
+  # Individual workers can override this with their own restart_policy field.
+  restart_policy: auto
 
 workers:
   - id: example-qc-reader-01
@@ -50,3 +56,6 @@ workers:
       cli_tools: []
     bot:
       id: example-qc-reader-bot
+    # Override the fleet-level restart_policy for this worker.
+    # One of: auto, always, manual
+    restart_policy: auto

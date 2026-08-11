@@ -47,6 +47,17 @@ _DEFAULT_RESOURCE_LIMITS = {
 _MEMORY_LIMIT = re.compile(r"^([1-9][0-9]*)(b|k|kb|kib|m|mb|mib|g|gb|gib)?$", re.IGNORECASE)
 _COMPOSE_PROJECT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
+# Restart policy modes for fleet workers.
+#   auto   -> Docker "unless-stopped" (restarts on reboot unless explicitly stopped)
+#   always -> Docker "always" (restarts unconditionally, even after explicit stop)
+#   manual -> Docker "no" (never restarts automatically; must be started manually)
+_RESTART_POLICIES: dict[str, str] = {
+    "auto": "unless-stopped",
+    "always": "always",
+    "manual": "no",
+}
+_DEFAULT_RESTART_POLICY = "auto"
+
 
 def _read_env_file(path: Path) -> dict[str, str]:
     if not path.exists():
@@ -336,6 +347,32 @@ def _disabled_worker_compose_profile(fleet: dict[str, Any]) -> str:
     return value
 
 
+def _fleet_restart_policy_default(fleet: dict[str, Any]) -> str:
+    value = str(fleet.get("restart_policy", _DEFAULT_RESTART_POLICY) or "").strip().lower()
+    if value not in _RESTART_POLICIES:
+        raise ValueError(
+            f"fleet.restart_policy must be one of {sorted(_RESTART_POLICIES)}, got '{value}'"
+        )
+    return value
+
+
+def _worker_restart_policy(worker: dict[str, Any], fleet: dict[str, Any]) -> str:
+    worker_id = str(worker.get("id") or worker.get("name") or "worker").strip()
+    default = _fleet_restart_policy_default(fleet)
+    raw = str(worker.get("restart_policy") or "").strip().lower()
+    if not raw:
+        return default
+    if raw not in _RESTART_POLICIES:
+        raise ValueError(
+            f"worker {worker_id} restart_policy must be one of {sorted(_RESTART_POLICIES)}, got '{raw}'"
+        )
+    return raw
+
+
+def _docker_restart_value(policy: str) -> str:
+    return _RESTART_POLICIES[policy]
+
+
 def _validated_resource_limits(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any]:
     worker_id = str(worker.get("id") or worker.get("name") or "worker").strip()
     limits = dict(_DEFAULT_RESOURCE_LIMITS)
@@ -561,6 +598,7 @@ def _worker_config(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, A
         "capabilities": capabilities,
         "metrics": {},
         "runtime_limits": _worker_runtime_limits(worker, fleet),
+        "restart_policy": _worker_restart_policy(worker, fleet),
     }
     tooling: dict[str, Any] = {}
     if cli_tools:
@@ -1024,9 +1062,10 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
             profile_base=profile_path.parent,
             worker_node_source=worker_node_source,
         )
+        resolved_restart_policy = _worker_restart_policy(worker, fleet)
         service_config: dict[str, Any] = {
             "image": image,
-            "restart": "unless-stopped",
+            "restart": _docker_restart_value(resolved_restart_policy),
             **_validated_resource_limits(worker, fleet),
             "env_file": [env_path.resolve().as_posix()],
             "volumes": [f"{config_path.resolve().as_posix()}:/app/worker.yaml:ro"],
@@ -1066,6 +1105,7 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
                 "name": worker_config["name"],
                 "service": service,
                 "bot_id": bot_payload["id"],
+                "restart_policy": resolved_restart_policy,
             }
         )
 
