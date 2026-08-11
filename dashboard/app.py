@@ -148,8 +148,9 @@ def create_app() -> Flask:
     from dashboard.routes.projects import bp as projects_bp
     from dashboard.routes.schedules import bp as schedules_bp
     from dashboard.routes.supervision import bp as supervision_bp
-    from dashboard.routes.tasks import bp as tasks_bp
-    from dashboard.routes.users import bp as users_bp
+from dashboard.routes.tasks import bp as tasks_bp
+from dashboard.routes.ticket_sources import bp as ticket_sources_bp
+from dashboard.routes.users import bp as users_bp
     from dashboard.routes.vault import bp as vault_bp
     from dashboard.routes.work import bp as work_bp
     from dashboard.routes.workers import bp as workers_bp
@@ -170,6 +171,7 @@ def create_app() -> Flask:
     app.register_blueprint(memory_bp)
     app.register_blueprint(connections_bp)
     app.register_blueprint(vault_bp)
+    app.register_blueprint(ticket_sources_bp)
     app.register_blueprint(users_bp)
     app.register_blueprint(events_bp)
     app.register_blueprint(settings_bp)

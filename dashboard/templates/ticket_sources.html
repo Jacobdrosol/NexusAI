@@ -1,0 +1,387 @@
+{% extends "base.html" %}
+{% block title %}Ticket Sources – {{ project_id }}{% endblock %}
+{% block content %}
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.75rem;margin-bottom:1.5rem;">
+  <div>
+    <h1>Ticket Sources</h1>
+    <p class="mini-note">Connect external issue trackers and ticket feeds to project <code>{{ project_id }}</code></p>
+  </div>
+  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+    <a href="{{ url_for('projects.project_detail_page', project_id=project_id) }}" class="btn btn-sm">Back to Project</a>
+    <button class="btn btn-sm btn-primary" onclick="showAddSourceModal()">+ Add Source</button>
+  </div>
+</div>
+
+<div id="ts-state" class="state-info" style="margin-bottom:0.75rem;">Loading sources…</div>
+
+<div id="sources-list" style="margin-bottom:2rem;">
+  {% if sources %}
+  <table class="data-table" style="width:100%;">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Status</th>
+        <th>Items</th>
+        <th>Last Polled</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sources %}
+      <tr id="source-row-{{ s.id }}">
+        <td><strong>{{ s.name }}</strong>{% if not s.enabled %} <span class="badge badge-muted">disabled</span>{% endif %}</td>
+        <td><code>{{ s.source_type }}</code></td>
+        <td>
+          {% if s.last_poll_status == 'ok' %}
+            <span class="badge badge-ok">OK</span>
+          {% elif s.last_poll_status == 'error' %}
+            <span class="badge badge-error" title="{{ s.last_poll_error or '' }}">{{ s.last_poll_error[:60] if s.last_poll_error else 'Error' }}</span>
+          {% else %}
+            <span class="badge badge-muted">Not polled</span>
+          {% endif %}
+        </td>
+        <td>{{ s.item_count | default(0) }}</td>
+        <td>{{ s.last_polled_at[:19].replace('T',' ') if s.last_polled_at else '—' }}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-sm" onclick="pollSource('{{ s.id }}')">Poll</button>
+          <button class="btn btn-sm" onclick="showItems('{{ s.id }}', '{{ s.name | e }}')">Items</button>
+          <button class="btn btn-sm" onclick="toggleSource('{{ s.id }}', {{ (not s.enabled) | tojson }})">{% if s.enabled %}Disable{% else %}Enable{% endif %}</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteSource('{{ s.id }}', '{{ s.name | e }}')">Delete</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state" style="text-align:center;padding:3rem 1rem;">
+    <p style="margin-bottom:0.5rem;color:var(--text-muted);">No ticket sources configured yet.</p>
+    <p style="font-size:0.85rem;color:var(--text-muted);">Click <strong>+ Add Source</strong> to connect a GitHub repo, custom HTTP endpoint, Jira, or Asana.</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Add Source Modal -->
+<div id="modal-add-source" class="modal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideAddSourceModal()"></div>
+  <div class="modal-body" style="max-width:640px;">
+    <h2>Add Ticket Source</h2>
+
+    <div id="add-source-state" class="state-info" style="margin-bottom:0.5rem;display:none;"></div>
+
+    <div style="margin-bottom:0.75rem;">
+      <label>Source Name <span style="color:var(--accent);">*</span></label>
+      <input type="text" id="ts-name" placeholder="e.g. NexusAI GitHub Issues" style="width:100%;" />
+    </div>
+
+    <div style="margin-bottom:0.75rem;">
+      <label>Source Type <span style="color:var(--accent);">*</span></label>
+      <select id="ts-type" onchange="onTypeChange()">
+        <option value="github_issues">GitHub Issues</option>
+        <option value="generic_http">Custom HTTP Endpoint</option>
+        <option value="jira">Jira</option>
+        <option value="asana">Asana</option>
+      </select>
+    </div>
+
+    <!-- GitHub Issues config -->
+    <div id="config-github_issues" class="source-config-panel">
+      <div style="margin-bottom:0.5rem;">
+        <label>Repository (owner/repo) <span style="color:var(--accent);">*</span></label>
+        <input type="text" id="gh-repo" placeholder="Jacobdrosol/NexusAI" style="width:100%;" />
+      </div>
+      <div style="display:flex;gap:0.75rem;margin-bottom:0.5rem;">
+        <div style="flex:1;">
+          <label>State</label>
+          <select id="gh-state"><option value="open">open</option><option value="closed">closed</option><option value="all">all</option></select>
+        </div>
+        <div style="flex:1;">
+          <label>Max Items</label>
+          <input type="number" id="gh-max-items" value="25" min="1" max="100" style="width:100%;" />
+        </div>
+        <div style="flex:1;">
+          <label>Since Hours</label>
+          <input type="number" id="gh-since-hours" value="24" min="1" max="8760" style="width:100%;" />
+        </div>
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>Labels (comma-separated, optional)</label>
+        <input type="text" id="gh-labels" placeholder="ai-task,bug" style="width:100%;" />
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>GitHub PAT <span style="color:var(--accent);">*</span></label>
+        <input type="password" id="gh-pat" placeholder="ghp_..." style="width:100%;" />
+      </div>
+    </div>
+
+    <!-- Generic HTTP config -->
+    <div id="config-generic_http" class="source-config-panel" style="display:none;">
+      <div style="margin-bottom:0.5rem;">
+        <label>Endpoint URL <span style="color:var(--accent);">*</span></label>
+        <input type="text" id="http-url" placeholder="https://yoursite.com/api/tickets" style="width:100%;" />
+      </div>
+      <div style="display:flex;gap:0.75rem;margin-bottom:0.5rem;">
+        <div style="flex:1;">
+          <label>Method</label>
+          <select id="http-method"><option value="GET">GET</option><option value="POST">POST</option></select>
+        </div>
+        <div style="flex:1;">
+          <label>Max Items</label>
+          <input type="number" id="http-max-items" value="25" min="1" max="100" style="width:100%;" />
+        </div>
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>Results Path (dot-notation, e.g. "data.tickets")</label>
+        <input type="text" id="http-results-path" placeholder="tickets" style="width:100%;" />
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>Field Mapping (JSON, optional)</label>
+        <textarea id="http-field-map" rows="4" style="width:100%;font-family:monospace;font-size:0.85rem;" placeholder='{"id":"ticket_id","title":"subject","body":"description","url":"link","state":"status","labels":"tags","author":"reporter"}'></textarea>
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>Auth Token (optional)</label>
+        <input type="password" id="http-token" placeholder="Bearer token" style="width:100%;" />
+      </div>
+    </div>
+
+    <!-- Jira config -->
+    <div id="config-jira" class="source-config-panel" style="display:none;">
+      <div style="margin-bottom:0.5rem;">
+        <label>Jira Base URL <span style="color:var(--accent);">*</span></label>
+        <input type="text" id="jira-url" placeholder="https://yourorg.atlassian.net" style="width:100%;" />
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>JQL Query</label>
+        <input type="text" id="jira-jql" placeholder='project = "NX" AND status = "To Do"' style="width:100%;" />
+      </div>
+      <div style="display:flex;gap:0.75rem;margin-bottom:0.5rem;">
+        <div style="flex:1;">
+          <label>Email</label>
+          <input type="text" id="jira-email" placeholder="you@example.com" style="width:100%;" />
+        </div>
+        <div style="flex:1;">
+          <label>API Token <span style="color:var(--accent);">*</span></label>
+          <input type="password" id="jira-token" placeholder="ATATT3XF..." style="width:100%;" />
+        </div>
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>Max Items</label>
+        <input type="number" id="jira-max-items" value="25" min="1" max="100" style="width:100%;" />
+      </div>
+    </div>
+
+    <!-- Asana config -->
+    <div id="config-asana" class="source-config-panel" style="display:none;">
+      <div style="margin-bottom:0.5rem;">
+        <label>Asana Project ID <span style="color:var(--accent);">*</span></label>
+        <input type="text" id="asana-project-id" placeholder="1234567890" style="width:100%;" />
+      </div>
+      <div style="display:flex;gap:0.75rem;margin-bottom:0.5rem;">
+        <div style="flex:1;">
+          <label>Max Items</label>
+          <input type="number" id="asana-max-items" value="25" min="1" max="100" style="width:100%;" />
+        </div>
+        <div style="flex:1;">
+          <label>Completed</label>
+          <select id="asana-completed"><option value="false">Open only</option><option value="true">Include completed</option></select>
+        </div>
+      </div>
+      <div style="margin-bottom:0.5rem;">
+        <label>Asana Token <span style="color:var(--accent);">*</span></label>
+        <input type="password" id="asana-token" placeholder="2/..." style="width:100%;" />
+      </div>
+    </div>
+
+    <div style="margin-top:1rem;display:flex;justify-content:flex-end;gap:0.5rem;">
+      <button class="btn" onclick="hideAddSourceModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="createSource()">Create Source</button>
+    </div>
+  </div>
+</div>
+
+<!-- Items Modal -->
+<div id="modal-items" class="modal" style="display:none;">
+  <div class="modal-backdrop" onclick="hideItemsModal()"></div>
+  <div class="modal-body" style="max-width:900px;">
+    <h2 id="items-title">Items</h2>
+    <div id="items-state" class="state-info" style="margin-bottom:0.5rem;">Loading…</div>
+    <div id="items-content" style="max-height:60vh;overflow:auto;"></div>
+    <div style="margin-top:1rem;display:flex;justify-content:flex-end;">
+      <button class="btn" onclick="hideItemsModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PROJECT_ID = {{ project_id | tojson }};
+
+function getCsrf() {
+  const m = document.cookie.match(/(?:^|;\s*)csrf_access_token=([^;]+)/);
+  return m ? m[1] : '';
+}
+
+function hideModal(id) { document.getElementById(id).style.display = 'none'; }
+function showModal(id) { document.getElementById(id).style.display = 'flex'; }
+
+function showAddSourceModal() {
+  document.getElementById('ts-name').value = '';
+  document.getElementById('ts-type').value = 'github_issues';
+  onTypeChange();
+  document.getElementById('add-source-state').style.display = 'none';
+  showModal('modal-add-source');
+}
+function hideAddSourceModal() { hideModal('modal-add-source'); }
+
+function onTypeChange() {
+  const type = document.getElementById('ts-type').value;
+  document.querySelectorAll('.source-config-panel').forEach(el => el.style.display = 'none');
+  const panel = document.getElementById('config-' + type);
+  if (panel) panel.style.display = 'block';
+}
+
+function setAddState(cls, text) {
+  const el = document.getElementById('add-source-state');
+  el.className = cls;
+  el.textContent = text;
+  el.style.display = 'block';
+}
+
+function buildConfig() {
+  const type = document.getElementById('ts-type').value;
+  let config = {};
+  let credential = null;
+
+  if (type === 'github_issues') {
+    config.repo_full_name = document.getElementById('gh-repo').value.trim();
+    config.state = document.getElementById('gh-state').value;
+    config.max_items = parseInt(document.getElementById('gh-max-items').value) || 25;
+    config.since_hours = parseInt(document.getElementById('gh-since-hours').value) || 24;
+    const labels = document.getElementById('gh-labels').value.trim();
+    if (labels) config.labels = labels.split(',').map(s => s.trim()).filter(Boolean);
+    credential = document.getElementById('gh-pat').value.trim();
+  } else if (type === 'generic_http') {
+    config.url = document.getElementById('http-url').value.trim();
+    config.method = document.getElementById('http-method').value;
+    config.max_items = parseInt(document.getElementById('http-max-items').value) || 25;
+    config.results_path = document.getElementById('http-results-path').value.trim();
+    const fm = document.getElementById('http-field-map').value.trim();
+    if (fm) { try { config.field_map = JSON.parse(fm); } catch(e) { alert('Invalid field map JSON'); return null; } }
+    credential = document.getElementById('http-token').value.trim() || null;
+  } else if (type === 'jira') {
+    config.base_url = document.getElementById('jira-url').value.trim();
+    config.jql = document.getElementById('jira-jql').value.trim();
+    config.email = document.getElementById('jira-email').value.trim();
+    config.max_items = parseInt(document.getElementById('jira-max-items').value) || 25;
+    credential = document.getElementById('jira-token').value.trim();
+  } else if (type === 'asana') {
+    config.project_id = document.getElementById('asana-project-id').value.trim();
+    config.max_items = parseInt(document.getElementById('asana-max-items').value) || 25;
+    config.completed = document.getElementById('asana-completed').value === 'true';
+    credential = document.getElementById('asana-token').value.trim();
+  }
+  return { type, config, credential };
+}
+
+async function createSource() {
+  const name = document.getElementById('ts-name').value.trim();
+  if (!name) { alert('Name is required.'); return; }
+  const built = buildConfig();
+  if (!built) return;
+  const { type, config, credential } = built;
+
+  setAddState('state-loading', 'Creating source…');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-sources', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body: JSON.stringify({ name, source_type: type, config, credential_value: credential, enabled: true }),
+  });
+  if (!res.ok) { const d = await res.json().catch(()=>({})); setAddState('state-error', d.error || 'Create failed'); return; }
+  setAddState('state-ok', 'Source created. Reloading…');
+  setTimeout(() => window.location.reload(), 800);
+}
+
+async function pollSource(sourceId) {
+  if (!confirm('Poll this source now?')) return;
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = 'Polling…';
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-sources/' + encodeURIComponent(sourceId) + '/poll', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body: '{}',
+  });
+  btn.disabled = false; btn.textContent = 'Poll';
+  if (!res.ok) { const d = await res.json().catch(()=>({})); alert(d.error || 'Poll failed'); return; }
+  const data = await res.json();
+  alert('Polled OK: ' + data.total_fetched + ' items (' + data.new_count + ' new, ' + data.updated_count + ' updated)');
+  window.location.reload();
+}
+
+async function toggleSource(sourceId, enable) {
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-sources/' + encodeURIComponent(sourceId), {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body: JSON.stringify({ enabled: enable }),
+  });
+  if (!res.ok) { const d = await res.json().catch(()=>({})); alert(d.error || 'Update failed'); return; }
+  window.location.reload();
+}
+
+async function deleteSource(sourceId, name) {
+  if (!confirm('Delete source "' + name + '"? This will also remove all tracked items.')) return;
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-sources/' + encodeURIComponent(sourceId), {
+    method: 'DELETE',
+    headers: {'X-CSRFToken':getCsrf()},
+  });
+  if (!res.ok) { const d = await res.json().catch(()=>({})); alert(d.error || 'Delete failed'); return; }
+  window.location.reload();
+}
+
+// Items modal
+function hideItemsModal() { hideModal('modal-items'); }
+
+async function showItems(sourceId, sourceName) {
+  document.getElementById('items-title').textContent = 'Items – ' + sourceName;
+  document.getElementById('items-state').className = 'state-loading';
+  document.getElementById('items-state').textContent = 'Loading…';
+  document.getElementById('items-content').innerHTML = '';
+  showModal('modal-items');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-sources/' + encodeURIComponent(sourceId) + '/items?limit=100');
+  if (!res.ok) { document.getElementById('items-state').className = 'state-error'; document.getElementById('items-state').textContent = 'Failed to load items'; return; }
+  const data = await res.json();
+  const items = data.items || [];
+  document.getElementById('items-state').className = 'state-ok';
+  document.getElementById('items-state').textContent = items.length + ' items';
+
+  if (!items.length) {
+    document.getElementById('items-content').innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:2rem;">No items fetched yet. Click <strong>Poll</strong> to fetch.</p>';
+    return;
+  }
+
+  let html = '<table class="data-table" style="width:100%;"><thead><tr><th>#</th><th>Title</th><th>State</th><th>Labels</th><th>Task</th><th>Updated</th></tr></thead><tbody>';
+  for (const item of items) {
+    const labels = (item.labels || []).map(l => '<span class="badge badge-muted">' + esc(l) + '</span>').join(' ');
+    const taskLink = item.task_id ? '<a href="/tasks/' + encodeURIComponent(item.task_id) + '">Linked</a>' : '<span style="color:var(--text-muted);">—</span>';
+    html += '<tr>'
+      + '<td><code>' + esc(item.external_id) + '</code></td>'
+      + '<td>' + (item.url ? '<a href="' + esc(item.url) + '" target="_blank">' + esc(item.title) + '</a>' : esc(item.title)) + '</td>'
+      + '<td>' + esc(item.state || '—') + '</td>'
+      + '<td>' + labels + '</td>'
+      + '<td>' + taskLink + '</td>'
+      + '<td>' + esc((item.updated_at || '').slice(0,19).replace('T',' ')) + '</td>'
+      + '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('items-content').innerHTML = html;
+}
+
+function esc(text) {
+  if (text == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(text);
+  return d.innerHTML;
+}
+</script>
+{% endblock %}

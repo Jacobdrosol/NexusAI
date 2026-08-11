@@ -26,6 +26,7 @@ from control_plane.api import (
     schedules,
     supervision,
     tasks,
+    ticket_sources,
     vault,
     workers,
 )
@@ -61,6 +62,7 @@ from control_plane.schedule_safety import (
 from control_plane.schedule_payload_sources import materialize_system_schedule_payload
 from control_plane.supervision_store import SupervisionStore
 from control_plane.task_manager.task_manager import TaskManager
+from control_plane.tickets.ticket_source_store import TicketSourceStore
 from control_plane.vault.mcp_broker import MCPBroker
 from control_plane.vault.vault_manager import VaultManager
 from control_plane.worker_probe import probe_worker
@@ -102,6 +104,7 @@ async def lifespan(app: FastAPI):
     orchestration_workspace_store = OrchestrationWorkspaceStore()
     worker_probe_store = WorkerProbeStore()
     supervision_store = SupervisionStore()
+    ticket_source_store = TicketSourceStore()
 
     # Load from YAML configs
     workers_dir = cp_cfg.get("workers_config_dir", "config/workers")
@@ -226,6 +229,7 @@ async def lifespan(app: FastAPI):
     app.state.orchestration_workspace_store = orchestration_workspace_store
     app.state.worker_probe_store = worker_probe_store
     app.state.supervision_store = supervision_store
+    app.state.ticket_source_store = ticket_source_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator
@@ -354,6 +358,7 @@ def create_app() -> FastAPI:
     app.include_router(bots.router)
     app.include_router(workers.router)
     app.include_router(projects.router)
+    app.include_router(ticket_sources.router)
     app.include_router(keys.router)
     app.include_router(models_catalog.router)
     app.include_router(chat.router)

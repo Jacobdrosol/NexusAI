@@ -1078,6 +1078,89 @@ class CPClient:
     def list_vault_namespaces(self) -> Optional[List[str]]:
         return self._get("/v1/vault/namespaces")
 
+    # ------------------------------------------------------------------
+    #  Ticket sources
+    # ------------------------------------------------------------------
+
+    def list_ticket_sources(self, project_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/ticket-sources")
+
+    def create_ticket_source(
+        self,
+        project_id: str,
+        *,
+        name: str,
+        source_type: str,
+        config: Optional[Dict[str, Any]] = None,
+        credential_value: Optional[str] = None,
+        credential_key_ref: Optional[str] = None,
+        enabled: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {
+            "name": name,
+            "source_type": source_type,
+            "enabled": enabled,
+        }
+        if config:
+            body["config"] = config
+        if credential_value:
+            body["credential_value"] = credential_value
+        if credential_key_ref:
+            body["credential_key_ref"] = credential_key_ref
+        return self._post(f"/v1/projects/{project_id}/ticket-sources", body)
+
+    def get_ticket_source(self, project_id: str, source_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/ticket-sources/{source_id}")
+
+    def update_ticket_source(
+        self,
+        project_id: str,
+        source_id: str,
+        *,
+        name: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+        credential_value: Optional[str] = None,
+        credential_key_ref: Optional[str] = None,
+        enabled: Optional[bool] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {}
+        if name is not None:
+            body["name"] = name
+        if config is not None:
+            body["config"] = config
+        if credential_value is not None:
+            body["credential_value"] = credential_value
+        if credential_key_ref is not None:
+            body["credential_key_ref"] = credential_key_ref
+        if enabled is not None:
+            body["enabled"] = enabled
+        return self._request("PATCH", f"/v1/projects/{project_id}/ticket-sources/{source_id}", json=body)
+
+    def delete_ticket_source(self, project_id: str, source_id: str) -> Optional[Dict[str, Any]]:
+        return self._request("DELETE", f"/v1/projects/{project_id}/ticket-sources/{source_id}")
+
+    def poll_ticket_source(
+        self, project_id: str, source_id: str, max_items: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        body = {}
+        if max_items:
+            body["max_items"] = max_items
+        return self._post(f"/v1/projects/{project_id}/ticket-sources/{source_id}/poll", body or {})
+
+    def list_ticket_source_items(
+        self,
+        project_id: str,
+        source_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        unlinked_only: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        params = f"?limit={limit}&offset={offset}"
+        if unlinked_only:
+            params += "&unlinked_only=true"
+        return self._get(f"/v1/projects/{project_id}/ticket-sources/{source_id}/items{params}")
+
 
 _client: Optional[CPClient] = None
 
