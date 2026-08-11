@@ -135,12 +135,14 @@ async def lifespan(app: FastAPI):
         browser_action_approval_store=browser_action_approval_store,
         connection_action_approval_store=connection_action_approval_store,
     )
+    orchestration_run_store = OrchestrationRunStore()
     task_manager = TaskManager(
         scheduler,
         bot_registry=bot_registry,
         orchestration_workspace_store=orchestration_workspace_store,
         connection_resolver=connection_resolver,
         supervision_store=supervision_store,
+        orchestration_run_store=orchestration_run_store,
     )
     pm_orchestrator = PMOrchestrator(
         bot_registry=bot_registry,
@@ -149,7 +151,6 @@ async def lifespan(app: FastAPI):
         chat_manager=chat_manager,
         orchestration_workspace_store=orchestration_workspace_store,
     )
-    orchestration_run_store = OrchestrationRunStore()
     orchestration_template_store = _OrchTemplateStore() if _HAS_TEMPLATE_STORE else None
     assignment_service = AssignmentService(
         chat_manager=chat_manager,

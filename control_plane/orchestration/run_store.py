@@ -568,6 +568,36 @@ class OrchestrationRunStore:
             "reason": reason,
         }
 
+    async def update_run_metadata(
+        self,
+        run_id: str,
+        metadata_patch: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Merge metadata_patch into the run's metadata JSON."""
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT metadata_json FROM orchestration_runs WHERE id = ? LIMIT 1", (rid,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                if row is None:
+                    return None
+                existing = _json_loads(row["metadata_json"], {})
+                if not isinstance(existing, dict):
+                    existing = {}
+                existing.update(metadata_patch)
+                await db.execute(
+                    "UPDATE orchestration_runs SET metadata_json = ?, updated_at = ? WHERE id = ?",
+                    (_json_dumps(existing), _now_iso(), rid),
+                )
+                await db.commit()
+        return await self.get_run(rid)
+
     async def update_stall_tracking(
         self,
         run_id: str,

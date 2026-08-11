@@ -3411,7 +3411,7 @@ def _select_task_node_override(task: Task, payload: Any) -> Dict[str, Any]:
 class TaskManager:
     _TERMINAL_TASK_STATUSES = {"completed", "failed", "retried", "cancelled"}
 
-def __init__(
+    def __init__(
         self,
         scheduler: Any,
         db_path: Optional[str] = None,
@@ -3431,7 +3431,7 @@ def __init__(
         self._scheduler = scheduler
         self._bot_registry = bot_registry
         self._connection_resolver = connection_resolver
-self._supervision_store = supervision_store
+        self._supervision_store = supervision_store
         self._orchestration_run_store = orchestration_run_store
         self._project_registry = getattr(scheduler, "project_registry", None)
         self._orchestration_workspace_store = orchestration_workspace_store
