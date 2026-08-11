@@ -1,0 +1,8 @@
+# Default owner — all pull requests require review from:
+*           @Jacobdrosol
+
+# Specific areas can be assigned to additional reviewers in the future:
+# /scripts/   @Jacobdrosol
+# /control_plane/ @Jacobdrosol
+# /dashboard/ @Jacobdrosol
+# /tests/     @Jacobdrosol
