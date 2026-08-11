@@ -148,9 +148,9 @@ def create_app() -> Flask:
     from dashboard.routes.projects import bp as projects_bp
     from dashboard.routes.schedules import bp as schedules_bp
     from dashboard.routes.supervision import bp as supervision_bp
-from dashboard.routes.tasks import bp as tasks_bp
-from dashboard.routes.ticket_sources import bp as ticket_sources_bp
-from dashboard.routes.users import bp as users_bp
+    from dashboard.routes.tasks import bp as tasks_bp
+    from dashboard.routes.ticket_sources import bp as ticket_sources_bp
+    from dashboard.routes.users import bp as users_bp
     from dashboard.routes.vault import bp as vault_bp
     from dashboard.routes.work import bp as work_bp
     from dashboard.routes.workers import bp as workers_bp
