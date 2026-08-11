@@ -19,6 +19,7 @@ OPERATIONAL_QUALITY_SNAPSHOT_SOURCE = "control_plane_operational_quality_v1"
 CSV_WORK_ITEMS_SOURCE = "csv_work_items_v1"
 SUPERVISION_PORTFOLIO_SOURCE = "control_plane_supervision_portfolio_v1"
 GITHUB_ISSUES_SOURCE = "github_issues_v1"
+TICKET_SOURCE = "ticket_source_v1"
 _SYSTEM_PAYLOAD_SOURCE_KEY = "system_payload_source"
 _SYSTEM_PAYLOAD_SOURCES_KEY = "system_payload_sources"
 _MAX_SYSTEM_PAYLOAD_SOURCES = 4
@@ -340,6 +341,30 @@ def _github_issues_source_config(raw: Any, *, field_name: str) -> Dict[str, Any]
     }
 
 
+def _ticket_source_config(raw: Any, *, field_name: str) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise SystemPayloadSourceError(f"{field_name} must be an object")
+    target_field = str(raw.get("target_field") or "ticket_items").strip()
+    if not _SAFE_FIELD_NAME.fullmatch(target_field):
+        raise SystemPayloadSourceError(f"{field_name} target_field must be a simple payload field name")
+    source_id = str(raw.get("source_id") or "").strip()
+    if not source_id:
+        raise SystemPayloadSourceError("ticket_source_v1 requires a source_id")
+    max_items = raw.get("max_items", 25)
+    if isinstance(max_items, bool) or not isinstance(max_items, int) or not 1 <= max_items <= 100:
+        raise SystemPayloadSourceError("ticket_source_v1 max_items must be between 1 and 100")
+    unlinked_only = raw.get("unlinked_only", True)
+    if not isinstance(unlinked_only, bool):
+        raise SystemPayloadSourceError("ticket_source_v1 unlinked_only must be a boolean")
+    return {
+        "type": TICKET_SOURCE,
+        "target_field": target_field,
+        "source_id": source_id,
+        "max_items": max_items,
+        "unlinked_only": unlinked_only,
+    }
+
+
 def _system_payload_source_config(raw: Any, *, field_name: str) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise SystemPayloadSourceError(f"{field_name} must be an object")
@@ -351,6 +376,7 @@ def _system_payload_source_config(raw: Any, *, field_name: str) -> Dict[str, Any
         CSV_WORK_ITEMS_SOURCE,
         SUPERVISION_PORTFOLIO_SOURCE,
         GITHUB_ISSUES_SOURCE,
+        TICKET_SOURCE,
     }:
         raise SystemPayloadSourceError(f"unsupported {field_name} type: {source_type or 'unset'}")
     if not _SAFE_FIELD_NAME.fullmatch(target_field):
@@ -359,6 +385,8 @@ def _system_payload_source_config(raw: Any, *, field_name: str) -> Dict[str, Any
         return _csv_source_config(raw, target_field=target_field)
     if source_type == GITHUB_ISSUES_SOURCE:
         return _github_issues_source_config(raw, field_name=field_name)
+    if source_type == TICKET_SOURCE:
+        return _ticket_source_config(raw, field_name=field_name)
     return {"type": source_type, "target_field": target_field}
 
 
@@ -444,6 +472,10 @@ def validate_system_payload_source(schedule: Dict[str, Any], bot: Any) -> None:
         if source_config["type"] == GITHUB_ISSUES_SOURCE and not task_scope.startswith(("read-only", "draft-only")):
             raise SystemPayloadSourceError(
                 "github_issues_v1 requires a worker_profile with a read-only or draft-only task scope"
+            )
+        if source_config["type"] == TICKET_SOURCE and not task_scope.startswith(("read-only", "draft-only")):
+            raise SystemPayloadSourceError(
+                "ticket_source_v1 requires a worker_profile with a read-only or draft-only task scope"
             )
 
 
@@ -1146,6 +1178,50 @@ async def github_issues_payload(
     }
 
 
+async def ticket_source_payload(
+    config: Dict[str, Any],
+    schedule: Dict[str, Any],
+    project_registry: Any,
+    ticket_source_store: Any,
+) -> Dict[str, Any]:
+    """Return ticket-source items not yet linked to a task, for a scheduled bot.
+
+    Uses the TicketSourceStore to pull the newest unlinked items for the
+    configured source, optionally restricted to the schedule's project.
+    """
+    source_id = str(config.get("source_id") or "").strip()
+    if not source_id:
+        raise SystemPayloadSourceError("ticket_source_v1 requires a source_id in config")
+
+    project_id = str(schedule.get("project_id") or "").strip()
+    max_items = min(int(config.get("max_items", 25)), 100)
+    unlinked_only = bool(config.get("unlinked_only", True))
+
+    if ticket_source_store is None:
+        raise SystemPayloadSourceError("ticket_source_store is unavailable for ticket_source_v1")
+
+    source = await ticket_source_store.get_source(source_id)
+    if source is None:
+        raise SystemPayloadSourceError(f"ticket source not found: {source_id}")
+    if project_id and source.get("project_id") != project_id:
+        raise SystemPayloadSourceError(
+            f"ticket source {source_id} belongs to project '{source.get('project_id')}', not '{project_id}'"
+        )
+
+    items = await ticket_source_store.list_items(
+        source_id, limit=max_items, unlinked_only=unlinked_only
+    )
+    return {
+        "source": TICKET_SOURCE,
+        "source_id": source_id,
+        "source_name": source.get("name"),
+        "source_type": source.get("source_type"),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+        "item_count": len(items),
+    }
+
+
 async def materialize_system_schedule_payload(
     schedule: Dict[str, Any],
     *,
@@ -1157,6 +1233,7 @@ async def materialize_system_schedule_payload(
     supervision_store: Any = None,
     project_registry: Any = None,
     key_vault: Any = None,
+    ticket_source_store: Any = None,
 ) -> Dict[str, Any]:
     """Return non-secret payload additions for an approved internal source."""
     configs = system_payload_source_configs(schedule)
@@ -1175,6 +1252,7 @@ async def materialize_system_schedule_payload(
             supervision_store=supervision_store,
             project_registry=project_registry,
             key_vault=key_vault,
+            ticket_source_store=ticket_source_store,
         )
         duplicate_fields = set(materialized).intersection(additions)
         if duplicate_fields:
@@ -1197,6 +1275,7 @@ async def _materialize_system_payload_source(
     supervision_store: Any = None,
     project_registry: Any = None,
     key_vault: Any = None,
+    ticket_source_store: Any = None,
 ) -> Dict[str, Any]:
     if config["type"] == FLEET_HEALTH_SUMMARY_SOURCE:
         summary = await fleet_health_summary(
@@ -1245,6 +1324,11 @@ async def _materialize_system_payload_source(
         }
     if config["type"] == GITHUB_ISSUES_SOURCE:
         payload = await github_issues_payload(config, schedule, project_registry, key_vault)
+        return {
+            config["target_field"]: json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        }
+    if config["type"] == TICKET_SOURCE:
+        payload = await ticket_source_payload(config, schedule, project_registry, ticket_source_store)
         return {
             config["target_field"]: json.dumps(payload, sort_keys=True, separators=(",", ":")),
         }

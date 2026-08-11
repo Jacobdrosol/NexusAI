@@ -303,6 +303,39 @@ class OrchestrationRunStore:
                 row = await cursor.fetchone()
         return self._row_to_payload(row)
 
+    async def list_runs(
+        self,
+        *,
+        state: Optional[str] = None,
+        project_id: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """List orchestration runs, optionally filtered by orch_state and/or project."""
+        await self._ensure_db()
+        clauses: List[str] = ["archived = 0"]
+        params: List[Any] = []
+        if state:
+            clauses.append("orch_state = ?")
+            params.append(state)
+        if project_id:
+            clauses.append("project_id = ?")
+            params.append(project_id)
+        params.extend([limit, offset])
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"""
+                SELECT * FROM orchestration_runs
+                WHERE {' AND '.join(clauses)}
+                ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                params,
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [self._row_to_payload(row) for row in rows]
+
     async def list_lineage(self, run_id: str) -> List[Dict[str, Any]]:
         await self._ensure_db()
         current = await self.get_run(run_id)

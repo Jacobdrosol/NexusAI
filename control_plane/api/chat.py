@@ -22,6 +22,7 @@ from control_plane.chat.workspace_tools import (
     search_workspace_snippets,
 )
 from control_plane.chat.web_search import resolve_web_context_items, should_search_web
+from control_plane.audit.utils import record_audit_event
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.chat_attachments import (
     CHAT_ATTACHMENT_MAX_FILES,
@@ -4588,6 +4589,80 @@ async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, reques
             reason="operator_marked_failed",
         )
     return updated_target or target
+
+
+class PlanDecisionBody(BaseModel):
+    reason: Optional[str] = None
+
+
+@router.post("/conversations/{conversation_id}/orchestrations/{orchestration_id}/approve-plan")
+async def approve_plan(conversation_id: str, orchestration_id: str, request: Request, body: Optional[PlanDecisionBody] = None) -> Dict[str, Any]:
+    task_manager = request.app.state.task_manager
+    run_store = getattr(request.app.state, "orchestration_run_store", None)
+    if run_store is None:
+        raise HTTPException(status_code=500, detail="orchestration_run_store not initialized")
+    try:
+        result = await task_manager.approve_plan(orchestration_id, actor="operator")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    await record_audit_event(
+        request,
+        action="chat.orchestrations.plan.approve",
+        resource=f"conversation:{conversation_id}/orchestration:{orchestration_id}",
+        details={"reason": (body.reason if body else None)},
+    )
+    return result
+
+
+@router.post("/conversations/{conversation_id}/orchestrations/{orchestration_id}/reject-plan")
+async def reject_plan(conversation_id: str, orchestration_id: str, request: Request, body: Optional[PlanDecisionBody] = None) -> Dict[str, Any]:
+    task_manager = request.app.state.task_manager
+    run_store = getattr(request.app.state, "orchestration_run_store", None)
+    if run_store is None:
+        raise HTTPException(status_code=500, detail="orchestration_run_store not initialized")
+    reason = (body.reason if body else None) or "plan_rejected_by_operator"
+    try:
+        result = await task_manager.reject_plan(orchestration_id, reason=reason, actor="operator")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    await record_audit_event(
+        request,
+        action="chat.orchestrations.plan.reject",
+        resource=f"conversation:{conversation_id}/orchestration:{orchestration_id}",
+        details={"reason": reason},
+    )
+    return result
+
+
+@router.get("/conversations/{conversation_id}/orchestrations/{orchestration_id}/plan")
+async def get_orchestration_plan(conversation_id: str, orchestration_id: str, request: Request) -> Dict[str, Any]:
+    run_store = getattr(request.app.state, "orchestration_run_store", None)
+    if run_store is None:
+        raise HTTPException(status_code=500, detail="orchestration_run_store not initialized")
+    try:
+        run = await run_store.get_run_by_orchestration(orchestration_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if run is None:
+        raise HTTPException(status_code=404, detail="orchestration run not found")
+    run_id = str(run.get("id") or "")
+    state = str(await run_store.get_orch_state(run_id) or "")
+    metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+    plan = metadata.get("plan_approval_plan")
+    root_task_id = metadata.get("plan_approval_root_task_id")
+    return {
+        "orchestration_id": orchestration_id,
+        "run_id": run_id,
+        "state": state,
+        "plan_approval_required": bool(metadata.get("plan_approval_required")),
+        "root_task_id": root_task_id,
+        "plan": plan,
+        "instruction": run.get("instruction"),
+    }
 
 
 @router.post("/conversations/{conversation_id}/messages")

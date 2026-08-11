@@ -644,6 +644,16 @@ class PMOrchestrator:
             assignment_memory_hit_count=assignment_memory_hit_count,
             node_overrides=node_overrides,
         )
+        plan_approval_required = False
+        project_registry = getattr(self._scheduler, "project_registry", None)
+        if project_registry is not None and project_id:
+            try:
+                project = await project_registry.get(str(project_id))
+                settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+                workflow_cfg = settings.get("workflow") if isinstance(settings.get("workflow"), dict) else {}
+                plan_approval_required = bool(workflow_cfg.get("plan_approval_required"))
+            except Exception:
+                logger.warning("Failed to read plan_approval_required for project %s", project_id, exc_info=True)
         pm_task = await self._task_manager.create_task(
             bot_id=pm_bot.id,
             payload={
@@ -677,6 +687,7 @@ class PMOrchestrator:
                 # Template hint — helps downstream evaluators load the authoritative
                 # pipeline template without relying on heuristic graph introspection.
                 "template_id": inferred_template_id or "",
+                "plan_approval_required": plan_approval_required,
             },
             metadata=TaskMetadata(
                 source=normalized_task_source,

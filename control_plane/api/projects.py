@@ -88,6 +88,10 @@ class UpdateProjectRepoWorkspaceRequest(BaseModel):
     allow_command_execution: bool = False
 
 
+class UpdateProjectWorkflowConfigRequest(BaseModel):
+    plan_approval_required: Optional[bool] = None
+
+
 class RepoWorkspaceCloneRequest(BaseModel):
     clone_url: Optional[str] = None
     branch: Optional[str] = None
@@ -4215,3 +4219,52 @@ async def summarize_project_repo_workspace_runs(
             "by_action": [],
         }
     return await store.summarize(project_id=project_id, since_hours=since_hours)
+
+
+@router.get("/{project_id}/workflow/config")
+async def get_project_workflow_config(project_id: str, request: Request) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+    workflow_cfg = settings.get("workflow") if isinstance(settings.get("workflow"), dict) else {}
+    return {
+        "project_id": project_id,
+        "plan_approval_required": bool(workflow_cfg.get("plan_approval_required")),
+    }
+
+
+@router.post("/{project_id}/workflow/config")
+async def update_project_workflow_config(
+    project_id: str, request: Request, body: UpdateProjectWorkflowConfigRequest
+) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+    workflow_cfg = settings.get("workflow") if isinstance(settings.get("workflow"), dict) else {}
+    new_cfg = dict(workflow_cfg)
+    if body.plan_approval_required is not None:
+        new_cfg["plan_approval_required"] = bool(body.plan_approval_required)
+    updated = project.model_copy(
+        update={"settings_overrides": _merge_settings(project, {"workflow": new_cfg})}
+    )
+    await project_registry.update(project_id, updated)
+    await record_audit_event(
+        request,
+        action="projects.workflow.config.update",
+        resource=f"project:{project_id}",
+        details={
+            "plan_approval_required": bool(new_cfg.get("plan_approval_required")),
+        },
+    )
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "plan_approval_required": bool(new_cfg.get("plan_approval_required")),
+    }

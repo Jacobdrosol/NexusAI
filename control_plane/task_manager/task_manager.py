@@ -5197,6 +5197,81 @@ class TaskManager:
             "cancelled_task_count": len(cancelled_task_ids),
         }
 
+    async def approve_plan(self, orchestration_id: str, *, actor: str = "operator") -> Dict[str, Any]:
+        """Approve a held plan and re-dispatch the root task's triggers.
+
+        Only works when the orchestration run is in plan_pending_approval.
+        """
+        safe_id = str(orchestration_id or "").strip()
+        if not safe_id:
+            raise ValueError("orchestration_id required")
+        if self._orchestration_run_store is None:
+            raise RuntimeError("orchestration_run_store not configured on TaskManager")
+
+        run = await self._orchestration_run_store.get_run_by_orchestration(safe_id)
+        if run is None:
+            raise ValueError(f"orchestration run not found: {safe_id}")
+
+        run_id = str(run.get("id") or "")
+        current_state = str(await self._orchestration_run_store.get_orch_state(run_id) or "")
+        if current_state != "plan_pending_approval":
+            raise ValueError(
+                f"orchestration {safe_id} is in state '{current_state}', not 'plan_pending_approval'"
+            )
+
+        metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+        root_task_id = str(metadata.get("plan_approval_root_task_id") or "").strip()
+        if not root_task_id:
+            raise ValueError(f"no plan_approval_root_task_id recorded for orchestration {safe_id}")
+
+        await self._orchestration_run_store.update_orch_state(
+            run_id, "running", reason="plan_approved", actor=actor or "operator"
+        )
+
+        root_task = await self.get_task(root_task_id)
+        if root_task.status == "completed":
+            logger.info("[PLAN-APPROVAL] approving plan for orchestration %s; re-dispatching triggers from task %s", safe_id, root_task_id)
+            await self._dispatch_triggers(root_task)
+
+        return {
+            "status": "ok",
+            "orchestration_id": safe_id,
+            "run_id": run_id,
+            "approved": True,
+            "root_task_id": root_task_id,
+        }
+
+    async def reject_plan(self, orchestration_id: str, *, reason: str = "plan_rejected_by_operator", actor: str = "operator") -> Dict[str, Any]:
+        """Reject a held plan and cancel the orchestration."""
+        safe_id = str(orchestration_id or "").strip()
+        if not safe_id:
+            raise ValueError("orchestration_id required")
+        if self._orchestration_run_store is None:
+            raise RuntimeError("orchestration_run_store not configured on TaskManager")
+
+        run = await self._orchestration_run_store.get_run_by_orchestration(safe_id)
+        if run is None:
+            raise ValueError(f"orchestration run not found: {safe_id}")
+
+        run_id = str(run.get("id") or "")
+        current_state = str(await self._orchestration_run_store.get_orch_state(run_id) or "")
+        if current_state != "plan_pending_approval":
+            raise ValueError(
+                f"orchestration {safe_id} is in state '{current_state}', not 'plan_pending_approval'"
+            )
+
+        await self._orchestration_run_store.update_orch_state(
+            run_id, "failed_terminal", reason=reason or "plan_rejected_by_operator", actor=actor or "operator"
+        )
+        await self.cancel_orchestration(safe_id, reason=reason or "plan_rejected_by_operator")
+
+        return {
+            "status": "ok",
+            "orchestration_id": safe_id,
+            "run_id": run_id,
+            "rejected": True,
+        }
+
     async def list_tasks(
         self,
         orchestration_id: Optional[str] = None,

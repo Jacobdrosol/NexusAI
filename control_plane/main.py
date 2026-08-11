@@ -189,6 +189,7 @@ async def lifespan(app: FastAPI):
             supervision_store=supervision_store,
             project_registry=project_registry,
             key_vault=key_vault,
+            ticket_source_store=ticket_source_store,
         )
 
     agent_schedule_engine = AgentScheduleEngine(

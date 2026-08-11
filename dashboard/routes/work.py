@@ -1679,3 +1679,110 @@ def api_work_chat_bot_cap():
         body=body,
     )
     return jsonify(payload), status_code
+
+
+@bp.get("/api/work/pending-plan-approvals")
+@login_required
+def api_work_pending_plan_approvals():
+    _require_admin()
+    project_id = str(request.args.get("project_id") or "").strip() or None
+    try:
+        limit = min(max(int(request.args.get("limit", 100)), 1), 200)
+    except (TypeError, ValueError):
+        limit = 100
+    cp = get_cp_client()
+    result = _safe_call(cp.list_pending_plan_approvals, project_id=project_id, limit=limit)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 503
+    runs = result.get("runs") if isinstance(result, dict) else []
+    rows = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        rows.append(_compact_pending_plan_row(run))
+    return jsonify({"count": len(rows), "runs": rows})
+
+
+def _compact_pending_plan_row(run: dict[str, Any]) -> dict[str, Any]:
+    metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+    plan = metadata.get("plan_approval_plan")
+    steps = []
+    if isinstance(plan, dict):
+        raw_steps = plan.get("steps")
+        if isinstance(raw_steps, list):
+            steps = [
+                {
+                    "id": str(s.get("id") or s.get("step_id") or ""),
+                    "bot_id": str(s.get("bot_id") or ""),
+                    "step_kind": str(s.get("step_kind") or ""),
+                    "title": str(s.get("title") or ""),
+                    "deliverables": s.get("deliverables") if isinstance(s.get("deliverables"), list) else [],
+                }
+                for s in raw_steps
+                if isinstance(s, dict)
+            ]
+    return {
+        "run_id": str(run.get("id") or ""),
+        "orchestration_id": str(run.get("orchestration_id") or ""),
+        "conversation_id": str(run.get("conversation_id") or ""),
+        "project_id": str(run.get("project_id") or ""),
+        "pm_bot_id": str(run.get("pm_bot_id") or ""),
+        "instruction": str(run.get("instruction") or ""),
+        "root_task_id": str(metadata.get("plan_approval_root_task_id") or ""),
+        "step_count": len(steps),
+        "steps": steps[:20],
+        "updated_at": str(run.get("updated_at") or ""),
+    }
+
+
+@bp.get("/api/work/plan")
+@login_required
+def api_work_plan():
+    _require_admin()
+    orchestration_id = str(request.args.get("orchestration_id") or "").strip()
+    conversation_id = str(request.args.get("conversation_id") or "").strip()
+    if not orchestration_id:
+        return jsonify({"error": "orchestration_id is required."}), 400
+    if not conversation_id:
+        return jsonify({"error": "conversation_id is required."}), 400
+    cp = get_cp_client()
+    result = _safe_call(cp.get_orchestration_plan, conversation_id, orchestration_id)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 503
+    return jsonify(result)
+
+
+@bp.post("/api/work/plan/approve")
+@login_required
+def api_work_plan_approve():
+    _require_admin()
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "Request body must be a JSON object."}), 400
+    orchestration_id = str(body.get("orchestration_id") or "").strip()
+    conversation_id = str(body.get("conversation_id") or "").strip()
+    if not orchestration_id or not conversation_id:
+        return jsonify({"error": "orchestration_id and conversation_id are required."}), 400
+    cp = get_cp_client()
+    result = _safe_call(cp.approve_orchestration_plan, conversation_id, orchestration_id, reason=str(body.get("reason") or "").strip() or None)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 503
+    return jsonify(result)
+
+
+@bp.post("/api/work/plan/reject")
+@login_required
+def api_work_plan_reject():
+    _require_admin()
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "Request body must be a JSON object."}), 400
+    orchestration_id = str(body.get("orchestration_id") or "").strip()
+    conversation_id = str(body.get("conversation_id") or "").strip()
+    if not orchestration_id or not conversation_id:
+        return jsonify({"error": "orchestration_id and conversation_id are required."}), 400
+    cp = get_cp_client()
+    result = _safe_call(cp.reject_orchestration_plan, conversation_id, orchestration_id, reason=str(body.get("reason") or "").strip() or None)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 503
+    return jsonify(result)

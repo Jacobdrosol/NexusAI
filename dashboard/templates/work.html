@@ -1020,6 +1020,13 @@
     </section>
 
     <section class="panel">
+      <h2 class="panel-title">Plan Approvals</h2>
+      <div class="mini-note" style="margin-bottom:0.5rem;">PM plans waiting for operator approval before execution.</div>
+      <div id="plan-approvals-state" class="state-info" style="margin-bottom:0.5rem;">Loading…</div>
+      <div id="plan-approvals-list"></div>
+    </section>
+
+    <section class="panel">
       <h2 class="panel-title">Attention Breakdown</h2>
       <div class="table-wrap">
         <table>
@@ -1862,5 +1869,79 @@ function stopOrchestration(scope) {
   })
   .catch(function(e) { alert('Network error: ' + e); });
 }
+
+// Plan approvals
+function loadPlanApprovals() {
+  var stateEl = document.getElementById('plan-approvals-state');
+  var listEl = document.getElementById('plan-approvals-list');
+  if (!stateEl || !listEl) return;
+  stateEl.className = 'state-loading';
+  stateEl.textContent = 'Loading pending plan approvals…';
+  fetch('/api/work/pending-plan-approvals')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var runs = Array.isArray(data.runs) ? data.runs : [];
+      if (!runs.length) {
+        stateEl.className = 'state-empty';
+        stateEl.textContent = 'No plans awaiting approval.';
+        listEl.innerHTML = '';
+        return;
+      }
+      stateEl.className = 'state-ok';
+      stateEl.textContent = runs.length + ' plan(s) awaiting approval';
+      var html = '';
+      for (var i = 0; i < runs.length; i++) {
+        var r = runs[i];
+        html += '<div class="list-item" style="display:block;margin-bottom:0.5rem;padding:0.6rem;border:1px solid var(--border);border-radius:6px;">';
+        html += '<div><strong>' + escapeText(r.instruction || r.orchestration_id) + '</strong></div>';
+        html += '<div class="mini-note">' + escapeText(r.pm_bot_id || '') + ' · ' + escapeText(r.project_id || '') + ' · <code>' + escapeText((r.orchestration_id || '').slice(0, 8)) + '…</code></div>';
+        html += '<div class="mini-note">' + (r.step_count || 0) + ' plan step(s)</div>';
+        if (r.steps && r.steps.length) {
+          html += '<ul style="margin:0.35rem 0 0.35rem 1rem;padding:0;font-size:0.85rem;">';
+          for (var j = 0; j < Math.min(r.steps.length, 6); j++) {
+            var s = r.steps[j];
+            html += '<li><code>' + escapeText(s.bot_id || '') + '</code> — ' + escapeText(s.title || s.id || 'step') + ' <span class="badge badge-muted">' + escapeText(s.step_kind || '') + '</span></li>';
+          }
+          if (r.steps.length > 6) html += '<li class="mini-note">+ ' + (r.steps.length - 6) + ' more</li>';
+          html += '</ul>';
+        }
+        html += '<div style="margin-top:0.5rem;">';
+        html += '<button class="btn btn-sm btn-primary" onclick="decidePlan(\'approve\', ' + JSON.stringify(r.orchestration_id || '') + ', ' + JSON.stringify(r.conversation_id || '') + ')">Approve</button> ';
+        html += '<button class="btn btn-sm btn-danger" onclick="decidePlan(\'reject\', ' + JSON.stringify(r.orchestration_id || '') + ', ' + JSON.stringify(r.conversation_id || '') + ')">Reject</button>';
+        html += '</div></div>';
+      }
+      listEl.innerHTML = html;
+    })
+    .catch(function(e) {
+      stateEl.className = 'state-error';
+      stateEl.textContent = 'Failed to load plan approvals: ' + e;
+    });
+}
+
+function decidePlan(action, orchestrationId, conversationId) {
+  var verb = action === 'approve' ? 'Approve' : 'Reject';
+  var reason = action === 'reject'
+    ? prompt('Reason for rejection (optional):') || ''
+    : '';
+  if (action === 'reject' && reason === null) return;
+  if (!confirm(verb + ' plan for orchestration ' + orchestrationId + '?')) return;
+  fetch('/api/work/plan/' + action, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify({orchestration_id: orchestrationId, conversation_id: conversationId, reason: reason})
+  })
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (!res.ok) {
+      alert(verb + ' failed: ' + (res.data.error || 'unknown error'));
+      return;
+    }
+    alert('Plan ' + action + 'd.');
+    loadPlanApprovals();
+  })
+  .catch(function(e) { alert('Network error: ' + e); });
+}
+
+document.addEventListener('DOMContentLoaded', loadPlanApprovals);
 </script>
 {% endblock %}

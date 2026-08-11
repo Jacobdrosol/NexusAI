@@ -1161,6 +1161,45 @@ class CPClient:
             params += "&unlinked_only=true"
         return self._get(f"/v1/projects/{project_id}/ticket-sources/{source_id}/items{params}")
 
+    # ------------------------------------------------------------------
+    #  Plan approval gate
+    # ------------------------------------------------------------------
+
+    def get_orchestration_plan(self, conversation_id: str, orchestration_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(
+            f"/v1/chat/conversations/{conversation_id}/orchestrations/{orchestration_id}/plan"
+        )
+
+    def approve_orchestration_plan(
+        self, conversation_id: str, orchestration_id: str, reason: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        body = {}
+        if reason:
+            body["reason"] = reason
+        return self._post(
+            f"/v1/chat/conversations/{conversation_id}/orchestrations/{orchestration_id}/approve-plan",
+            body,
+        )
+
+    def reject_orchestration_plan(
+        self, conversation_id: str, orchestration_id: str, reason: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        body = {}
+        if reason:
+            body["reason"] = reason
+        return self._post(
+            f"/v1/chat/conversations/{conversation_id}/orchestrations/{orchestration_id}/reject-plan",
+            body,
+        )
+
+    def list_pending_plan_approvals(
+        self, project_id: Optional[str] = None, limit: int = 100
+    ) -> Optional[Dict[str, Any]]:
+        params = f"?limit={limit}"
+        if project_id:
+            params += f"&project_id={project_id}"
+        return self._get(f"/v1/orchestration/runs/pending-plan-approval{params}")
+
 
 _client: Optional[CPClient] = None
 

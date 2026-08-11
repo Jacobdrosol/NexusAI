@@ -227,3 +227,27 @@ async def cancel_orchestration_run(
         "task_cancellation": task_result,
         "run": result,
     }
+
+
+# ---------------------------------------------------------------------------
+# Plan approval
+# ---------------------------------------------------------------------------
+
+
+@router.get("/runs/pending-plan-approval")
+async def list_pending_plan_approvals(
+    request: Request,
+    project_id: Optional[str] = None,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """List orchestration runs currently waiting on plan approval."""
+    run_store = getattr(request.app.state, "orchestration_run_store", None)
+    if run_store is None:
+        raise HTTPException(status_code=503, detail="orchestration run store not available")
+    limit = max(1, min(int(limit or 100), 200))
+    runs = await run_store.list_runs(
+        state="plan_pending_approval",
+        project_id=project_id,
+        limit=limit,
+    )
+    return {"count": len(runs), "runs": runs}
