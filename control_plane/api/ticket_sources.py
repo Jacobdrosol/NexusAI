@@ -100,6 +100,14 @@ async def _resolve_credential(
     credential_value: Optional[str],
     credential_key_ref: Optional[str],
 ) -> Optional[str]:
+    """Resolve the vault key name to store on the source.
+
+    Returns the key vault reference name (never the secret value). If a raw
+    credential_value is supplied it is written into the vault under a
+    generated key name. If a credential_key_ref is supplied it is validated
+    to exist in the vault and returned as-is so the raw secret never touches
+    the source config.
+    """
     vault = _get_key_vault(request)
     key_name = f"ticket_source:{source_type}::{project_id}"
 
@@ -107,12 +115,17 @@ async def _resolve_credential(
         await vault.set_key(name=key_name, provider="ticket_source", value=credential_value)
         return key_name
 
-    ref = credential_key_ref or key_name
+    ref = (credential_key_ref or "").strip()
+    if not ref:
+        return None
     try:
         secret = await vault.get_secret(ref)
-        return secret if secret else None
+        if not secret:
+            return None
     except Exception:
         return None
+    # Return the reference, not the secret.
+    return ref
 
 
 async def _get_credential_value(request: Request, key_ref: Optional[str]) -> Optional[str]:
