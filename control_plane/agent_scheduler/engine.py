@@ -295,12 +295,14 @@ class AgentScheduleEngine:
         payload_materializer: Optional[Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
         terminal_run_retention_per_schedule: Optional[int] = None,
         terminal_run_prune_batch_size: Optional[int] = None,
+        ticket_source_store: Optional[Any] = None,
     ) -> None:
         self._assignment_service = assignment_service
         self._task_manager = task_manager
         self._db_path = db_path or _db_path()
         self._autonomy_guard = autonomy_guard
         self._payload_materializer = payload_materializer
+        self._ticket_source_store = ticket_source_store
         self._terminal_run_retention_per_schedule = _terminal_run_retention_per_schedule(
             terminal_run_retention_per_schedule
         )
@@ -1170,6 +1172,7 @@ class AgentScheduleEngine:
                     project_id=str(schedule.get("project_id") or "").strip() or None,
                 ),
             )
+            await self._link_materialized_ticket_items(schedule, task_payload, task.id)
             task_metadata = getattr(task, "metadata", None)
             orchestration_id = (
                 str(task_metadata.get("orchestration_id") or "").strip()
@@ -1178,6 +1181,63 @@ class AgentScheduleEngine:
             )
             return {"task_id": task.id, "orchestration_id": orchestration_id or None}
         raise ValueError("schedule requires either (assignment_pm_bot_id + conversation_id) or target_bot_id with prompt")
+
+    async def _link_materialized_ticket_items(
+        self,
+        schedule: Dict[str, Any],
+        task_payload: Dict[str, Any],
+        task_id: str,
+    ) -> None:
+        """Link ticket items that were materialized into a scheduled task.
+
+        The payload materializer injects ticket items under a target field
+        (e.g. "ticket_items") as a JSON string. After the task is created,
+        mark those items as assigned and link them to the task so they are
+        not re-selected by later runs.
+        """
+        if self._ticket_source_store is None:
+            return
+        metadata = schedule.get("metadata")
+        if not isinstance(metadata, dict):
+            return
+        raw_sources = metadata.get("system_payload_sources") or metadata.get("system_payload_source")
+        if not raw_sources:
+            return
+        sources = raw_sources if isinstance(raw_sources, list) else [raw_sources]
+        for source_cfg in sources:
+            if not isinstance(source_cfg, dict):
+                continue
+            if str(source_cfg.get("type") or "") != "ticket_source_v1":
+                continue
+            source_id = str(source_cfg.get("source_id") or "").strip()
+            target_field = str(source_cfg.get("target_field") or "ticket_items").strip()
+            if not source_id:
+                continue
+            raw_payload = task_payload.get(target_field)
+            if not isinstance(raw_payload, str):
+                continue
+            try:
+                payload = json.loads(raw_payload)
+            except Exception:
+                continue
+            items = payload.get("items") if isinstance(payload, dict) else None
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                external_id = str(item.get("external_id") or "").strip()
+                if not external_id:
+                    continue
+                try:
+                    await self._ticket_source_store.update_item_status(
+                        source_id,
+                        external_id,
+                        status="assigned",
+                        task_id=task_id,
+                    )
+                except Exception:
+                    continue
 
     async def _set_run_status(
         self,

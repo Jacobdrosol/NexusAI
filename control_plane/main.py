@@ -197,6 +197,7 @@ async def lifespan(app: FastAPI):
         task_manager=task_manager,
         autonomy_guard=_schedule_dispatch_guard,
         payload_materializer=_schedule_payload_materializer,
+        ticket_source_store=ticket_source_store,
     )
     platform_ai_runtime = PlatformAISessionRuntime(
         platform_ai_session_store,
