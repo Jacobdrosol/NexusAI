@@ -556,15 +556,46 @@ const SECTION_TEMPLATES = {
 
 document.querySelectorAll('details.collapsible-section').forEach((details) => {
   const section = details.dataset.section;
-  LAZY_SECTIONS[section] = {loaded: false, loading: false, details: details};
+  const isLazy = details.hasAttribute('data-lazy');
+  LAZY_SECTIONS[section] = {loaded: !isLazy, loading: false, details: details};
   details.addEventListener('toggle', function() {
     if (!details.open) return;
     document.querySelectorAll('details.collapsible-section[open]').forEach((other) => {
       if (other !== details) other.open = false;
     });
-    loadSection(section);
+    if (isLazy) {
+      loadSection(section);
+    } else if (section && !details.dataset.initialized) {
+      details.dataset.initialized = '1';
+      initInlineSection(section);
+    }
   });
 });
+
+function initInlineSection(section) {
+  switch (section) {
+    case 'cloud_policy':
+      refreshCloudContextPolicy();
+      break;
+    case 'chat_tools':
+      refreshProjectChatToolAccess();
+      break;
+    case 'repo_workspace':
+      refreshProjectRepoWorkspacePolicy();
+      refreshProjectRepoWorkspaceStatus();
+      refreshProjectRepoWorkspaceUsage();
+      break;
+    case 'github':
+      refreshGithubStatus(false);
+      refreshGithubSyncStatus().catch(() => {});
+      break;
+    case 'webhooks':
+      refreshWebhookEvents();
+      break;
+    default:
+      break;
+  }
+}
 
 function loadSection(section) {
   const entry = LAZY_SECTIONS[section];
