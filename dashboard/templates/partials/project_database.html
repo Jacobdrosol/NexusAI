@@ -1,0 +1,67 @@
+<div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+  <div>
+    <div class="form-group">
+      <label>Connection Name</label>
+      <input class="form-control" id="project-db-name" placeholder="Primary Postgres">
+    </div>
+    <div class="form-group">
+      <label>Connection String</label>
+      <input class="form-control" id="project-db-dsn" type="password" placeholder="postgresql+psycopg2://user:pass@host:5432/db">
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <textarea class="form-control" id="project-db-description" rows="3" placeholder="Production analytics database"></textarea>
+    </div>
+    <label style="display:block; margin-bottom:0.5rem;">
+      <input type="checkbox" id="project-db-readonly" checked> Readonly connection
+    </label>
+    <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+      <button class="btn btn-primary" type="button" onclick="createProjectDatabaseConnection()">Save Database Connection</button>
+    </div>
+    <div id="project-db-state" class="state-empty" style="margin-top:0.6rem;">No project database action yet.</div>
+  </div>
+  <div>
+    <div class="form-group">
+      <label>Test Query</label>
+      <textarea class="form-control" id="project-db-test-query" rows="3" placeholder="SELECT 1 AS ok">SELECT 1 AS ok</textarea>
+    </div>
+    <div class="form-group">
+      <label>Schema Ingest Namespace</label>
+      <input class="form-control" id="project-db-namespace" value="project:{{ data.project_id }}:data" placeholder="project:{{ data.project_id }}:data">
+    </div>
+    <div class="mini-note">
+      Save the database connection here, test it from the project page, then ingest schema structure into the project vault so bots can search tables, columns, keys, and joins.
+    </div>
+  </div>
+</div>
+<div style="margin-top:0.9rem;">
+  <table>
+    <thead><tr><th>Name</th><th>Readonly</th><th>Schema Snapshot</th><th>Updated</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for c in data.project_connections or [] %}
+      <tr>
+        <td>
+          <div><strong>{{ c.name }}</strong></div>
+          {% if c.description %}<div class="mini-note">{{ c.description }}</div>{% endif %}
+        </td>
+        <td>{{ "Yes" if c.config.readonly else "No" }}</td>
+        <td>
+          {% if c.schema_totals %}
+          <div>{{ c.schema_totals.get("tables", 0) }} table(s), {{ c.schema_totals.get("columns", 0) }} column(s)</div>
+          {% else %}
+          <span class="empty">No schema ingest yet</span>
+          {% endif %}
+        </td>
+        <td>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T',' ') }}</td>
+        <td style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+          <button class="btn btn-sm" type="button" onclick="testProjectDatabaseConnection({{ c.id|tojson }})">Test</button>
+          <button class="btn btn-sm btn-primary" type="button" onclick="ingestProjectDatabaseSchema({{ c.id|tojson }})">Ingest Schema</button>
+          <button class="btn btn-sm btn-danger" type="button" onclick="deleteProjectDatabaseConnection({{ c.id|tojson }})">Delete</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">No project database connections yet</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

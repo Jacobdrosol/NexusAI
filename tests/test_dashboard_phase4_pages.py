@@ -104,19 +104,32 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
         resp = dashboard_client.get("/projects")
 
     assert resp.status_code == 200
+    assert b"Projects" in resp.data
     assert b"Chat Tools" in resp.data
-    assert b"filesystem / repo search" in resp.data
-    assert b"/srv/repos/globeiq" in resp.data
     assert b"Configured Bots" in resp.data
-    assert b"2 enabled" in resp.data
-    assert b"3 configured" in resp.data
-    assert b"1 tool-backed" in resp.data
-    assert b"1 site/API" in resp.data
-    assert b"1 browser" in resp.data
-    assert b"1 repo-edit" in resp.data
-    assert b"1 active schedule" in resp.data
-    assert b"1 latest run complete" in resp.data
-    assert b"1 ready but unscheduled" in resp.data
+    assert b"data-lazy-cell" in resp.data
+
+    # Coverage columns lazy-load via the overview endpoint
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/projects/overview")
+
+    assert resp.status_code == 200
+    projects = resp.get_json()
+    assert isinstance(projects, list)
+    assert len(projects) == 1
+    p = projects[0]
+    assert p["id"] == "globeiq"
+    assert p["chat_tool_access"]["filesystem"] is True
+    assert p["chat_tool_access"]["workspace_root"] == "/srv/repos/globeiq"
+    ac = p["autonomy_coverage"]
+    assert ac["enabled_configured_bot_count"] == 2
+    assert ac["configured_bot_count"] == 3
+    assert ac["tooling_bot_count"] == 1
+    assert ac["connection_action_bot_count"] == 1
+    assert ac["browser_action_bot_count"] == 1
+    assert ac["repo_edit_bot_count"] == 1
+    assert ac["active_schedule_count"] == 1
+    assert ac["ready_unscheduled_bot_count"] == 1
 
 
 def test_schedule_bot_readiness_api_proxies_non_secret_readiness(dashboard_client):
@@ -196,15 +209,66 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
         resp = dashboard_client.get("/projects/globeiq")
 
     assert resp.status_code == 200
-    assert b"GlobeIQ Reviewer" in resp.data
+    assert b"GlobeIQ" in resp.data
     assert b"Project Data Vault" in resp.data
     assert b"Chat Workspace Tools" in resp.data
     assert b"Repository Workspace" in resp.data
     assert b"Project Database Context" in resp.data
     assert b"GitHub Integration (PAT)" in resp.data
-    assert b"Connection Flags" in resp.data
-    assert b"Run Data Ingest" in resp.data
-    assert b"Show File Status" in resp.data
+    # Sections are collapsible + lazy-load on expand
+    assert b"collapsible-section" in resp.data
+    assert b"data-lazy" in resp.data
+
+
+def test_project_detail_section_endpoint_renders_bots(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_project(self, project_id):
+            return {
+                "id": project_id,
+                "name": "GlobeIQ",
+                "mode": "isolated",
+                "enabled": True,
+                "description": "test project",
+                "settings_overrides": {},
+                "bridge_project_ids": [],
+                "bot_ids": ["globeiq-reviewer"],
+            }
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "bridge_project_ids": [], "bot_ids": []}]
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "globeiq-reviewer",
+                    "name": "GlobeIQ Reviewer",
+                    "role": "reviewer",
+                    "project_id": "globeiq",
+                    "backends": [],
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {}
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/projects/globeiq/detail/section?section=bots")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["section"] == "bots"
+    assert "GlobeIQ Reviewer" in data["html"]
 
 
 def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
@@ -339,38 +403,53 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
 
     assert resp.status_code == 200
     assert b"AI Workspace Readiness" in resp.data
-    assert b"1 setup item(s) need attention" in resp.data
-    assert b"1 enabled assigned bot(s) are blocked." in resp.data
-    assert b"1 enabled / 1 total" in resp.data
     assert b"Assigned Bot Scope" in resp.data
-    assert b"Tooling Action" in resp.data
     assert b"Project Bot Tooling Risks" in resp.data
-    assert b"restore browser session" in resp.data
-    assert b"Authenticated browser session" in resp.data
-    assert b"Research Bot" in resp.data
-    assert b"Browser session expired" in resp.data
-    assert b"globeiq-reader" in resp.data
-    assert b"expired_browser_session" in resp.data
-    assert b"Routes: ollama_cloud / qwen3.5:cloud" in resp.data
-    assert b"Tools: browser-ui" in resp.data
-    assert b"Site/API actions: globeiq-agent-api.updateLesson" in resp.data
-    assert b"Browser actions: lesson_preview.read" in resp.data
-    assert b"Credential refs: OLLAMA_CLOUD_KEY" in resp.data
-    assert b"Raw Credential Refs" in resp.data
-    assert b"[redacted raw credential]" in resp.data
-    assert b"sk-live-secret" not in resp.data
-    assert b"Repo output: allow" in resp.data
-    assert b"Worker scope: published-lesson-quality-audit" in resp.data
-    assert b"Edits: not allowed" in resp.data
-    assert b"Site login: qc.quinn@globaliq.local" in resp.data
-    assert b"Courses: 57, 101" in resp.data
-    assert b"Lessons: lesson-1" in resp.data
-    assert b"Pages: lesson_preview" in resp.data
-    assert b"CLI tools: browser-ui" in resp.data
-    assert b"2 approval gates" in resp.data
-    assert b"Enabled for filesystem, repo search." in resp.data
-    assert b"managed workspace enabled; default branch main; command runner allowed." in resp.data
-    assert b"context namespace project:globeiq:github" in resp.data
+    assert b"collapsible-section" in resp.data
+    # Rich data now lazy-loads via the section endpoint
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/projects/globeiq/detail/section?section=readiness")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "1 setup item(s) need attention" in data["html"]
+    assert "1 enabled assigned bot(s) are blocked." in data["html"]
+    assert "1 enabled / 1 total" in data["html"]
+    assert "Enabled for filesystem, repo search." in data["html"]
+    assert "managed workspace enabled; default branch main; command runner allowed." in data["html"]
+    assert "context namespace project:globeiq:github" in data["html"]
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/projects/globeiq/detail/section?section=tooling")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "restore browser session" in data["html"]
+    assert "Authenticated browser session" in data["html"]
+    assert "globeiq-reader" in data["html"]
+    assert "expired_browser_session" in data["html"]
+    assert "Raw Credential Refs" in data["html"]
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/projects/globeiq/detail/section?section=bots")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "Research Bot" in data["html"]
+    assert "Browser session expired" in data["html"]
+    assert "[redacted raw credential]" in data["html"]
+    assert "sk-live-secret" not in data["html"]
+    assert "Routes: ollama_cloud / qwen3.5:cloud" in data["html"]
+    assert "Tools: browser-ui" in data["html"]
+    assert "Site/API actions: globeiq-agent-api.updateLesson" in data["html"]
+    assert "Browser actions: lesson_preview.read" in data["html"]
+    assert "Credential refs: OLLAMA_CLOUD_KEY" in data["html"]
+    assert "Repo output: allow" in data["html"]
+    assert "Worker scope: published-lesson-quality-audit" in data["html"]
+    assert "Edits: not allowed" in data["html"]
+    assert "Site login: qc.quinn@globaliq.local" in data["html"]
+    assert "Courses: 57, 101" in data["html"]
+    assert "Lessons: lesson-1" in data["html"]
+    assert "Pages: lesson_preview" in data["html"]
+    assert "CLI tools: browser-ui" in data["html"]
+    assert "2 approval gates" in data["html"]
 
 
 def test_project_git_status_api_reports_uncommitted_files(dashboard_client):

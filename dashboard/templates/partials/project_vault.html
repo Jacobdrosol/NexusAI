@@ -1,0 +1,16 @@
+<h2 class="panel-title">Project Vault Items</h2>
+<table>
+  <thead><tr><th>Title</th><th>Namespace</th><th>Source</th><th>Updated</th></tr></thead>
+  <tbody>
+    {% for i in data.vault_items or [] %}
+    <tr>
+      <td>{{ i.title }}</td>
+      <td>{{ i.namespace }}</td>
+      <td>{{ i.source_type }}</td>
+      <td>{{ (i.updated_at[:19] if i.updated_at else '') | replace('T',' ') }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="empty">No vault items for this project</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

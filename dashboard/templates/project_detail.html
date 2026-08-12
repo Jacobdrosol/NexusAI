@@ -1,36 +1,6 @@
 {% extends "base.html" %}
 {% set active_page = "projects" %}
 {% block title %}Project Detail{% endblock %}
-{% macro render_project_data_node(node) -%}
-  {% if node.type == "directory" %}
-    <details class="project-data-node" {% if not node.path %}open{% endif %}>
-      <summary>
-        {% if node.path %}
-        <input class="project-data-select" type="checkbox" data-path="{{ node.path }}" data-kind="directory" style="display:none; margin-right:0.35rem;">
-        {% endif %}
-        <strong>{{ node.name }}</strong>
-        {% if node.path %}<code style="margin-left:0.35rem;">{{ node.path }}</code>{% endif %}
-        <span class="mini-note project-data-age" data-ts="{{ node.modified_at }}" style="margin-left:0.5rem;"></span>
-      </summary>
-      {% if node.children %}
-      <div style="margin-left:1rem; margin-top:0.35rem; display:grid; gap:0.35rem;">
-        {% for child in node.children %}
-          {{ render_project_data_node(child) }}
-        {% endfor %}
-      </div>
-      {% else %}
-      <div class="empty" style="margin:0.35rem 0 0 1rem;">Folder is empty</div>
-      {% endif %}
-    </details>
-  {% else %}
-    <div class="project-data-file" style="margin-left:1rem;">
-      <input class="project-data-select" type="checkbox" data-path="{{ node.path }}" data-kind="file" style="display:none; margin-right:0.35rem;">
-      <code>{{ node.path }}</code>
-      <span style="color:#64748b; margin-left:0.35rem;">{{ node.size or 0 }} bytes</span>
-      <span class="mini-note project-data-age" data-ts="{{ node.modified_at }}" style="margin-left:0.5rem;"></span>
-    </div>
-  {% endif %}
-{%- endmacro %}
 {% block content %}
 <div class="page-header">
   <h1>Project Detail</h1>
@@ -56,850 +26,602 @@
   </div>
 </section>
 
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">AI Workspace Readiness</h2>
-    <span class="badge badge-{{ project_ai_readiness.overall_state }}">{{ project_ai_readiness.overall_label }}</span>
-  </div>
-  <div class="split-grid" style="grid-template-columns:repeat(auto-fit, minmax(12rem, 1fr)); gap:0.75rem; margin-bottom:0.75rem;">
-    <div>
-      <div class="mini-note">Assigned Bots</div>
-      <strong>{{ project_ai_readiness.enabled_bot_count }} enabled / {{ project_ai_readiness.assigned_bot_count }} total</strong>
-    </div>
-    <div>
-      <div class="mini-note">Vault Context</div>
-      <strong>{{ project_ai_readiness.vault_item_count }} item{{ '' if project_ai_readiness.vault_item_count == 1 else 's' }}</strong>
-    </div>
-    <div>
-      <div class="mini-note">Database Context</div>
-      <strong>{{ project_ai_readiness.connection_count }} connection{{ '' if project_ai_readiness.connection_count == 1 else 's' }}</strong>
-    </div>
-  </div>
-  <table>
-    <thead><tr><th>Gate</th><th>Status</th><th>Detail</th></tr></thead>
-    <tbody>
-      {% for check in project_ai_readiness.checks %}
-      <tr>
-        <td>{{ check.label }}</td>
-        <td><span class="badge badge-{{ check.state }}">{{ check.state }}</span></td>
-        <td>{{ check.detail }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+<!-- Collapsible sections: click header to expand; heavy sections lazy-load on first expand -->
+<div id="project-sections" class="collapsible-sections">
 
-{% set project_tooling = project_tooling_status or {} %}
-{% set project_tooling_summary = project_tooling.summary or {} %}
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <div>
-      <h2 class="panel-title">Project Bot Tooling Risks</h2>
-      <div class="mini-note">Assigned-bot view of worker bindings, browser/API readiness, credentials, and launch blockers.</div>
+  <details class="panel collapsible-section" data-section="readiness" data-lazy="1">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">AI Workspace Readiness</h2>
+      <span class="badge badge-queued skeleton-badge">…</span>
+    </summary>
+    <div class="collapsible-body">
+      <div class="skeleton-loader" aria-hidden="true"></div>
     </div>
-    {% set tooling_action = project_tooling_summary.recommended_action or {} %}
-    <span class="badge {% if tooling_action.level == 'critical' %}badge-failed{% elif tooling_action.level == 'warning' %}badge-yellow{% elif tooling_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
-      {{ tooling_action.label or 'inspect' }}
-    </span>
-  </div>
-  <div class="mini-note" style="margin-bottom:0.75rem;">{{ tooling_action.detail or 'Open assigned bot rows and resolve reported readiness blockers before assigning work.' }}</div>
-  <div class="split-grid" style="grid-template-columns:repeat(auto-fit, minmax(11rem, 1fr)); gap:0.75rem; margin-bottom:0.75rem;">
-    <div>
-      <div class="mini-note">Ready Bots</div>
-      <strong>{{ project_tooling_summary.ready or 0 }}</strong>
+  </details>
+
+  <details class="panel collapsible-section" data-section="tooling" data-lazy="1">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Project Bot Tooling Risks</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="skeleton-loader" aria-hidden="true"></div>
     </div>
-    <div>
-      <div class="mini-note">Blocked Bots</div>
-      <strong>{{ project_tooling_summary.blocked or 0 }}</strong>
+  </details>
+
+  <details class="panel collapsible-section" data-section="bots" data-lazy="1">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Assigned Bot Scope</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="skeleton-loader" aria-hidden="true"></div>
     </div>
-    <div>
-      <div class="mini-note">Tooling Bots</div>
-      <strong>{{ project_tooling_summary.tooling_bot_count or 0 }}</strong>
+  </details>
+
+  <details class="panel collapsible-section" data-section="memory">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Personal Memory</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="page-header" style="margin-bottom:0.75rem;">
+        <button class="btn btn-primary" type="button" onclick="saveProjectMemoryProfile()">Save Memory Gate</button>
+      </div>
+      <label style="display:block; margin-bottom:0.5rem;">
+        <input type="checkbox" id="project-memory-enabled" {% if project.memory_profiles_enabled %}checked{% endif %}> Enable personal memory for project chats
+      </label>
+      <div id="project-memory-state" class="state-empty">No memory gate update yet.</div>
     </div>
-    <div>
-      <div class="mini-note">Missing Workers</div>
-      <strong>{{ project_tooling_summary.missing_worker_assignment_count or 0 }}</strong>
-    </div>
-    <div>
-      <div class="mini-note">Offline Workers</div>
-      <strong>{{ project_tooling_summary.offline_worker_assignment_count or 0 }}</strong>
-    </div>
-    <div>
-      <div class="mini-note">Degraded Probes</div>
-      <strong>{{ project_tooling_summary.degraded_worker_probe_count or 0 }}</strong>
-    </div>
-    <div>
-      <div class="mini-note">Credential Ref Bots</div>
-      <strong>{{ project_tooling_summary.credential_ref_bot_count or 0 }}</strong>
-    </div>
-    <div>
-      <div class="mini-note">Missing Credential Refs</div>
-      <strong>{{ project_tooling_summary.missing_credential_ref_count or 0 }}</strong>
-    </div>
-    <div>
-      <div class="mini-note">Raw Credential Refs</div>
-      <strong>{{ project_tooling_summary.raw_credential_ref_bot_count or 0 }}</strong>
-    </div>
-  </div>
-  <div class="split-grid" style="grid-template-columns:repeat(auto-fit, minmax(18rem, 1fr)); gap:0.75rem;">
-    <div>
-      <h3 class="panel-title">Blocked Groups</h3>
-      <div class="list">
-        {% for group in project_tooling.blocked_groups or [] %}
-        <div class="list-item">
-          <strong>{{ group.label or (group.category | replace('_', ' ')) }}</strong>
-          <small><span class="badge badge-blocked">{{ group.count }} bot{{ '' if group.count == 1 else 's' }}</span></small>
-          {% if group.detail %}<small>{{ group.detail }}</small>{% endif %}
-          {% if group.recommended_action %}
-          <small>
-            Recommended action:
-            <span class="badge {% if group.recommended_action.level == 'critical' %}badge-failed{% elif group.recommended_action.level == 'warning' %}badge-yellow{% elif group.recommended_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
-              {{ group.recommended_action.label }}
-            </span>
-            {{ group.recommended_action.detail }}
-          </small>
-          {% endif %}
-          {% for bot in group.bots[:3] %}
-          <small>
-            <a href="{{ url_for('bots.bot_detail_page', bot_id=bot.bot_id) }}">{{ bot.name or bot.bot_id }}</a>
-            {% if bot.required_tools %} · tools: {{ bot.required_tools | join(', ') }}{% endif %}
-            {% if bot.worker_ids %} · worker: {{ bot.worker_ids | join(', ') }}{% endif %}
-            {% if bot.missing_credential_refs %} · missing credentials: {{ bot.missing_credential_refs | join(', ') }}{% endif %}
-            {% if bot.workers %}
-              {% for worker in bot.workers[:2] %}
-                · probe {{ worker.worker_id }}: {{ worker.probe_status }}
+  </details>
+
+  <details class="panel collapsible-section" data-section="cloud_policy">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Cloud Context Policy</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div id="cloud-policy-state" class="state-empty" style="margin-bottom:0.75rem;">No policy loaded yet.</div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+        <div>
+          <div><strong>Provider Baseline Policies</strong></div>
+          <div class="mini-note" style="margin-bottom:0.5rem;">
+            Baseline constrains bot overrides. `allow` -> allow/redact/block, `redact` -> redact/block, `block` -> block only.
+          </div>
+          <table>
+            <thead><tr><th>Provider</th><th>Policy</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>openai</code></td>
+                <td>
+                  <select class="form-control" id="policy-provider-openai">
+                    <option value="allow">allow</option>
+                    <option value="redact">redact</option>
+                    <option value="block">block</option>
+                  </select>
+                </td>
+              </tr>
+              <tr>
+                <td><code>claude</code></td>
+                <td>
+                  <select class="form-control" id="policy-provider-claude">
+                    <option value="allow">allow</option>
+                    <option value="redact">redact</option>
+                    <option value="block">block</option>
+                  </select>
+                </td>
+              </tr>
+              <tr>
+                <td><code>gemini</code></td>
+                <td>
+                  <select class="form-control" id="policy-provider-gemini">
+                    <option value="allow">allow</option>
+                    <option value="redact">redact</option>
+                    <option value="block">block</option>
+                  </select>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="margin-top:0.5rem;">
+            <button class="btn btn-primary" onclick="saveCloudProviderPolicies()">Save Provider Policies</button>
+          </div>
+        </div>
+        <div>
+          <div><strong>Bot Override</strong></div>
+          <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr; gap:0.5rem; margin-top:0.35rem;">
+            <select class="form-control" id="policy-bot-id">
+              <option value="">Select bot</option>
+              {% for b in all_bots %}
+              <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
               {% endfor %}
-            {% endif %}
-          </small>
-          {% if bot.blocking_messages %}<small>{{ bot.blocking_messages[0] }}</small>{% endif %}
-          {% endfor %}
+            </select>
+            <select class="form-control" id="policy-bot-provider">
+              <option value="openai">openai</option>
+              <option value="claude">claude</option>
+              <option value="gemini">gemini</option>
+            </select>
+            <select class="form-control" id="policy-bot-policy">
+              <option value="allow">allow</option>
+              <option value="redact">redact</option>
+              <option value="block">block</option>
+            </select>
+          </div>
+          <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+            <button class="btn" onclick="setCloudBotOverride()">Set Override</button>
+            <button class="btn btn-danger" onclick="removeCloudBotOverride()">Remove Override</button>
+          </div>
+          <div class="mini-note" style="margin-top:0.5rem;">Override options will be validated against provider baseline.</div>
+          <pre id="cloud-policy-pre" style="white-space:pre-wrap; margin-top:0.55rem;">{}</pre>
         </div>
-        {% else %}
-        <div class="empty">No enabled assigned bots are blocked by tooling readiness.</div>
-        {% endfor %}
       </div>
     </div>
-    <div>
-      <h3 class="panel-title">Required Tools</h3>
-      <table>
-        <thead><tr><th>Tool</th><th>Bots</th></tr></thead>
-        <tbody>
-          {% for row in project_tooling.required_tools or [] %}
-          <tr><td><code>{{ row.tool }}</code></td><td>{{ row.bot_count }}</td></tr>
-          {% else %}
-          <tr><td colspan="2" class="empty">No worker-backed tools required by assigned bots.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
+  </details>
 
-<section class="panel" style="margin-bottom:1rem;">
-  <h2 class="panel-title">Assigned Bot Scope</h2>
-  <table>
-    <thead><tr><th>Bot</th><th>Status</th><th>Readiness</th><th>Tooling Action</th><th>Work Scope</th><th>Approval Gates</th></tr></thead>
-    <tbody>
-      {% for bot in bots %}
-      {% set scope = bot.scope_view or {} %}
-      {% set bot_tooling = (project_tooling.rows | selectattr('bot_id', 'equalto', bot.id) | list | first) if project_tooling.rows else None %}
-      {% set worker_profile = bot_tooling.worker_profile if bot_tooling and bot_tooling.worker_profile else {} %}
-      {% set approval_count = (scope.connection_owner_approvals | length) + (scope.browser_owner_approvals | length) %}
-      <tr>
-        <td>
-          <a href="{{ url_for('bots.bot_detail_page', bot_id=bot.id) }}">{{ bot.name or bot.id }}</a>
-          <div class="mini-note">{{ bot.role or 'bot' }}{% if bot.id %} · {{ bot.id }}{% endif %}</div>
-        </td>
-        <td><span class="badge badge-{{ 'enabled' if bot.enabled else 'disabled' }}">{{ 'enabled' if bot.enabled else 'disabled' }}</span></td>
-        <td>
-          {% set readiness = bot.readiness or {} %}
-          <span class="badge badge-{{ readiness.state or 'unknown' }}">{{ readiness.state or 'unknown' }}</span>
-          {% if readiness.detail %}<div class="mini-note">{{ readiness.detail }}</div>{% endif %}
-        </td>
-        <td class="metrics">
-          {% if bot_tooling %}
-            {% set tooling_action = bot_tooling.recommended_action or {} %}
-            <span class="badge {% if tooling_action.level == 'critical' %}badge-failed{% elif tooling_action.level == 'warning' %}badge-yellow{% elif tooling_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
-              {{ tooling_action.label or 'inspect bot' }}
-            </span>
-            {% if bot_tooling.blocking_category_view %}
-            <div>{{ bot_tooling.blocking_category_view.label }}</div>
-            {% endif %}
-            {% if bot_tooling.blocking_messages %}
-            <div class="mini-note">{{ bot_tooling.blocking_messages[0] }}</div>
-            {% endif %}
-          {% else %}
-            <span class="badge badge-unknown">unknown</span>
-          {% endif %}
-        </td>
-        <td class="metrics">
-          {% if scope.backend_routes %}<div>Routes: {{ scope.backend_routes | join(', ') }}</div>{% endif %}
-          {% if scope.required_tools %}<div>Tools: {{ scope.required_tools | join(', ') }}</div>{% endif %}
-          {% if scope.connection_actions %}<div>Site/API actions: {{ scope.connection_actions | join(', ') }}</div>{% endif %}
-          {% if scope.browser_actions %}<div>Browser actions: {{ scope.browser_actions | join(', ') }}</div>{% endif %}
-          {% if scope.credential_refs %}<div>Credential refs: {{ scope.credential_refs | join(', ') }}</div>{% endif %}
-          {% if bot_tooling and bot_tooling.missing_credential_refs %}<div>Missing credential refs: {{ bot_tooling.missing_credential_refs | join(', ') }}</div>{% endif %}
-          {% if scope.repo_output_mode == 'allow' %}<div>Repo output: allow</div>{% endif %}
-          {% if scope.can_apply_db_actions %}<div>Database actions: allowed</div>{% endif %}
-          {% if worker_profile %}
-          <div>Worker scope: {{ worker_profile.task_scope or worker_profile.role or 'scoped worker' }}</div>
-          <div>Edits: {{ 'allowed' if worker_profile.can_edit else 'not allowed' }}</div>
-          {% if worker_profile.site_account %}<div>Site login: {{ worker_profile.site_account }}</div>{% endif %}
-          {% if worker_profile.course_scope %}<div>Courses: {{ worker_profile.course_scope | join(', ') }}</div>{% endif %}
-          {% if worker_profile.lesson_scope %}<div>Lessons: {{ worker_profile.lesson_scope | join(', ') }}</div>{% endif %}
-          {% if worker_profile.allowed_pages %}<div>Pages: {{ worker_profile.allowed_pages | join(', ') }}</div>{% endif %}
-          {% if worker_profile.cli_tools %}<div>CLI tools: {{ worker_profile.cli_tools | join(', ') }}</div>{% endif %}
-          {% endif %}
-          {% if not scope.backend_routes and not scope.required_tools and not scope.connection_actions and not scope.browser_actions and not scope.credential_refs and scope.repo_output_mode != 'allow' and not scope.can_apply_db_actions and not worker_profile %}Chat/planning only{% endif %}
-        </td>
-        <td class="metrics">
-          {% if approval_count %}
-          {{ approval_count }} approval gate{{ '' if approval_count == 1 else 's' }}
-          {% else %}
-          none
-          {% endif %}
-        </td>
-      </tr>
-      {% else %}
-      <tr><td colspan="6" class="empty">No bots are assigned to this project.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
-
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Personal Memory</h2>
-    <button class="btn btn-primary" type="button" onclick="saveProjectMemoryProfile()">Save Memory Gate</button>
-  </div>
-  <label style="display:block; margin-bottom:0.5rem;">
-    <input type="checkbox" id="project-memory-enabled" {% if project.memory_profiles_enabled %}checked{% endif %}> Enable personal memory for project chats
-  </label>
-  <div id="project-memory-state" class="state-empty">No memory gate update yet.</div>
-</section>
-
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Cloud Context Policy</h2>
-  </div>
-  <div id="cloud-policy-state" class="state-empty" style="margin-bottom:0.75rem;">No policy loaded yet.</div>
-  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
-    <div>
-      <div><strong>Provider Baseline Policies</strong></div>
-      <div class="mini-note" style="margin-bottom:0.5rem;">
-        Baseline constrains bot overrides. `allow` -> allow/redact/block, `redact` -> redact/block, `block` -> block only.
-      </div>
-      <table>
-        <thead><tr><th>Provider</th><th>Policy</th></tr></thead>
-        <tbody>
-          <tr>
-            <td><code>openai</code></td>
-            <td>
-              <select class="form-control" id="policy-provider-openai">
-                <option value="allow">allow</option>
-                <option value="redact">redact</option>
-                <option value="block">block</option>
-              </select>
-            </td>
-          </tr>
-          <tr>
-            <td><code>claude</code></td>
-            <td>
-              <select class="form-control" id="policy-provider-claude">
-                <option value="allow">allow</option>
-                <option value="redact">redact</option>
-                <option value="block">block</option>
-              </select>
-            </td>
-          </tr>
-          <tr>
-            <td><code>gemini</code></td>
-            <td>
-              <select class="form-control" id="policy-provider-gemini">
-                <option value="allow">allow</option>
-                <option value="redact">redact</option>
-                <option value="block">block</option>
-              </select>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div style="margin-top:0.5rem;">
-        <button class="btn btn-primary" onclick="saveCloudProviderPolicies()">Save Provider Policies</button>
-      </div>
-    </div>
-    <div>
-      <div><strong>Bot Override</strong></div>
-      <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr; gap:0.5rem; margin-top:0.35rem;">
-        <select class="form-control" id="policy-bot-id">
-          <option value="">Select bot</option>
-          {% for b in all_bots %}
-          <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
-          {% endfor %}
-        </select>
-        <select class="form-control" id="policy-bot-provider">
-          <option value="openai">openai</option>
-          <option value="claude">claude</option>
-          <option value="gemini">gemini</option>
-        </select>
-        <select class="form-control" id="policy-bot-policy">
-          <option value="allow">allow</option>
-          <option value="redact">redact</option>
-          <option value="block">block</option>
-        </select>
-      </div>
-      <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
-        <button class="btn" onclick="setCloudBotOverride()">Set Override</button>
-        <button class="btn btn-danger" onclick="removeCloudBotOverride()">Remove Override</button>
-      </div>
-      <div class="mini-note" style="margin-top:0.5rem;">Override options will be validated against provider baseline.</div>
-      <pre id="cloud-policy-pre" style="white-space:pre-wrap; margin-top:0.55rem;">{}</pre>
-    </div>
-  </div>
-</section>
-
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Chat Workspace Tools</h2>
-  </div>
-  <div id="chat-tool-access-state" class="state-empty" style="margin-bottom:0.75rem;">No workspace tool policy loaded yet.</div>
-  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
-    <div>
-      <label style="display:block; margin-bottom:0.5rem;">
-        <input type="checkbox" id="project-chat-tool-enabled" {% if chat_tool_access.enabled %}checked{% endif %}> Enable chat workspace tools for this project
-      </label>
-      <label style="display:block; margin-bottom:0.5rem;">
-        <input type="checkbox" id="project-chat-tool-filesystem" {% if chat_tool_access.filesystem %}checked{% endif %}> Allow filesystem read/search
-      </label>
-      <label style="display:block; margin-bottom:0.6rem;">
-        <input type="checkbox" id="project-chat-tool-repo-search" {% if chat_tool_access.repo_search %}checked{% endif %}> Allow semantic repo search
-      </label>
-      <div class="mini-note" style="margin-bottom:0.5rem;">
-        Filesystem tools use the project's managed repository workspace path automatically.
-      </div>
-      <button class="btn btn-primary" onclick="saveProjectChatToolAccess()">Save Workspace Tool Policy</button>
-    </div>
-    <div>
-      <div><strong>Current Project Chat Tool Policy</strong></div>
-      <pre id="project-chat-tool-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{{ chat_tool_access | tojson(indent=2) }}</pre>
-      <div class="mini-note" style="margin-top:0.5rem;">
-        Tools are usable only when bot-level + project-level + chat-level switches are all enabled.
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Repository Workspace</h2>
-  </div>
-  <div id="repo-workspace-state" class="state-empty" style="margin-bottom:0.75rem;">No repository workspace action yet.</div>
-  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
-    <div>
-      <label style="display:block; margin-bottom:0.5rem;">
-        <input type="checkbox" id="repo-workspace-enabled" {% if repo_workspace.enabled %}checked{% endif %}> Enable repository workspace for this project
-      </label>
-      <label style="display:block; margin-bottom:0.5rem;">
-        <input type="checkbox" id="repo-workspace-allow-push" {% if repo_workspace.allow_push %}checked{% endif %}> Allow git push from dashboard
-      </label>
-      <label style="display:block; margin-bottom:0.6rem;">
-        <input type="checkbox" id="repo-workspace-allow-command-exec" {% if repo_workspace.allow_command_execution %}checked{% endif %}> Allow command execution from dashboard
-      </label>
-      <div class="mini-note" style="margin-bottom:0.6rem;">
-        Workspace path is managed by the server for this project and is not user-configurable in the UI.
-      </div>
-      <div class="form-group">
-        <label>Clone URL</label>
-        <input class="form-control" id="repo-workspace-clone-url" type="password" autocomplete="off" placeholder="https://github.com/org/repo.git" value="">
-        <div id="repo-workspace-clone-url-note" class="mini-note" style="margin-top:0.35rem;">Leave blank to keep the currently saved clone URL.</div>
-      </div>
-      <div class="form-group">
-        <label>Default Branch</label>
-        <input class="form-control" id="repo-workspace-default-branch" placeholder="main" value="{{ repo_workspace.default_branch or '' }}">
-      </div>
-      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-        <button class="btn btn-primary" type="button" onclick="saveProjectRepoWorkspace()">Save Repo Workspace Policy</button>
-        <button class="btn" type="button" onclick="refreshProjectRepoWorkspaceStatus()">Refresh Repo Status</button>
-      </div>
-      <hr style="margin:0.8rem 0;">
-      <div><strong>Git Actions</strong></div>
-      <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr; gap:0.5rem; margin-top:0.45rem;">
-        <input class="form-control" id="repo-action-branch" placeholder="branch (optional)">
-        <input class="form-control" id="repo-action-remote" placeholder="remote (default origin)">
-        <input class="form-control" id="repo-action-depth" placeholder="clone depth (optional)">
-      </div>
-      <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem;">
-        <button class="btn" type="button" onclick="cloneProjectRepoWorkspace()">Clone</button>
-        <button class="btn" type="button" onclick="pullProjectRepoWorkspace()">Pull</button>
-        <button class="btn" type="button" onclick="pushProjectRepoWorkspace()">Push</button>
-        <button class="btn" type="button" onclick="refreshProjectRepoWorkspaceStatus()">Show File Status</button>
-        <button class="btn btn-danger" type="button" onclick="discardProjectRepoWorkspaceUntracked()">Discard Untracked Files</button>
-      </div>
-      <div class="form-group" style="margin-top:0.6rem;">
-        <label>Commit Message</label>
-        <input class="form-control" id="repo-commit-message" placeholder="feat: update pipeline contracts">
-      </div>
-      <label style="display:block; margin-bottom:0.5rem;">
-        <input type="checkbox" id="repo-commit-add-all" checked> Stage all changes before commit
-      </label>
-      <button class="btn" type="button" onclick="commitProjectRepoWorkspace()">Commit</button>
-      <div style="margin-top:0.8rem;">
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
-          <strong>File Status</strong>
-          <span id="repo-workspace-file-status-summary" class="mini-note">No repo status loaded.</span>
+  <details class="panel collapsible-section" data-section="chat_tools">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Chat Workspace Tools</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div id="chat-tool-access-state" class="state-empty" style="margin-bottom:0.75rem;">No workspace tool policy loaded yet.</div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+        <div>
+          <label style="display:block; margin-bottom:0.5rem;">
+            <input type="checkbox" id="project-chat-tool-enabled"> Enable chat workspace tools for this project
+          </label>
+          <label style="display:block; margin-bottom:0.5rem;">
+            <input type="checkbox" id="project-chat-tool-filesystem"> Allow filesystem read/search
+          </label>
+          <label style="display:block; margin-bottom:0.6rem;">
+            <input type="checkbox" id="project-chat-tool-repo-search"> Allow semantic repo search
+          </label>
+          <div class="mini-note" style="margin-bottom:0.5rem;">
+            Filesystem tools use the project's managed repository workspace path automatically.
+          </div>
+          <button class="btn btn-primary" onclick="saveProjectChatToolAccess()">Save Workspace Tool Policy</button>
         </div>
-        <div id="repo-workspace-file-status" class="empty" style="margin-top:0.35rem;">Click `Show File Status` or `Refresh Repo Status` to load staged and uncommitted files.</div>
+        <div>
+          <div><strong>Current Project Chat Tool Policy</strong></div>
+          <pre id="project-chat-tool-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{}</pre>
+          <div class="mini-note" style="margin-top:0.5rem;">
+            Tools are usable only when bot-level + project-level + chat-level switches are all enabled.
+          </div>
+        </div>
       </div>
-      <hr style="margin:0.8rem 0;">
-      <div><strong>Command Runner</strong></div>
-      <div class="mini-note" style="margin:0.35rem 0;">
-        Commands run inside the configured repo workspace runtime for this project. Use JSON array format. Example: <code>["py","-m","pytest","-q"]</code>
-      </div>
-      <div class="form-group">
-        <label>Command (JSON array)</label>
-        <textarea class="form-control" id="repo-command-json" rows="3">["py","-m","pytest","-q"]</textarea>
-      </div>
-      <div class="form-group">
-        <label>Timeout Seconds</label>
-        <input class="form-control" id="repo-command-timeout" placeholder="600">
-      </div>
-      <label style="display:block; margin-bottom:0.45rem;">
-        <input type="checkbox" id="repo-command-use-temp-workspace"> Run in temporary isolated workspace
-      </label>
-      <div class="form-group">
-        <label>Temp Ref (optional branch/commit)</label>
-        <input class="form-control" id="repo-command-temp-ref" placeholder="main">
-      </div>
-      <label style="display:block; margin-bottom:0.45rem;">
-        <input type="checkbox" id="repo-command-bootstrap"> Bootstrap dependencies before command
-      </label>
-      <div class="form-group">
-        <label>Bootstrap Languages (comma-separated, optional)</label>
-        <input class="form-control" id="repo-command-bootstrap-languages" placeholder="python,node,dotnet,go,rust,cpp">
-      </div>
-      <label style="display:block; margin-bottom:0.55rem;">
-        <input type="checkbox" id="repo-command-keep-temp-workspace"> Keep temporary workspace after run
-      </label>
-      <button class="btn" type="button" onclick="runProjectRepoWorkspaceCommand()">Run Command</button>
     </div>
-    <div>
-      <div><strong>Current Repo Workspace Policy</strong></div>
-      <pre id="repo-workspace-policy-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; overflow:auto;">{{ repo_workspace | tojson(indent=2) }}</pre>
-      <div style="margin-top:0.55rem;"><strong>Repo Status</strong></div>
-      <pre id="repo-workspace-status-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; overflow:auto;">{}</pre>
-      <div style="margin-top:0.55rem; display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
-        <strong>Usage Summary</strong>
-        <button class="btn btn-sm" type="button" onclick="refreshProjectRepoWorkspaceUsage()">Refresh Usage</button>
-      </div>
-      <pre id="repo-workspace-usage-summary-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; overflow:auto;">{}</pre>
-      <div style="margin-top:0.55rem;"><strong>Recent Runs</strong></div>
-      <pre id="repo-workspace-runs-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; max-height:12rem; overflow:auto;">[]</pre>
-      <div style="margin-top:0.55rem;"><strong>Last Action Output</strong></div>
-      <pre id="repo-workspace-output-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; max-height:16rem; overflow:auto;">{}</pre>
-    </div>
-  </div>
-</section>
+  </details>
 
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Orchestration Temp Workspaces</h2>
-  </div>
-  <div class="mini-note" style="margin-bottom:0.6rem;">
-    PM pipelines now execute in orchestration-scoped temporary workspaces until explicit apply. Deleted or lost temp workspaces remain reviewable through saved task outputs, but they are no longer applyable.
-  </div>
-  <pre style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin:0;">{{ orchestration_workspaces | tojson(indent=2) }}</pre>
-</section>
-
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Project Data Vault</h2>
-  </div>
-  <div class="mini-note" style="margin-bottom:0.75rem;">
-    Store project documents, notes, exports, and other source material here, then run the ingest program to push that data into the searchable vector-backed vault.
-  </div>
-  <div class="split-grid" style="grid-template-columns:1.2fr 0.8fr; gap:0.75rem;">
-    <div>
-      <div><strong>Filesystem Root</strong></div>
-      <div class="mini-note" style="margin-top:0.35rem;"><code>{{ project_data_root }}</code></div>
-      <div style="margin-top:0.75rem; display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
-        <strong>Explorer</strong>
-        <button class="btn btn-sm" type="button" id="project-data-edit-button" onclick="toggleProjectDataEditMode()">Edit</button>
-        <button class="btn btn-sm btn-danger" type="button" id="project-data-delete-selected-button" style="display:none;" onclick="deleteSelectedProjectData()">Delete Selected</button>
-        <span class="mini-note" id="project-data-selection-count" style="display:none;">0 selected</span>
-      </div>
-      <div id="project-data-tree" style="margin-top:0.5rem; max-height:24rem; overflow:auto;">
-        {{ render_project_data_node(project_data_tree) if project_data_tree else '<div class="empty">No project data root available</div>' }}
+  <details class="panel collapsible-section" data-section="repo_workspace">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Repository Workspace</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div id="repo-workspace-state" class="state-empty" style="margin-bottom:0.75rem;">No repository workspace action yet.</div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+        <div>
+          <label style="display:block; margin-bottom:0.5rem;">
+            <input type="checkbox" id="repo-workspace-enabled"> Enable repository workspace for this project
+          </label>
+          <label style="display:block; margin-bottom:0.5rem;">
+            <input type="checkbox" id="repo-workspace-allow-push"> Allow git push from dashboard
+          </label>
+          <label style="display:block; margin-bottom:0.6rem;">
+            <input type="checkbox" id="repo-workspace-allow-command-exec"> Allow command execution from dashboard
+          </label>
+          <div class="mini-note" style="margin-bottom:0.6rem;">
+            Workspace path is managed by the server for this project and is not user-configurable in the UI.
+          </div>
+          <div class="form-group">
+            <label>Clone URL</label>
+            <input class="form-control" id="repo-workspace-clone-url" type="password" autocomplete="off" placeholder="https://github.com/org/repo.git" value="">
+            <div id="repo-workspace-clone-url-note" class="mini-note" style="margin-top:0.35rem;">Leave blank to keep the currently saved clone URL.</div>
+          </div>
+          <div class="form-group">
+            <label>Default Branch</label>
+            <input class="form-control" id="repo-workspace-default-branch" placeholder="main">
+          </div>
+          <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+            <button class="btn btn-primary" type="button" onclick="saveProjectRepoWorkspace()">Save Repo Workspace Policy</button>
+            <button class="btn" type="button" onclick="refreshProjectRepoWorkspaceStatus()">Refresh Repo Status</button>
+          </div>
+          <hr style="margin:0.8rem 0;">
+          <div><strong>Git Actions</strong></div>
+          <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr; gap:0.5rem; margin-top:0.45rem;">
+            <input class="form-control" id="repo-action-branch" placeholder="branch (optional)">
+            <input class="form-control" id="repo-action-remote" placeholder="remote (default origin)">
+            <input class="form-control" id="repo-action-depth" placeholder="clone depth (optional)">
+          </div>
+          <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem;">
+            <button class="btn" type="button" onclick="cloneProjectRepoWorkspace()">Clone</button>
+            <button class="btn" type="button" onclick="pullProjectRepoWorkspace()">Pull</button>
+            <button class="btn" type="button" onclick="pushProjectRepoWorkspace()">Push</button>
+            <button class="btn" type="button" onclick="refreshProjectRepoWorkspaceStatus()">Show File Status</button>
+            <button class="btn btn-danger" type="button" onclick="discardProjectRepoWorkspaceUntracked()">Discard Untracked Files</button>
+          </div>
+          <div class="form-group" style="margin-top:0.6rem;">
+            <label>Commit Message</label>
+            <input class="form-control" id="repo-commit-message" placeholder="feat: update pipeline contracts">
+          </div>
+          <label style="display:block; margin-bottom:0.5rem;">
+            <input type="checkbox" id="repo-commit-add-all" checked> Stage all changes before commit
+          </label>
+          <button class="btn" type="button" onclick="commitProjectRepoWorkspace()">Commit</button>
+          <div style="margin-top:0.8rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+              <strong>File Status</strong>
+              <span id="repo-workspace-file-status-summary" class="mini-note">No repo status loaded.</span>
+            </div>
+            <div id="repo-workspace-file-status" class="empty" style="margin-top:0.35rem;">Click `Show File Status` or `Refresh Repo Status` to load staged and uncommitted files.</div>
+          </div>
+          <hr style="margin:0.8rem 0;">
+          <div><strong>Command Runner</strong></div>
+          <div class="mini-note" style="margin:0.35rem 0;">
+            Commands run inside the configured repo workspace runtime for this project. Use JSON array format. Example: <code>["py","-m","pytest","-q"]</code>
+          </div>
+          <div class="form-group">
+            <label>Command (JSON array)</label>
+            <textarea class="form-control" id="repo-command-json" rows="3">["py","-m","pytest","-q"]</textarea>
+          </div>
+          <div class="form-group">
+            <label>Timeout Seconds</label>
+            <input class="form-control" id="repo-command-timeout" placeholder="600">
+          </div>
+          <label style="display:block; margin-bottom:0.45rem;">
+            <input type="checkbox" id="repo-command-use-temp-workspace"> Run in temporary isolated workspace
+          </label>
+          <div class="form-group">
+            <label>Temp Ref (optional branch/commit)</label>
+            <input class="form-control" id="repo-command-temp-ref" placeholder="main">
+          </div>
+          <label style="display:block; margin-bottom:0.45rem;">
+            <input type="checkbox" id="repo-command-bootstrap"> Bootstrap dependencies before command
+          </label>
+          <div class="form-group">
+            <label>Bootstrap Languages (comma-separated, optional)</label>
+            <input class="form-control" id="repo-command-bootstrap-languages" placeholder="python,node,dotnet,go,rust,cpp">
+          </div>
+          <label style="display:block; margin-bottom:0.55rem;">
+            <input type="checkbox" id="repo-command-keep-temp-workspace"> Keep temporary workspace after run
+          </label>
+          <button class="btn" type="button" onclick="runProjectRepoWorkspaceCommand()">Run Command</button>
+        </div>
+        <div>
+          <div><strong>Current Repo Workspace Policy</strong></div>
+          <pre id="repo-workspace-policy-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; overflow:auto;">{}</pre>
+          <div style="margin-top:0.55rem;"><strong>Repo Status</strong></div>
+          <pre id="repo-workspace-status-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; overflow:auto;">{}</pre>
+          <div style="margin-top:0.55rem; display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+            <strong>Usage Summary</strong>
+            <button class="btn btn-sm" type="button" onclick="refreshProjectRepoWorkspaceUsage()">Refresh Usage</button>
+          </div>
+          <pre id="repo-workspace-usage-summary-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; overflow:auto;">{}</pre>
+          <div style="margin-top:0.55rem;"><strong>Recent Runs</strong></div>
+          <pre id="repo-workspace-runs-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; max-height:12rem; overflow:auto;">[]</pre>
+          <div style="margin-top:0.55rem;"><strong>Last Action Output</strong></div>
+          <pre id="repo-workspace-output-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; max-height:16rem; overflow:auto;">{}</pre>
+        </div>
       </div>
     </div>
-    <div>
-      <div><strong>Create Folder</strong></div>
-      <div class="form-group" style="margin-top:0.35rem;">
-        <label>Parent Path</label>
-        <input class="form-control" id="project-data-parent-path" placeholder="docs">
+  </details>
+
+  <details class="panel collapsible-section" data-section="workspaces" data-lazy="1">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Orchestration Temp Workspaces</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="skeleton-loader" aria-hidden="true"></div>
+    </div>
+  </details>
+
+  <details class="panel collapsible-section" data-section="data" data-lazy="1">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Project Data Vault</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="mini-note" style="margin-bottom:0.75rem;">
+        Store project documents, notes, exports, and other source material here, then run the ingest program to push that data into the searchable vector-backed vault.
       </div>
-      <div class="form-group">
-        <label>Folder Name</label>
-        <input class="form-control" id="project-data-folder-name" placeholder="product-specs">
+      <div class="skeleton-loader" aria-hidden="true"></div>
+    </div>
+  </details>
+
+  <details class="panel collapsible-section" data-section="database" data-lazy="1">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Project Database Context</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="skeleton-loader" aria-hidden="true"></div>
+    </div>
+  </details>
+
+  <details class="panel collapsible-section" data-section="ticket_sources">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Ticket Sources</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="page-header" style="margin-bottom:0.75rem;">
+        <a href="{{ url_for('ticket_sources.ticket_sources_page', project_id=project.id) }}" class="btn btn-sm">Manage Sources →</a>
       </div>
-      <div style="display:flex; gap:0.5rem;">
-        <button class="btn" type="button" onclick="createProjectDataFolder()">Create Folder</button>
-        <button class="btn" type="button" onclick="refreshProjectDataFiles()">Refresh</button>
+      <p class="mini-note">Connect GitHub Issues, custom HTTP ticket feeds, Jira, or Asana to this project. Poll sources on demand or via schedules, and link items to bot tasks.</p>
+    </div>
+  </details>
+
+  <details class="panel collapsible-section" data-section="github">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">GitHub Integration (PAT)</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div id="github-state" class="state-empty" style="margin-bottom:0.75rem;">No connection status loaded yet.</div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+        <div>
+          <div class="form-group">
+            <label>Repository Full Name</label>
+            <input class="form-control" id="gh-repo-full-name" name="project_github_repo" placeholder="owner/repo" autocomplete="off" autocapitalize="none" spellcheck="false">
+          </div>
+          <div class="form-group">
+            <label>Personal Access Token</label>
+            <input class="form-control" id="gh-pat-token" name="project_github_pat" type="password" placeholder="github_pat_..." autocomplete="new-password" autocapitalize="none" spellcheck="false">
+          </div>
+          <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="connectGithubPat()">Connect</button>
+            <button class="btn" onclick="refreshGithubStatus(true)">Test Connection</button>
+            <button class="btn btn-danger" onclick="disconnectGithubPat()">Disconnect</button>
+          </div>
+          <hr style="margin:0.8rem 0;">
+          <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.5rem;">
+            <input class="form-control" id="gh-sync-branch" name="project_github_branch" placeholder="Branch (optional, case-sensitive)" autocomplete="off" autocapitalize="none" spellcheck="false">
+            <input class="form-control" id="gh-sync-namespace" placeholder="Namespace (optional)">
+          </div>
+          <div class="mini-note" style="margin-top:0.5rem;">
+            `Full Ingest` pulls the full repository corpus: files, commits, pull requests, issues, and discussion threads. `Update Ingest` refreshes anything newer or changed since the last successful ingest.
+          </div>
+          <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="syncGithubContext('full')">Run Full Ingest</button>
+            <button class="btn" onclick="syncGithubContext('update')">Run Update Ingest</button>
+          </div>
+        </div>
+        <div>
+          <div><strong>Current Status</strong></div>
+          <pre id="github-status-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{}</pre>
+          <div id="github-sync-state" class="state-empty" style="margin-top:0.5rem;">No sync run yet.</div>
+          <hr style="margin:0.8rem 0;">
+          <div><strong>PR Review Workflow</strong></div>
+          <div class="form-group" style="margin-top:0.35rem;">
+            <select class="form-control" id="gh-pr-review-bot">
+              <option value="">Select reviewer bot</option>
+              {% for b in all_bots %}
+              <option value="{{ b.id }}">{{ b.name }} ({{ b.role }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <label style="display:block; margin-bottom:0.4rem;">
+            <input type="checkbox" id="gh-pr-review-enabled" checked> Enable PR review task creation on pull_request webhooks
+          </label>
+          <div>
+            <button class="btn" onclick="savePrReviewConfig()">Save PR Review Config</button>
+          </div>
+          <div id="gh-pr-review-state" class="state-empty" style="margin-top:0.5rem;">No PR review config update yet.</div>
+        </div>
       </div>
-      <hr style="margin:0.8rem 0;">
-      <div><strong>Upload Files</strong></div>
-      <div class="form-group" style="margin-top:0.35rem;">
-        <label>Target Path</label>
-        <input class="form-control" id="project-data-target-path" placeholder="docs">
-      </div>
-      <div class="form-group">
-        <label>Individual Files</label>
-        <input class="form-control" id="project-data-files" type="file" multiple>
-      </div>
-      <div class="form-group">
-        <label>Folder Upload</label>
-        <input class="form-control" id="project-data-folder-files" type="file" webkitdirectory directory multiple>
-      </div>
-      <div class="mini-note">
-        Use individual file upload for a few files, or folder upload to preserve nested paths under the selected target path.
-      </div>
-      <div style="display:flex; gap:0.5rem;">
-        <button class="btn btn-primary" type="button" onclick="uploadProjectDataFiles()">Upload Files</button>
-        <button class="btn" type="button" onclick="uploadProjectDataFolder()">Upload Folder</button>
-      </div>
-      <div id="project-data-state" class="state-empty" style="margin-top:0.6rem;">No filesystem action yet.</div>
-      <hr style="margin:0.8rem 0;">
-      <div><strong>Data Ingest</strong></div>
-      <div class="form-group" style="margin-top:0.35rem;">
-        <label>Namespace</label>
-        <input class="form-control" id="project-data-ingest-namespace" value="project:{{ project.id }}:data" placeholder="project:{{ project.id }}:data">
-      </div>
-      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-        <button class="btn btn-primary" type="button" onclick="startProjectDataIngest()">Run Data Ingest</button>
-        <button class="btn" type="button" onclick="refreshProjectDataIngestStatus()">Refresh Status</button>
-      </div>
-      <div id="project-data-ingest-state" class="state-empty" style="margin-top:0.6rem;">No project data ingest yet.</div>
-      <pre id="project-data-ingest-progress" style="white-space:pre-wrap; margin-top:0.5rem;">{
-  "status": "idle",
-  "counts": {
-    "discovered": 0,
-    "ingested": 0,
-    "skipped": 0,
-    "failed": 0
-  }
+    </div>
+  </details>
+
+  <details class="panel collapsible-section" data-section="webhooks">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">GitHub Webhooks</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div id="webhook-state" class="state-empty" style="margin-bottom:0.75rem;">No webhook status loaded yet.</div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+        <div>
+          <div class="form-group">
+            <label>Webhook Secret</label>
+            <input class="form-control" id="gh-webhook-secret" type="password" placeholder="set a shared secret">
+          </div>
+          <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="setWebhookSecret()">Set Secret</button>
+            <button class="btn btn-danger" onclick="deleteWebhookSecret()">Remove Secret</button>
+            <button class="btn" onclick="refreshWebhookEvents()">Refresh Events</button>
+          </div>
+          <div class="mini-note" style="margin-top:0.5rem;">
+            Webhook endpoint: <code>/v1/projects/{{ project.id }}/github/webhook</code>
+          </div>
+        </div>
+        <div>
+          <div><strong>Connection Flags</strong></div>
+          <pre id="webhook-flags-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{
+  "connected": false,
+  "has_webhook_secret": false
 }</pre>
-      <hr style="margin:0.8rem 0;">
-      <div><strong>CLI Fallback</strong></div>
-      <pre style="white-space:pre-wrap; margin-top:0.35rem;">python scripts/ingest_project_data.py --project-id {{ project.id }} --namespace project:{{ project.id }}:data</pre>
-      <div class="mini-note">
-        Default folders are created automatically: <code>docs</code>, <code>inbox</code>, <code>exports</code>, <code>notes</code>.
+        </div>
+      </div>
+      <div style="margin-top:0.9rem;">
+        <h3 style="font-size:0.95rem; margin-bottom:0.45rem;">Recent Webhook Events</h3>
+        <table>
+          <thead><tr><th>Type</th><th>Action</th><th>Repository</th><th>Delivery</th><th>Created</th></tr></thead>
+          <tbody id="webhook-events-body"></tbody>
+        </table>
       </div>
     </div>
-  </div>
-</section>
+  </details>
 
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Project Database Context</h2>
-  </div>
-  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
-    <div>
-      <div class="form-group">
-        <label>Connection Name</label>
-        <input class="form-control" id="project-db-name" placeholder="Primary Postgres">
-      </div>
-      <div class="form-group">
-        <label>Connection String</label>
-        <input class="form-control" id="project-db-dsn" type="password" placeholder="postgresql+psycopg2://user:pass@host:5432/db">
-      </div>
-      <div class="form-group">
-        <label>Description</label>
-        <textarea class="form-control" id="project-db-description" rows="3" placeholder="Production analytics database"></textarea>
-      </div>
-      <label style="display:block; margin-bottom:0.5rem;">
-        <input type="checkbox" id="project-db-readonly" checked> Readonly connection
-      </label>
-      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-        <button class="btn btn-primary" type="button" onclick="createProjectDatabaseConnection()">Save Database Connection</button>
-      </div>
-      <div id="project-db-state" class="state-empty" style="margin-top:0.6rem;">No project database action yet.</div>
-    </div>
-    <div>
-      <div class="form-group">
-        <label>Test Query</label>
-        <textarea class="form-control" id="project-db-test-query" rows="3" placeholder="SELECT 1 AS ok">SELECT 1 AS ok</textarea>
-      </div>
-      <div class="form-group">
-        <label>Schema Ingest Namespace</label>
-        <input class="form-control" id="project-db-namespace" value="project:{{ project.id }}:data" placeholder="project:{{ project.id }}:data">
-      </div>
-      <div class="mini-note">
-        Save the database connection here, test it from the project page, then ingest schema structure into the project vault so bots can search tables, columns, keys, and joins.
-      </div>
-    </div>
-  </div>
-  <div style="margin-top:0.9rem;">
-    <table>
-      <thead><tr><th>Name</th><th>Readonly</th><th>Schema Snapshot</th><th>Updated</th><th>Actions</th></tr></thead>
-      <tbody>
-        {% for c in project_connections %}
-        <tr>
-          <td>
-            <div><strong>{{ c.name }}</strong></div>
-            {% if c.description %}<div class="mini-note">{{ c.description }}</div>{% endif %}
-          </td>
-          <td>{{ "Yes" if c.config.readonly else "No" }}</td>
-          <td>
-            {% if c.schema_totals %}
-            <div>{{ c.schema_totals.get("tables", 0) }} table(s), {{ c.schema_totals.get("columns", 0) }} column(s)</div>
-            {% else %}
-            <span class="empty">No schema ingest yet</span>
-            {% endif %}
-          </td>
-          <td>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T',' ') }}</td>
-          <td style="display:flex; gap:0.4rem; flex-wrap:wrap;">
-            <button class="btn btn-sm" type="button" onclick="testProjectDatabaseConnection({{ c.id|tojson }})">Test</button>
-            <button class="btn btn-sm btn-primary" type="button" onclick="ingestProjectDatabaseSchema({{ c.id|tojson }})">Ingest Schema</button>
-            <button class="btn btn-sm btn-danger" type="button" onclick="deleteProjectDatabaseConnection({{ c.id|tojson }})">Delete</button>
-          </td>
-        </tr>
+  <details class="panel collapsible-section" data-section="bridges">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Bridge Management</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+        {% for b in project.bridge_project_ids %}
+        <span class="badge badge-running" style="display:flex;align-items:center;gap:0.4rem;">
+          {{ b }}
+          <button class="btn btn-sm btn-danger" style="padding:0.1rem 0.35rem;" onclick="removeBridge('{{ b }}')">x</button>
+        </span>
         {% else %}
-        <tr><td colspan="5" class="empty">No project database connections yet</td></tr>
+        <div class="empty">No bridges configured</div>
         {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Ticket Sources</h2>
-    <a href="{{ url_for('ticket_sources.ticket_sources_page', project_id=project.id) }}" class="btn btn-sm">Manage Sources →</a>
-  </div>
-  <p class="mini-note">Connect GitHub Issues, custom HTTP ticket feeds, Jira, or Asana to this project. Poll sources on demand or via schedules, and link items to bot tasks.</p>
-</section>
-
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">GitHub Integration (PAT)</h2>
-  </div>
-  <div id="github-state" class="state-empty" style="margin-bottom:0.75rem;">No connection status loaded yet.</div>
-  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
-    <div>
-      <div class="form-group">
-        <label>Repository Full Name</label>
-        <input class="form-control" id="gh-repo-full-name" name="project_github_repo" placeholder="owner/repo" autocomplete="off" autocapitalize="none" spellcheck="false">
       </div>
-      <div class="form-group">
-        <label>Personal Access Token</label>
-        <input class="form-control" id="gh-pat-token" name="project_github_pat" type="password" placeholder="github_pat_..." autocomplete="new-password" autocapitalize="none" spellcheck="false">
-      </div>
-      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="connectGithubPat()">Connect</button>
-        <button class="btn" onclick="refreshGithubStatus(true)">Test Connection</button>
-        <button class="btn btn-danger" onclick="disconnectGithubPat()">Disconnect</button>
-      </div>
-      <hr style="margin:0.8rem 0;">
-      <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.5rem;">
-        <input class="form-control" id="gh-sync-branch" name="project_github_branch" placeholder="Branch (optional, case-sensitive)" autocomplete="off" autocapitalize="none" spellcheck="false">
-        <input class="form-control" id="gh-sync-namespace" placeholder="Namespace (optional)">
-      </div>
-      <div class="mini-note" style="margin-top:0.5rem;">
-        `Full Ingest` pulls the full repository corpus: files, commits, pull requests, issues, and discussion threads. `Update Ingest` refreshes anything newer or changed since the last successful ingest.
-      </div>
-      <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="syncGithubContext('full')">Run Full Ingest</button>
-        <button class="btn" onclick="syncGithubContext('update')">Run Update Ingest</button>
-      </div>
-    </div>
-    <div>
-      <div><strong>Current Status</strong></div>
-      <pre id="github-status-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{}</pre>
-      <div id="github-sync-state" class="state-empty" style="margin-top:0.5rem;">No sync run yet.</div>
-      <hr style="margin:0.8rem 0;">
-      <div><strong>PR Review Workflow</strong></div>
-      <div class="form-group" style="margin-top:0.35rem;">
-        <select class="form-control" id="gh-pr-review-bot">
-          <option value="">Select reviewer bot</option>
-          {% for b in all_bots %}
-          <option value="{{ b.id }}">{{ b.name }} ({{ b.role }})</option>
+      <div class="split-grid" style="grid-template-columns:1fr auto;">
+        <select class="form-control" id="bridge-target">
+          {% for p in all_projects %}
+          {% if p.id != project.id and p.id not in project.bridge_project_ids %}
+          <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
+          {% endif %}
           {% endfor %}
         </select>
-      </div>
-      <label style="display:block; margin-bottom:0.4rem;">
-        <input type="checkbox" id="gh-pr-review-enabled" checked> Enable PR review task creation on pull_request webhooks
-      </label>
-      <div>
-        <button class="btn" onclick="savePrReviewConfig()">Save PR Review Config</button>
-      </div>
-      <div id="gh-pr-review-state" class="state-empty" style="margin-top:0.5rem;">No PR review config update yet.</div>
-    </div>
-  </div>
-</section>
-
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">GitHub Webhooks</h2>
-  </div>
-  <div id="webhook-state" class="state-empty" style="margin-bottom:0.75rem;">No webhook status loaded yet.</div>
-  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
-    <div>
-      <div class="form-group">
-        <label>Webhook Secret</label>
-        <input class="form-control" id="gh-webhook-secret" type="password" placeholder="set a shared secret">
-      </div>
-      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="setWebhookSecret()">Set Secret</button>
-        <button class="btn btn-danger" onclick="deleteWebhookSecret()">Remove Secret</button>
-        <button class="btn" onclick="refreshWebhookEvents()">Refresh Events</button>
-      </div>
-      <div class="mini-note" style="margin-top:0.5rem;">
-        Webhook endpoint: <code>/v1/projects/{{ project.id }}/github/webhook</code>
+        <button class="btn btn-primary" onclick="addBridge()">Add Bridge</button>
       </div>
     </div>
-    <div>
-      <div><strong>Connection Flags</strong></div>
-      <pre id="webhook-flags-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{{ {
-  "connected": github_status.get("connected", false) if github_status else false,
-  "has_webhook_secret": github_status.get("has_webhook_secret", false) if github_status else false
-} | tojson(indent=2) }}</pre>
+  </details>
+
+  <details class="panel collapsible-section" data-section="bots_simple">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Project Bots</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="skeleton-loader" aria-hidden="true"></div>
     </div>
-  </div>
-  <div style="margin-top:0.9rem;">
-    <h3 style="font-size:0.95rem; margin-bottom:0.45rem;">Recent Webhook Events</h3>
-    <table>
-      <thead><tr><th>Type</th><th>Action</th><th>Repository</th><th>Delivery</th><th>Created</th></tr></thead>
-      <tbody id="webhook-events-body">
-        {% for e in webhook_events %}
-        <tr>
-          <td><code>{{ e.event_type }}</code></td>
-          <td>{{ e.action or '—' }}</td>
-          <td>{{ e.repository_full_name or '—' }}</td>
-          <td><code>{{ e.delivery_id or '—' }}</code></td>
-          <td>{{ (e.created_at[:19] if e.created_at else '') | replace('T',' ') }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5" class="empty">No webhook events received</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+  </details>
 
-<section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Bridge Management</h2>
-  </div>
-  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
-    {% for b in project.bridge_project_ids %}
-    <span class="badge badge-running" style="display:flex;align-items:center;gap:0.4rem;">
-      {{ b }}
-      <button class="btn btn-sm btn-danger" style="padding:0.1rem 0.35rem;" onclick="removeBridge('{{ b }}')">x</button>
-    </span>
-    {% else %}
-    <div class="empty">No bridges configured</div>
-    {% endfor %}
-  </div>
-  <div class="split-grid" style="grid-template-columns:1fr auto;">
-    <select class="form-control" id="bridge-target">
-      {% for p in all_projects %}
-      {% if p.id != project.id and p.id not in project.bridge_project_ids %}
-      <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
-      {% endif %}
-      {% endfor %}
-    </select>
-    <button class="btn btn-primary" onclick="addBridge()">Add Bridge</button>
-  </div>
-</section>
+  <details class="panel collapsible-section" data-section="tasks" data-lazy="1">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Project Tasks</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="skeleton-loader" aria-hidden="true"></div>
+    </div>
+  </details>
 
-<section class="panel" style="margin-bottom:1rem;">
-  <h2 class="panel-title">Project Bots</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Priority</th></tr></thead>
-    <tbody>
-      {% for b in bots %}
-      <tr>
-        <td><code>{{ b.id }}</code></td>
-        <td>{{ b.name }}</td>
-        <td>{{ b.role }}</td>
-        <td>{{ b.priority }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="4" class="empty">No project-scoped bots defined</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+  <details class="panel collapsible-section" data-section="vault" data-lazy="1">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Project Vault Items</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="skeleton-loader" aria-hidden="true"></div>
+    </div>
+  </details>
 
-<section class="panel" style="margin-bottom:1rem;">
-  <h2 class="panel-title">Project Tasks</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Bot</th><th>Status</th><th>Updated</th></tr></thead>
-    <tbody>
-      {% for t in tasks %}
-      <tr>
-        <td><code>{{ t.id }}</code></td>
-        <td>{{ t.bot_id }}</td>
-        <td><span class="badge badge-{{ t.status }}">{{ t.status }}</span></td>
-        <td>{{ (t.updated_at[:19] if t.updated_at else '') | replace('T',' ') }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="4" class="empty">No project-scoped tasks found</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+  <details class="panel collapsible-section" data-section="reports" data-lazy="1">
+    <summary class="collapsible-header">
+      <span class="collapsible-caret" aria-hidden="true">▸</span>
+      <h2 class="panel-title" style="margin:0;">Latest Bot Reports</h2>
+    </summary>
+    <div class="collapsible-body">
+      <div class="skeleton-loader" aria-hidden="true"></div>
+    </div>
+  </details>
 
-<section class="panel">
-  <h2 class="panel-title">Project Vault Items</h2>
-  <table>
-    <thead><tr><th>Title</th><th>Namespace</th><th>Source</th><th>Updated</th></tr></thead>
-    <tbody>
-      {% for i in vault_items %}
-      <tr>
-        <td>{{ i.title }}</td>
-        <td>{{ i.namespace }}</td>
-        <td>{{ i.source_type }}</td>
-        <td>{{ (i.updated_at[:19] if i.updated_at else '') | replace('T',' ') }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="4" class="empty">No vault items for this project</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
-
-<section class="panel" style="margin-bottom:1rem;">
-  <h2 class="panel-title">Latest Bot Reports</h2>
-  <div style="display:grid; gap:0.75rem;">
-    {% for report in project_reports %}
-    <article style="border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:0.85rem;">
-      <div style="display:flex; justify-content:space-between; gap:0.75rem; flex-wrap:wrap;">
-        <strong>{{ report.bot_name }}</strong>
-        <span class="mini-note">{{ (report.created_at[:19] if report.created_at else '') | replace('T',' ') }}</span>
-      </div>
-      <div class="mini-note" style="margin-top:0.25rem;">Task {{ report.task_id[:8] if report.task_id else '—' }} · {{ report.bot_id }}</div>
-      {% if report.content %}
-      <pre style="white-space:pre-wrap; margin-top:0.55rem; max-height:14rem; overflow:auto;">{{ report.content }}</pre>
-      {% endif %}
-    </article>
-    {% else %}
-    <div class="empty">No run reports recorded for project bots yet</div>
-    {% endfor %}
-  </div>
-</section>
+</div>
 {% endif %}
 {% endblock %}
+
 {% block scripts %}
 <script>
 const PROJECT_ID = {{ project.id|tojson if project else "''" }};
 let CLOUD_POLICY = {provider_policies: {}, bot_overrides: {}};
-let PROJECT_CHAT_TOOL_ACCESS = {{ (chat_tool_access if chat_tool_access else {"enabled": false, "filesystem": false, "repo_search": false, "workspace_root": none}) | tojson }};
-let PROJECT_REPO_WORKSPACE = {{ (repo_workspace if repo_workspace else {"enabled": false, "managed_path_mode": true, "workspace_binding": "managed", "root_path": none, "clone_url": none, "default_branch": none, "allow_push": false, "allow_command_execution": false}) | tojson }};
+let PROJECT_CHAT_TOOL_ACCESS = {enabled: false, filesystem: false, repo_search: false, workspace_root: null};
+let PROJECT_REPO_WORKSPACE = {enabled: false, managed_path_mode: true, workspace_binding: "managed", root_path: null, clone_url: null, default_branch: null, allow_push: false, allow_command_execution: false};
 let PROJECT_REPO_WORKSPACE_USAGE_SUMMARY = {};
 let PROJECT_REPO_WORKSPACE_STATUS = {};
 let GITHUB_SYNC_POLL = null;
 let PROJECT_DATA_INGEST_POLL = null;
 let PROJECT_DATA_EDIT_MODE = false;
+
+// ---- Lazy section loading ----
+const LAZY_SECTIONS = {};
+const SECTION_TEMPLATES = {
+  readiness: {lazy: true},
+  tooling: {lazy: true},
+  bots: {lazy: true},
+  workspaces: {lazy: true},
+  data: {lazy: true},
+  database: {lazy: true},
+  tasks: {lazy: true},
+  vault: {lazy: true},
+  reports: {lazy: true},
+  bots_simple: {lazy: true, template: 'partials/project_bots.html'},
+};
+
+document.querySelectorAll('details.collapsible-section').forEach((details) => {
+  const section = details.dataset.section;
+  LAZY_SECTIONS[section] = {loaded: false, loading: false, details: details};
+  details.addEventListener('toggle', function() {
+    if (!details.open) return;
+    document.querySelectorAll('details.collapsible-section[open]').forEach((other) => {
+      if (other !== details) other.open = false;
+    });
+    loadSection(section);
+  });
+});
+
+function loadSection(section) {
+  const entry = LAZY_SECTIONS[section];
+  if (!entry || entry.loaded || entry.loading) return;
+  const details = entry.details;
+  const body = details.querySelector('.collapsible-body');
+  entry.loading = true;
+
+  const url = '/api/projects/' + encodeURIComponent(PROJECT_ID) + '/detail/section?section=' + encodeURIComponent(section);
+  fetch(url)
+    .then(async (res) => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to load section');
+      }
+      return data;
+    })
+    .then((data) => {
+      entry.loading = false;
+      entry.loaded = true;
+      body.innerHTML = data.html || '<div class="empty">No content returned.</div>';
+      afterSectionLoad(section);
+    })
+    .catch((err) => {
+      entry.loading = false;
+      body.innerHTML = '<div class="empty">Failed to load: ' + escHtml(String(err && err.message || err)) + '</div>';
+    });
+}
+
+function afterSectionLoad(section) {
+  if (section === 'readiness' || section === 'bots' || section === 'tooling') {
+    // nothing extra
+  }
+  if (section === 'data') {
+    formatProjectDataTimestamps();
+    document.querySelectorAll('.project-data-select').forEach((el) => {
+      el.addEventListener('change', updateProjectDataSelectionState);
+    });
+    updateProjectDataSelectionState();
+    refreshProjectDataIngestStatus().catch(() => {});
+  }
+  if (section === 'database') {
+    // nothing extra needed
+  }
+  if (section === 'bots_simple') {
+    // nothing extra
+  }
+}
+
+function escHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -1091,7 +813,6 @@ function _renderRepoWorkspaceFileStatus(status) {
     wrap.textContent = 'No staged, unstaged, or untracked files.';
     return;
   }
-
   summary.textContent = rows.length + ' changed file(s) on ' + branch + '.';
   wrap.className = '';
   wrap.innerHTML = `
@@ -2013,9 +1734,9 @@ async function refreshWebhookEvents() {
   body.innerHTML = rows.map((e) => `
     <tr>
       <td><code>${e.event_type || ''}</code></td>
-      <td>${e.action || '—'}</td>
-      <td>${e.repository_full_name || '—'}</td>
-      <td><code>${e.delivery_id || '—'}</code></td>
+      <td>${e.action || '-'}</td>
+      <td>${e.repository_full_name || '-'}</td>
+      <td><code>${e.delivery_id || '-'}</code></td>
       <td>${(e.created_at || '').slice(0, 19).replace('T', ' ')}</td>
     </tr>
   `).join('') || '<tr><td colspan="5" class="empty">No webhook events received</td></tr>';
@@ -2235,19 +1956,5 @@ document.getElementById('policy-bot-provider')?.addEventListener('change', _sync
 document.getElementById('project-chat-tool-enabled')?.addEventListener('change', _syncProjectChatToolInputs);
 document.getElementById('repo-workspace-enabled')?.addEventListener('change', _syncRepoWorkspaceInputs);
 
-formatProjectDataTimestamps();
-document.querySelectorAll('.project-data-select').forEach((el) => {
-  el.addEventListener('change', updateProjectDataSelectionState);
-});
-updateProjectDataSelectionState();
-refreshGithubStatus(false);
-refreshGithubSyncStatus().catch(() => {});
-refreshWebhookEvents();
-refreshCloudContextPolicy();
-refreshProjectChatToolAccess();
-refreshProjectRepoWorkspacePolicy();
-refreshProjectRepoWorkspaceStatus();
-refreshProjectRepoWorkspaceUsage();
-refreshProjectDataIngestStatus().catch(() => {});
 </script>
 {% endblock %}

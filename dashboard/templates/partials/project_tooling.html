@@ -1,0 +1,76 @@
+{% set tooling = data.tooling or {} %}
+{% set tooling_summary = data.tooling_summary or {} %}
+<div class="page-header" style="margin-bottom:0.75rem;">
+  <div>
+    <h2 class="panel-title">Project Bot Tooling Risks</h2>
+    <div class="mini-note">Assigned-bot view of worker bindings, browser/API readiness, credentials, and launch blockers.</div>
+  </div>
+  {% set tooling_action = tooling_summary.recommended_action or {} %}
+  <span class="badge {% if tooling_action.level == 'critical' %}badge-failed{% elif tooling_action.level == 'warning' %}badge-yellow{% elif tooling_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
+    {{ tooling_action.label or 'inspect' }}
+  </span>
+</div>
+<div class="mini-note" style="margin-bottom:0.75rem;">{{ tooling_action.detail or 'Open assigned bot rows and resolve reported readiness blockers before assigning work.' }}</div>
+<div class="split-grid" style="grid-template-columns:repeat(auto-fit, minmax(11rem, 1fr)); gap:0.75rem; margin-bottom:0.75rem;">
+  <div><div class="mini-note">Ready Bots</div><strong>{{ tooling_summary.ready or 0 }}</strong></div>
+  <div><div class="mini-note">Blocked Bots</div><strong>{{ tooling_summary.blocked or 0 }}</strong></div>
+  <div><div class="mini-note">Tooling Bots</div><strong>{{ tooling_summary.tooling_bot_count or 0 }}</strong></div>
+  <div><div class="mini-note">Missing Workers</div><strong>{{ tooling_summary.missing_worker_assignment_count or 0 }}</strong></div>
+  <div><div class="mini-note">Offline Workers</div><strong>{{ tooling_summary.offline_worker_assignment_count or 0 }}</strong></div>
+  <div><div class="mini-note">Degraded Probes</div><strong>{{ tooling_summary.degraded_worker_probe_count or 0 }}</strong></div>
+  <div><div class="mini-note">Credential Ref Bots</div><strong>{{ tooling_summary.credential_ref_bot_count or 0 }}</strong></div>
+  <div><div class="mini-note">Missing Credential Refs</div><strong>{{ tooling_summary.missing_credential_ref_count or 0 }}</strong></div>
+  <div><div class="mini-note">Raw Credential Refs</div><strong>{{ tooling_summary.raw_credential_ref_bot_count or 0 }}</strong></div>
+</div>
+<div class="split-grid" style="grid-template-columns:repeat(auto-fit, minmax(18rem, 1fr)); gap:0.75rem;">
+  <div>
+    <h3 class="panel-title">Blocked Groups</h3>
+    <div class="list">
+      {% for group in tooling.blocked_groups or [] %}
+      <div class="list-item">
+        <strong>{{ group.label or (group.category | replace('_', ' ')) }}</strong>
+        <small><span class="badge badge-blocked">{{ group.count }} bot{{ '' if group.count == 1 else 's' }}</span></small>
+        {% if group.detail %}<small>{{ group.detail }}</small>{% endif %}
+        {% if group.recommended_action %}
+        <small>
+          Recommended action:
+          <span class="badge {% if group.recommended_action.level == 'critical' %}badge-failed{% elif group.recommended_action.level == 'warning' %}badge-yellow{% elif group.recommended_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
+            {{ group.recommended_action.label }}
+          </span>
+          {{ group.recommended_action.detail }}
+        </small>
+        {% endif %}
+        {% for bot in group.bots[:3] %}
+        <small>
+          <a href="{{ url_for('bots.bot_detail_page', bot_id=bot.bot_id) }}">{{ bot.name or bot.bot_id }}</a>
+          {% if bot.required_tools %} · tools: {{ bot.required_tools | join(', ') }}{% endif %}
+          {% if bot.worker_ids %} · worker: {{ bot.worker_ids | join(', ') }}{% endif %}
+          {% if bot.missing_credential_refs %} · missing credentials: {{ bot.missing_credential_refs | join(', ') }}{% endif %}
+          {% if bot.workers %}
+            {% for worker in bot.workers[:2] %}
+              · probe {{ worker.worker_id }}: {{ worker.probe_status }}
+            {% endfor %}
+          {% endif %}
+        </small>
+        {% if bot.blocking_messages %}<small>{{ bot.blocking_messages[0] }}</small>{% endif %}
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">No enabled assigned bots are blocked by tooling readiness.</div>
+      {% endfor %}
+    </div>
+  </div>
+  <div>
+    <h3 class="panel-title">Required Tools</h3>
+    <table>
+      <thead><tr><th>Tool</th><th>Bots</th></tr></thead>
+      <tbody>
+        {% for row in tooling.required_tools or [] %}
+        <tr><td><code>{{ row.tool }}</code></td><td>{{ row.bot_count }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="empty">No worker-backed tools required by assigned bots.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

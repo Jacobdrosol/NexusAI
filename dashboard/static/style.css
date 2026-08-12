@@ -1423,6 +1423,85 @@ select.form-control {
   color: #93c5fd;
 }
 
+/* Collapsible project sections */
+.collapsible-sections {
+  display: grid;
+  gap: 0.75rem;
+}
+
+details.collapsible-section {
+  border: 1px solid var(--line, rgba(148,163,184,0.25));
+  border-radius: 12px;
+  background: var(--surface, #0f172a);
+  overflow: hidden;
+}
+
+details.collapsible-section > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.85rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  user-select: none;
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0));
+}
+
+details.collapsible-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.collapsible-section > summary:hover {
+  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.01));
+}
+
+.collapsible-caret {
+  display: inline-block;
+  width: 0.85rem;
+  transition: transform 0.18s ease;
+  color: var(--muted, #7b879a);
+}
+
+details.collapsible-section[open] > summary .collapsible-caret {
+  transform: rotate(90deg);
+}
+
+.collapsible-body {
+  padding: 0.9rem 1rem 1.1rem;
+  border-top: 1px solid var(--line, rgba(148,163,184,0.15));
+}
+
+/* Skeleton loaders */
+.skeleton-loader {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.25rem 0;
+}
+
+.skeleton-loader::before,
+.skeleton-loader::after {
+  content: "";
+  height: 0.8rem;
+  border-radius: 4px;
+  background: linear-gradient(90deg, rgba(148,163,184,0.12) 25%, rgba(148,163,184,0.22) 50%, rgba(148,163,184,0.12) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-loader::after {
+  width: 70%;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-badge {
+  color: transparent;
+  min-width: 3.5rem;
+}
+
 .kanban {
   display: grid;
   grid-template-columns: repeat(5, minmax(160px, 1fr));

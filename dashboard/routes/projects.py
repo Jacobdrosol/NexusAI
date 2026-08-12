@@ -591,14 +591,25 @@ def projects_page() -> str:
         projects = []
         error = cp.unavailable_reason()
     else:
-        projects = _attach_project_autonomy_coverage(
-            [project for project in projects if isinstance(project, dict)],
-            cp.list_bots() if hasattr(cp, "list_bots") else None,
-            cp.list_schedules() if hasattr(cp, "list_schedules") else None,
-            cp.list_bot_readiness() if hasattr(cp, "list_bot_readiness") else None,
-        )
-        projects = _attach_project_chat_tool_access(projects, cp)
+        projects = [project for project in projects if isinstance(project, dict)]
     return render_template("projects.html", projects=projects, error=error)
+
+
+@bp.get("/api/projects/overview")
+@login_required
+def api_projects_overview():
+    """Lazy-load autonomy coverage + chat tool access for the projects table."""
+    cp = get_cp_client()
+    projects = cp.list_projects()
+    if projects is None:
+        return _cp_error_response(cp)
+    projects = [project for project in projects if isinstance(project, dict)]
+    bots = cp.list_bots() if hasattr(cp, "list_bots") else None
+    schedules = cp.list_schedules() if hasattr(cp, "list_schedules") else None
+    readiness = cp.list_bot_readiness() if hasattr(cp, "list_bot_readiness") else None
+    projects = _attach_project_autonomy_coverage(projects, bots, schedules, readiness)
+    projects = _attach_project_chat_tool_access(projects, cp)
+    return jsonify(projects)
 
 
 @bp.get("/api/projects")
@@ -620,24 +631,47 @@ def project_detail_page(project_id: str):
         return render_template(
             "project_detail.html",
             project=None,
-            bots=[],
-            tasks=[],
-            vault_items=[],
             all_projects=[],
-            github_status=_normalize_github_status(None),
-            webhook_events=[],
-            chat_tool_access=_normalize_project_chat_tool_access(None),
-            repo_workspace=_normalize_project_repo_workspace(None),
-            project_data_root=None,
-            project_data_tree=None,
-            project_connections=[],
             error="Control plane unavailable or project not found.",
         )
 
     all_projects = cp.list_projects() or []
-    bots = cp.list_bots() or []
-    tasks = _cp_list_tasks_safe(cp, limit=400, include_content=False) or []
-    vault_items = cp.list_vault_items(project_id=project_id, limit=100, include_content=False) or []
+    return render_template(
+        "project_detail.html",
+        project=project,
+        all_projects=all_projects,
+        error=None,
+    )
+
+
+@bp.get("/api/projects/<project_id>/detail")
+@login_required
+def api_project_detail_data(project_id: str):
+    """Lazy-load all project detail section data as JSON.
+
+    The project detail page shell renders instantly; the browser fetches this
+    per-section so heavy CP calls (bots, tasks, vault, per-bot artifacts,
+    tooling status) happen only when the user expands a section.
+    """
+    cp = get_cp_client()
+    project = cp.get_project(project_id)
+    if project is None:
+        return _cp_error_response(cp, "project not found")
+
+    def _safe_cp(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except TypeError:
+            try:
+                return fn()
+            except Exception:
+                return None
+        except Exception:
+            return None
+
+    bots = _safe_cp(cp.list_bots) or []
+    tasks = _safe_cp(lambda: _cp_list_tasks_safe(cp, limit=400, include_content=False)) or []
+    vault_items = _safe_cp(lambda: cp.list_vault_items(project_id=project_id, limit=100, include_content=False)) or []
 
     project_bot_ids = set(project.get("bot_ids") or [])
     project_bots = [
@@ -647,25 +681,23 @@ def project_detail_page(project_id: str):
         or str(bot.get("project_id") or "") == str(project_id)
     ]
     project_bots = _with_project_bot_scope_views(project_bots)
-    list_readiness = getattr(cp, "list_bot_readiness", None)
-    readiness_payload = list_readiness() if callable(list_readiness) else None
+    readiness_payload = _safe_cp(getattr(cp, "list_bot_readiness", lambda: None)) if hasattr(cp, "list_bot_readiness") else None
     project_bots = _with_project_bot_readiness_views(project_bots, readiness_payload)
-    list_workers = getattr(cp, "list_workers", None)
-    list_worker_probes = getattr(cp, "list_worker_probes", None)
-    list_keys = getattr(cp, "list_keys", None)
     project_tooling_status = build_bot_tooling_status(
         bots=project_bots,
         readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
-        workers=list_workers() if callable(list_workers) else [],
-        worker_probes_payload=list_worker_probes() if callable(list_worker_probes) else None,
-        api_keys=list_keys() if callable(list_keys) else None,
+        workers=_safe_cp(getattr(cp, "list_workers", lambda: [])) if hasattr(cp, "list_workers") else [],
+        worker_probes_payload=_safe_cp(getattr(cp, "list_worker_probes", lambda: None)) if hasattr(cp, "list_worker_probes") else None,
+        api_keys=_safe_cp(getattr(cp, "list_keys", lambda: None)) if hasattr(cp, "list_keys") else None,
     )
+    project_tooling_summary = project_tooling_status.get("summary") or {}
+
     project_reports: list[dict[str, Any]] = []
     for bot in project_bots:
         bot_id = str(bot.get("id") or "")
         if not bot_id:
             continue
-        artifacts = cp.list_bot_artifacts(bot_id, limit=20) or []
+        artifacts = _safe_cp(lambda: cp.list_bot_artifacts(bot_id, limit=20)) or []
         for artifact in artifacts:
             if str(artifact.get("label") or "") != "Run Report":
                 continue
@@ -682,18 +714,18 @@ def project_detail_page(project_id: str):
         md = t.get("metadata") or {}
         if isinstance(md, dict) and str(md.get("project_id", "")) == str(project_id):
             project_tasks.append(t)
-    project_data_root = ensure_project_data_layout(project_id)
+
     chat_tool_access = _normalize_project_chat_tool_access(
-        cp.get_project_chat_tool_access(project_id)
+        _safe_cp(getattr(cp, "get_project_chat_tool_access", lambda: None), project_id)
         if hasattr(cp, "get_project_chat_tool_access")
         else None
     )
     repo_workspace = _normalize_project_repo_workspace(
-        cp.get_project_repo_workspace(project_id)
+        _safe_cp(getattr(cp, "get_project_repo_workspace", lambda: None), project_id)
         if hasattr(cp, "get_project_repo_workspace")
         else None
     )
-    github_status = _normalize_github_status(cp.get_project_github_status(project_id))
+    github_status = _normalize_github_status(_safe_cp(cp.get_project_github_status, project_id))
     project_connections = _project_connections(project_id)
     project_ai_readiness = _build_project_ai_readiness(
         project=project,
@@ -705,33 +737,175 @@ def project_detail_page(project_id: str):
         repo_workspace=repo_workspace,
     )
     orchestration_workspaces = (
-        cp.list_project_orchestration_workspaces(project_id)
+        _safe_cp(
+            getattr(cp, "list_project_orchestration_workspaces", lambda: {"workspaces": []}),
+            project_id,
+        )
         if hasattr(cp, "list_project_orchestration_workspaces")
         else {"workspaces": []}
     ) or {"workspaces": []}
-    return render_template(
-        "project_detail.html",
-        project=project,
-        bots=project_bots,
-        all_bots=bots,
-        tasks=project_tasks,
-        vault_items=vault_items,
-        all_projects=all_projects,
-        github_status=github_status,
-        webhook_events=_normalize_webhook_events(
-            cp.list_project_github_webhook_events(project_id, limit=30)
-        ),
-        chat_tool_access=chat_tool_access,
-        repo_workspace=repo_workspace,
-        orchestration_workspaces=orchestration_workspaces.get("workspaces") or [],
-        project_data_root=str(project_data_root),
-        project_data_tree=build_project_data_tree(project_id),
-        project_connections=project_connections,
-        project_ai_readiness=project_ai_readiness,
-        project_tooling_status=project_tooling_status,
-        project_reports=project_reports,
-        error=None,
+
+    return jsonify(
+        {
+            "project_id": project_id,
+            "ai_readiness": project_ai_readiness,
+            "tooling": project_tooling_status,
+            "tooling_summary": project_tooling_summary,
+            "bots": project_bots,
+            "tasks": project_tasks,
+            "vault_items": vault_items,
+            "reports": project_reports,
+            "github_status": github_status,
+            "webhook_events": _normalize_webhook_events(
+                _safe_cp(cp.list_project_github_webhook_events, project_id, limit=30)
+            ),
+            "chat_tool_access": chat_tool_access,
+            "repo_workspace": repo_workspace,
+            "orchestration_workspaces": orchestration_workspaces.get("workspaces") or [],
+            "project_connections": project_connections,
+        }
     )
+
+
+@bp.get("/api/projects/<project_id>/detail/section")
+@login_required
+def api_project_detail_section(project_id: str):
+    """Render one project detail section as HTML for lazy expansion."""
+    section = str(request.args.get("section") or "").strip()
+    if section not in {
+        "readiness", "tooling", "bots", "tasks", "vault", "reports", "workspaces",
+        "data", "database", "bots_simple",
+    }:
+        return jsonify({"error": "unknown section"}), 400
+    cp = get_cp_client()
+    project = cp.get_project(project_id)
+    if project is None:
+        return _cp_error_response(cp, "project not found")
+
+    def _safe_cp(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except TypeError:
+            try:
+                return fn()
+            except Exception:
+                return None
+        except Exception:
+            return None
+
+    data: dict[str, Any] = {"project_id": project_id}
+
+    if section in {"readiness", "tooling", "bots"}:
+        bots = _safe_cp(cp.list_bots) or []
+        project_bot_ids = set(project.get("bot_ids") or [])
+        project_bots = [
+            bot
+            for bot in bots
+            if str(bot.get("id") or "") in project_bot_ids
+            or str(bot.get("project_id") or "") == str(project_id)
+        ]
+        project_bots = _with_project_bot_scope_views(project_bots)
+        readiness_payload = _safe_cp(getattr(cp, "list_bot_readiness", lambda: None)) if hasattr(cp, "list_bot_readiness") else None
+        project_bots = _with_project_bot_readiness_views(project_bots, readiness_payload)
+        data["bots"] = project_bots
+        if section == "readiness":
+            vault_items = _safe_cp(lambda: cp.list_vault_items(project_id=project_id, limit=100, include_content=False)) or []
+            chat_tool_access = _normalize_project_chat_tool_access(
+                _safe_cp(getattr(cp, "get_project_chat_tool_access", lambda: None), project_id)
+                if hasattr(cp, "get_project_chat_tool_access")
+                else None
+            )
+            repo_workspace = _normalize_project_repo_workspace(
+                _safe_cp(getattr(cp, "get_project_repo_workspace", lambda: None), project_id)
+                if hasattr(cp, "get_project_repo_workspace")
+                else None
+            )
+            github_status = _normalize_github_status(_safe_cp(cp.get_project_github_status, project_id))
+            project_connections = _project_connections(project_id)
+            data["ai_readiness"] = _build_project_ai_readiness(
+                project=project,
+                project_bots=project_bots,
+                vault_items=vault_items,
+                project_connections=project_connections,
+                github_status=github_status,
+                chat_tool_access=chat_tool_access,
+                repo_workspace=repo_workspace,
+            )
+        else:
+            project_tooling_status = build_bot_tooling_status(
+                bots=project_bots,
+                readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
+                workers=_safe_cp(getattr(cp, "list_workers", lambda: [])) if hasattr(cp, "list_workers") else [],
+                worker_probes_payload=_safe_cp(getattr(cp, "list_worker_probes", lambda: None)) if hasattr(cp, "list_worker_probes") else None,
+                api_keys=_safe_cp(getattr(cp, "list_keys", lambda: None)) if hasattr(cp, "list_keys") else None,
+            )
+            data["tooling"] = project_tooling_status
+            data["tooling_summary"] = project_tooling_status.get("summary") or {}
+    elif section == "tasks":
+        tasks = _safe_cp(lambda: _cp_list_tasks_safe(cp, limit=400, include_content=False)) or []
+        project_tasks = [
+            t for t in tasks
+            if isinstance((t.get("metadata") or {}), dict)
+            and str((t.get("metadata") or {}).get("project_id", "")) == str(project_id)
+        ]
+        data["tasks"] = project_tasks
+    elif section == "vault":
+        data["vault_items"] = _safe_cp(lambda: cp.list_vault_items(project_id=project_id, limit=100, include_content=False)) or []
+    elif section == "reports":
+        bots = _safe_cp(cp.list_bots) or []
+        project_bot_ids = set(project.get("bot_ids") or [])
+        project_bots = [
+            bot for bot in bots
+            if str(bot.get("id") or "") in project_bot_ids
+            or str(bot.get("project_id") or "") == str(project_id)
+        ]
+        reports: list[dict[str, Any]] = []
+        for bot in project_bots:
+            bot_id = str(bot.get("id") or "")
+            if not bot_id:
+                continue
+            artifacts = _safe_cp(lambda: cp.list_bot_artifacts(bot_id, limit=20)) or []
+            for artifact in artifacts:
+                if str(artifact.get("label") or "") != "Run Report":
+                    continue
+                reports.append({"bot_id": bot_id, "bot_name": bot.get("name") or bot_id, **artifact})
+        data["reports"] = sorted(reports, key=_report_artifact_sort_key, reverse=True)[:20]
+    elif section == "workspaces":
+        orchestration_workspaces = (
+            _safe_cp(getattr(cp, "list_project_orchestration_workspaces", lambda: {"workspaces": []}), project_id)
+            if hasattr(cp, "list_project_orchestration_workspaces")
+            else {"workspaces": []}
+        ) or {"workspaces": []}
+        data["orchestration_workspaces"] = orchestration_workspaces.get("workspaces") or []
+    elif section == "data":
+        project_data_root = ensure_project_data_layout(project_id)
+        data["project_data_root"] = str(project_data_root)
+        data["project_data_tree"] = build_project_data_tree(project_id)
+    elif section == "database":
+        data["project_connections"] = _project_connections(project_id)
+    elif section == "bots_simple":
+        bots = _safe_cp(cp.list_bots) or []
+        project_bot_ids = set(project.get("bot_ids") or [])
+        data["bots"] = [
+            bot for bot in bots
+            if str(bot.get("id") or "") in project_bot_ids
+            or str(bot.get("project_id") or "") == str(project_id)
+        ]
+
+    template_map = {
+        "readiness": "partials/project_readiness.html",
+        "tooling": "partials/project_tooling.html",
+        "bots": "partials/project_bots.html",
+        "tasks": "partials/project_tasks.html",
+        "vault": "partials/project_vault.html",
+        "reports": "partials/project_reports.html",
+        "workspaces": "partials/project_workspaces.html",
+        "data": "partials/project_data.html",
+        "database": "partials/project_database.html",
+        "bots_simple": "partials/project_bots.html",
+    }
+    html = render_template(template_map[section], data=data)
+    return jsonify({"section": section, "html": html})
 
 
 @bp.post("/api/projects")

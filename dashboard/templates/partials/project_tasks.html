@@ -1,0 +1,16 @@
+<h2 class="panel-title">Project Tasks</h2>
+<table>
+  <thead><tr><th>ID</th><th>Bot</th><th>Status</th><th>Updated</th></tr></thead>
+  <tbody>
+    {% for t in data.tasks or [] %}
+    <tr>
+      <td><code>{{ t.id }}</code></td>
+      <td>{{ t.bot_id }}</td>
+      <td><span class="badge badge-{{ t.status }}">{{ t.status }}</span></td>
+      <td>{{ (t.updated_at[:19] if t.updated_at else '') | replace('T',' ') }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="empty">No project-scoped tasks found</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

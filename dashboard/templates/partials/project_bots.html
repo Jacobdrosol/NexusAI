@@ -1,0 +1,71 @@
+{% set bots = data.bots or [] %}
+{% set tooling = data.tooling or {} %}
+<h2 class="panel-title">Assigned Bot Scope</h2>
+<table>
+  <thead><tr><th>Bot</th><th>Status</th><th>Readiness</th><th>Tooling Action</th><th>Work Scope</th><th>Approval Gates</th></tr></thead>
+  <tbody>
+    {% for bot in bots %}
+    {% set scope = bot.scope_view or {} %}
+    {% set bot_tooling = (tooling.rows | selectattr('bot_id', 'equalto', bot.id) | list | first) if tooling.rows else None %}
+    {% set worker_profile = bot_tooling.worker_profile if bot_tooling and bot_tooling.worker_profile else {} %}
+    {% set approval_count = (scope.connection_owner_approvals | length) + (scope.browser_owner_approvals | length) %}
+    <tr>
+      <td>
+        <a href="{{ url_for('bots.bot_detail_page', bot_id=bot.id) }}">{{ bot.name or bot.id }}</a>
+        <div class="mini-note">{{ bot.role or 'bot' }}{% if bot.id %} · {{ bot.id }}{% endif %}</div>
+      </td>
+      <td><span class="badge badge-{{ 'enabled' if bot.enabled else 'disabled' }}">{{ 'enabled' if bot.enabled else 'disabled' }}</span></td>
+      <td>
+        {% set readiness = bot.readiness or {} %}
+        <span class="badge badge-{{ readiness.state or 'unknown' }}">{{ readiness.state or 'unknown' }}</span>
+        {% if readiness.detail %}<div class="mini-note">{{ readiness.detail }}</div>{% endif %}
+      </td>
+      <td class="metrics">
+        {% if bot_tooling %}
+          {% set tooling_action = bot_tooling.recommended_action or {} %}
+          <span class="badge {% if tooling_action.level == 'critical' %}badge-failed{% elif tooling_action.level == 'warning' %}badge-yellow{% elif tooling_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
+            {{ tooling_action.label or 'inspect bot' }}
+          </span>
+          {% if bot_tooling.blocking_category_view %}
+          <div>{{ bot_tooling.blocking_category_view.label }}</div>
+          {% endif %}
+          {% if bot_tooling.blocking_messages %}
+          <div class="mini-note">{{ bot_tooling.blocking_messages[0] }}</div>
+          {% endif %}
+        {% else %}
+          <span class="badge badge-unknown">unknown</span>
+        {% endif %}
+      </td>
+      <td class="metrics">
+        {% if scope.backend_routes %}<div>Routes: {{ scope.backend_routes | join(', ') }}</div>{% endif %}
+        {% if scope.required_tools %}<div>Tools: {{ scope.required_tools | join(', ') }}</div>{% endif %}
+        {% if scope.connection_actions %}<div>Site/API actions: {{ scope.connection_actions | join(', ') }}</div>{% endif %}
+        {% if scope.browser_actions %}<div>Browser actions: {{ scope.browser_actions | join(', ') }}</div>{% endif %}
+        {% if scope.credential_refs %}<div>Credential refs: {{ scope.credential_refs | join(', ') }}</div>{% endif %}
+        {% if bot_tooling and bot_tooling.missing_credential_refs %}<div>Missing credential refs: {{ bot_tooling.missing_credential_refs | join(', ') }}</div>{% endif %}
+        {% if scope.repo_output_mode == 'allow' %}<div>Repo output: allow</div>{% endif %}
+        {% if scope.can_apply_db_actions %}<div>Database actions: allowed</div>{% endif %}
+        {% if worker_profile %}
+        <div>Worker scope: {{ worker_profile.task_scope or worker_profile.role or 'scoped worker' }}</div>
+        <div>Edits: {{ 'allowed' if worker_profile.can_edit else 'not allowed' }}</div>
+        {% if worker_profile.site_account %}<div>Site login: {{ worker_profile.site_account }}</div>{% endif %}
+        {% if worker_profile.course_scope %}<div>Courses: {{ worker_profile.course_scope | join(', ') }}</div>{% endif %}
+        {% if worker_profile.lesson_scope %}<div>Lessons: {{ worker_profile.lesson_scope | join(', ') }}</div>{% endif %}
+        {% if worker_profile.allowed_pages %}<div>Pages: {{ worker_profile.allowed_pages | join(', ') }}</div>{% endif %}
+        {% if worker_profile.cli_tools %}<div>CLI tools: {{ worker_profile.cli_tools | join(', ') }}</div>{% endif %}
+        {% endif %}
+        {% if not scope.backend_routes and not scope.required_tools and not scope.connection_actions and not scope.browser_actions and not scope.credential_refs and scope.repo_output_mode != 'allow' and not scope.can_apply_db_actions and not worker_profile %}Chat/planning only{% endif %}
+      </td>
+      <td class="metrics">
+        {% if approval_count %}
+        {{ approval_count }} approval gate{{ '' if approval_count == 1 else 's' }}
+        {% else %}
+        none
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="empty">No bots are assigned to this project.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

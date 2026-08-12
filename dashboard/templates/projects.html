@@ -23,69 +23,9 @@
       <td>{{ p.mode }}</td>
       <td><span class="badge badge-{{ 'enabled' if p.enabled else 'disabled' }}">{{ 'enabled' if p.enabled else 'disabled' }}</span></td>
       <td><span class="badge badge-{{ 'enabled' if p.memory_profiles_enabled else 'disabled' }}">{{ 'enabled' if p.memory_profiles_enabled else 'off' }}</span></td>
-      <td>
-        {% set chat_tools = p.chat_tool_access or {} %}
-        {% if chat_tools.enabled %}
-        <span class="badge badge-enabled">enabled</span>
-        <div class="mini-note">
-          {% if chat_tools.filesystem and chat_tools.repo_search %}
-          filesystem / repo search
-          {% elif chat_tools.filesystem %}
-          filesystem
-          {% elif chat_tools.repo_search %}
-          repo search
-          {% else %}
-          no modes selected
-          {% endif %}
-        </div>
-        {% if chat_tools.workspace_root %}<div class="mini-note">{{ chat_tools.workspace_root }}</div>{% endif %}
-        {% else %}
-        <span class="badge badge-disabled">off</span>
-        <div class="mini-note">Workspace tools blocked at project gate</div>
-        {% endif %}
-      </td>
+      <td><span class="empty" data-lazy-cell="chat_tools" data-project="{{ p.id }}">…</span></td>
       <td>{{ p.bridge_project_ids | length }}</td>
-      <td>
-        {% if p.autonomy_coverage.available %}
-        <div>{{ p.autonomy_coverage.enabled_configured_bot_count }} enabled</div>
-        <div class="mini-note">{{ p.autonomy_coverage.configured_bot_count }} configured{% if p.autonomy_coverage.registered_bot_count %} / {{ p.autonomy_coverage.registered_bot_count }} legacy{% endif %}</div>
-        {% if p.autonomy_coverage.tooling_bot_count or p.autonomy_coverage.connection_action_bot_count or p.autonomy_coverage.browser_action_bot_count or p.autonomy_coverage.repo_edit_bot_count %}
-        <div class="mini-note">
-          {% if p.autonomy_coverage.tooling_bot_count %}{{ p.autonomy_coverage.tooling_bot_count }} tool-backed{% endif %}
-          {% if p.autonomy_coverage.connection_action_bot_count %}{% if p.autonomy_coverage.tooling_bot_count %} / {% endif %}{{ p.autonomy_coverage.connection_action_bot_count }} site/API{% endif %}
-          {% if p.autonomy_coverage.browser_action_bot_count %}{% if p.autonomy_coverage.tooling_bot_count or p.autonomy_coverage.connection_action_bot_count %} / {% endif %}{{ p.autonomy_coverage.browser_action_bot_count }} browser{% endif %}
-          {% if p.autonomy_coverage.repo_edit_bot_count %}{% if p.autonomy_coverage.tooling_bot_count or p.autonomy_coverage.connection_action_bot_count or p.autonomy_coverage.browser_action_bot_count %} / {% endif %}{{ p.autonomy_coverage.repo_edit_bot_count }} repo-edit{% endif %}
-        </div>
-        {% endif %}
-        {% else %}
-        <span class="empty">Unavailable</span>
-        {% endif %}
-      </td>
-      <td>
-        {% if not p.autonomy_coverage.available %}
-        <span class="empty">Unavailable</span>
-        {% elif p.autonomy_coverage.active_schedule_count %}
-        <span class="badge badge-enabled">active</span>
-        <div class="mini-note">{{ p.autonomy_coverage.active_schedule_count }} active schedule{{ '' if p.autonomy_coverage.active_schedule_count == 1 else 's' }} / {{ p.autonomy_coverage.scheduled_bot_count }} bot{{ '' if p.autonomy_coverage.scheduled_bot_count == 1 else 's' }}</div>
-        {% if p.autonomy_coverage.attention_schedule_count %}
-        <div class="mini-note"><span class="badge badge-degraded">attention</span> {{ p.autonomy_coverage.attention_schedule_count }} latest run{{ '' if p.autonomy_coverage.attention_schedule_count == 1 else 's' }} needs attention</div>
-        {% elif p.autonomy_coverage.awaiting_first_run_count %}
-        <div class="mini-note">{{ p.autonomy_coverage.awaiting_first_run_count }} awaiting first run</div>
-        {% else %}
-        <div class="mini-note">{{ p.autonomy_coverage.completed_schedule_count }} latest run{{ '' if p.autonomy_coverage.completed_schedule_count == 1 else 's' }} complete</div>
-        {% endif %}
-        {% if p.autonomy_coverage.readiness_available and p.autonomy_coverage.ready_unscheduled_bot_count %}
-        <div class="mini-note">{{ p.autonomy_coverage.ready_unscheduled_bot_count }} ready but unscheduled</div>
-        {% elif p.autonomy_coverage.readiness_available and p.autonomy_coverage.blocked_enabled_bot_count %}
-        <div class="mini-note">{{ p.autonomy_coverage.blocked_enabled_bot_count }} enabled but blocked</div>
-        {% endif %}
-        {% elif p.autonomy_coverage.enabled_configured_bot_count %}
-        <span class="badge badge-disabled">configured only</span>
-        <div class="mini-note">No active schedules{% if p.autonomy_coverage.readiness_available %} / {{ p.autonomy_coverage.ready_unscheduled_bot_count }} ready but unscheduled{% endif %}</div>
-        {% else %}
-        <span class="empty">No bot coverage</span>
-        {% endif %}
-      </td>
+      <td><span class="empty" data-lazy-cell="autonomy" data-project="{{ p.id }}">…</span></td>
     </tr>
     {% else %}
     <tr><td colspan="9" style="text-align:center;color:#7b879a;">No projects configured</td></tr>
@@ -143,5 +83,88 @@ document.getElementById('form-add-project').addEventListener('submit', async fun
     alert(data.error || 'Create failed');
   }
 });
+
+function esc(value) {
+  if (value == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(value);
+  return d.innerHTML;
+}
+
+function renderChatTools(p) {
+  const cfg = p.chat_tool_access || {};
+  if (!cfg.enabled) {
+    return '<span class="badge badge-disabled">off</span><div class="mini-note">Workspace tools blocked at project gate</div>';
+  }
+  let modes = [];
+  if (cfg.filesystem && cfg.repo_search) modes.push('filesystem / repo search');
+  else if (cfg.filesystem) modes.push('filesystem');
+  else if (cfg.repo_search) modes.push('repo search');
+  else modes.push('no modes selected');
+  let html = '<span class="badge badge-enabled">enabled</span><div class="mini-note">' + esc(modes.join('')) + '</div>';
+  if (cfg.workspace_root) html += '<div class="mini-note">' + esc(cfg.workspace_root) + '</div>';
+  return html;
+}
+
+function renderAutonomy(p) {
+  const ac = p.autonomy_coverage || {};
+  if (!ac.available) return '<span class="empty">Unavailable</span>';
+  let html = '';
+  html += '<div>' + (ac.enabled_configured_bot_count || 0) + ' enabled</div>';
+  html += '<div class="mini-note">' + (ac.configured_bot_count || 0) + ' configured' + (ac.registered_bot_count ? ' / ' + ac.registered_bot_count + ' legacy' : '') + '</div>';
+  if (ac.tooling_bot_count || ac.connection_action_bot_count || ac.browser_action_bot_count || ac.repo_edit_bot_count) {
+    let bits = [];
+    if (ac.tooling_bot_count) bits.push(ac.tooling_bot_count + ' tool-backed');
+    if (ac.connection_action_bot_count) bits.push(ac.connection_action_bot_count + ' site/API');
+    if (ac.browser_action_bot_count) bits.push(ac.browser_action_bot_count + ' browser');
+    if (ac.repo_edit_bot_count) bits.push(ac.repo_edit_bot_count + ' repo-edit');
+    html += '<div class="mini-note">' + bits.join(' / ') + '</div>';
+  }
+  if (ac.active_schedule_count) {
+    html += '<span class="badge badge-enabled">active</span>';
+    html += '<div class="mini-note">' + ac.active_schedule_count + ' active schedule' + (ac.active_schedule_count === 1 ? '' : 's') + ' / ' + ac.scheduled_bot_count + ' bot' + (ac.scheduled_bot_count === 1 ? '' : 's') + '</div>';
+    if (ac.attention_schedule_count) {
+      html += '<div class="mini-note"><span class="badge badge-degraded">attention</span> ' + ac.attention_schedule_count + ' latest run' + (ac.attention_schedule_count === 1 ? '' : 's') + ' needs attention</div>';
+    } else if (ac.awaiting_first_run_count) {
+      html += '<div class="mini-note">' + ac.awaiting_first_run_count + ' awaiting first run</div>';
+    } else {
+      html += '<div class="mini-note">' + ac.completed_schedule_count + ' latest run' + (ac.completed_schedule_count === 1 ? '' : 's') + ' complete</div>';
+    }
+    if (ac.readiness_available && ac.ready_unscheduled_bot_count) {
+      html += '<div class="mini-note">' + ac.ready_unscheduled_bot_count + ' ready but unscheduled</div>';
+    } else if (ac.readiness_available && ac.blocked_enabled_bot_count) {
+      html += '<div class="mini-note">' + ac.blocked_enabled_bot_count + ' enabled but blocked</div>';
+    }
+  } else if (ac.enabled_configured_bot_count) {
+    html += '<span class="badge badge-disabled">configured only</span>';
+    html += '<div class="mini-note">No active schedules' + (ac.readiness_available ? ' / ' + ac.ready_unscheduled_bot_count + ' ready but unscheduled' : '') + '</div>';
+  } else {
+    html += '<span class="empty">No bot coverage</span>';
+  }
+  return html;
+}
+
+async function loadProjectsOverview() {
+  try {
+    const res = await fetch('/api/projects/overview');
+    if (!res.ok) return;
+    const projects = await res.json();
+    if (!Array.isArray(projects)) return;
+    const byId = {};
+    projects.forEach((p) => { byId[p.id] = p; });
+    document.querySelectorAll('[data-lazy-cell]').forEach((el) => {
+      const p = byId[el.dataset.project];
+      if (!p) return;
+      if (el.dataset.lazyCell === 'chat_tools') {
+        el.innerHTML = renderChatTools(p);
+      } else if (el.dataset.lazyCell === 'autonomy') {
+        el.innerHTML = renderAutonomy(p);
+      }
+    });
+  } catch (err) {
+    // leave the '…' placeholders if the CP is unavailable
+  }
+}
+loadProjectsOverview();
 </script>
 {% endblock %}

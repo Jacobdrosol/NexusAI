@@ -1,0 +1,17 @@
+<h2 class="panel-title">Latest Bot Reports</h2>
+<div style="display:grid; gap:0.75rem;">
+  {% for report in data.reports or [] %}
+  <article style="border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:0.85rem;">
+    <div style="display:flex; justify-content:space-between; gap:0.75rem; flex-wrap:wrap;">
+      <strong>{{ report.bot_name }}</strong>
+      <span class="mini-note">{{ (report.created_at[:19] if report.created_at else '') | replace('T',' ') }}</span>
+    </div>
+    <div class="mini-note" style="margin-top:0.25rem;">Task {{ report.task_id[:8] if report.task_id else '—' }} · {{ report.bot_id }}</div>
+    {% if report.content %}
+    <pre style="white-space:pre-wrap; margin-top:0.55rem; max-height:14rem; overflow:auto;">{{ report.content }}</pre>
+    {% endif %}
+  </article>
+  {% else %}
+  <div class="empty">No run reports recorded for project bots yet</div>
+  {% endfor %}
+</div>
