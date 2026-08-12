@@ -99,11 +99,11 @@ class TicketSourceStore:
             async with aiosqlite.connect(self._db_path) as db:
                 await db.execute(_CREATE_SOURCES)
                 await db.execute(_CREATE_ITEMS)
+                await self._ensure_item_columns(db)
                 await db.execute(_CREATE_IDX_SOURCES_PROJECT)
                 await db.execute(_CREATE_IDX_ITEMS_SOURCE)
                 await db.execute(_CREATE_IDX_ITEMS_TASK)
                 await db.execute(_CREATE_IDX_ITEMS_STATUS)
-                await self._ensure_item_columns(db)
                 await db.commit()
             self._db_ready = True
 
