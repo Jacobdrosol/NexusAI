@@ -14,18 +14,18 @@ def manager(tmp_path):
 async def test_create_and_get_profile(manager):
     profile = await manager.create_memory_profile(
         user_id="user@example.com",
-        profile_id="physics-research",
-        name="Physics Research",
-        description="Research context for physics discussions",
+        profile_id="research-notes",
+        name="Research Notes",
+        description="Notes for research discussions",
     )
-    assert profile["id"] == "physics-research"
-    assert profile["name"] == "Physics Research"
-    assert profile["description"] == "Research context for physics discussions"
+    assert profile["id"] == "research-notes"
+    assert profile["name"] == "Research Notes"
+    assert profile["description"] == "Notes for research discussions"
     assert profile["enabled"] is True
 
-    fetched = await manager.get_memory_profile(user_id="user@example.com", profile_id="physics-research")
+    fetched = await manager.get_memory_profile(user_id="user@example.com", profile_id="research-notes")
     assert fetched is not None
-    assert fetched["name"] == "Physics Research"
+    assert fetched["name"] == "Research Notes"
 
 
 @pytest.mark.asyncio
