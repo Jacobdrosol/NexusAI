@@ -76,6 +76,14 @@ def _validate_config(source_type: str, config: Dict[str, Any]) -> Dict[str, Any]
     elif source_type == "generic_http":
         if not config.get("url"):
             raise HTTPException(status_code=400, detail="generic_http config requires 'url'")
+        board_field = str(config.get("board_field") or "").strip()
+        column_field = str(config.get("column_field") or "").strip()
+        card_field = str(config.get("card_field") or "").strip()
+        if any([board_field, column_field, card_field]) and not all([board_field, column_field, card_field]):
+            raise HTTPException(
+                status_code=400,
+                detail="generic_http board flattening requires board_field, column_field, and card_field together",
+            )
     elif source_type == "jira":
         if not config.get("base_url"):
             raise HTTPException(status_code=400, detail="jira config requires 'base_url'")

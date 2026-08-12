@@ -193,6 +193,37 @@ async def poll_generic_http(
     else:
         raw_resp = _fetch_json(url, headers=headers)
 
+    # Board-style flattening: boards[] -> columns[] -> cards[].
+    # Any board-like API (Trello, Jira, custom scrumboards) can be consumed by
+    # pointing results_path at the boards array and naming the column/card fields.
+    board_field = str(config.get("board_field") or "").strip()
+    column_field = str(config.get("column_field") or "").strip()
+    card_field = str(config.get("card_field") or "").strip()
+    column_name_field = str(config.get("column_name_field") or "name").strip()
+    board_title_field = str(config.get("board_title_field") or "title").strip()
+
+    if board_field and column_field and card_field:
+        boards = _resolve_path(raw_resp, results_path) if results_path else raw_resp
+        if not isinstance(boards, list):
+            if isinstance(boards, dict):
+                for key in ("boards", "data", "results", "items"):
+                    if isinstance(boards.get(key), list):
+                        boards = boards[key]
+                        break
+                else:
+                    boards = []
+            else:
+                boards = []
+        return _flatten_board_items(
+            boards,
+            column_field=column_field,
+            card_field=card_field,
+            column_name_field=column_name_field,
+            board_title_field=board_title_field,
+            field_map=field_map,
+            max_items=max_items,
+        )
+
     items_list: Any = raw_resp
     if results_path:
         items_list = _resolve_path(raw_resp, results_path)
@@ -233,6 +264,80 @@ async def poll_generic_http(
             "author": raw_item.get(fm.get("author", "author")),
             "raw": raw_item,
         })
+    return out[:max_items]
+
+
+def _flatten_board_items(
+    boards: List[Any],
+    *,
+    column_field: str,
+    card_field: str,
+    column_name_field: str,
+    board_title_field: str,
+    field_map: Dict[str, Any],
+    max_items: int,
+) -> List[Dict[str, Any]]:
+    """Flatten a boards[] -> columns[] -> cards[] structure into ticket items.
+
+    Each card becomes one ticket item. The column name and board title are
+    attached to the card's raw payload so downstream consumers can group by
+    board/column. Field mapping keys may reference nested card fields via
+    dot-notation (e.g. "fields.summary").
+    """
+    out: List[Dict[str, Any]] = []
+    fm = field_map or {}
+
+    def _get(obj: Any, key: str) -> Any:
+        for part in str(key).split("."):
+            if isinstance(obj, dict):
+                obj = obj.get(part)
+            elif isinstance(obj, list) and part.isdigit():
+                idx = int(part)
+                obj = obj[idx] if 0 <= idx < len(obj) else None
+            else:
+                return None
+        return obj
+
+    for board in boards:
+        if not isinstance(board, dict):
+            continue
+        board_title = str(_get(board, board_title_field) or "")
+        columns = board.get(column_field)
+        if not isinstance(columns, list):
+            continue
+        for column in columns:
+            if not isinstance(column, dict):
+                continue
+            column_name = str(_get(column, column_name_field) or "")
+            cards = column.get(card_field)
+            if not isinstance(cards, list):
+                continue
+            for card in cards:
+                if not isinstance(card, dict):
+                    continue
+                ext_id = str(_get(card, fm.get("id", "id")) or card.get("id") or "")
+                if not ext_id:
+                    continue
+                labels_val = _get(card, fm.get("labels", "labels"))
+                if isinstance(labels_val, str):
+                    labels_list = [l.strip() for l in labels_val.split(",") if l.strip()]
+                elif isinstance(labels_val, list):
+                    labels_list = [str(l) for l in labels_val]
+                else:
+                    labels_list = []
+                enriched = dict(card)
+                enriched.setdefault("_board_title", board_title)
+                enriched.setdefault("_column_name", column_name)
+                out.append({
+                    "external_id": ext_id,
+                    "title": str(_get(card, fm.get("title", "title")) or ""),
+                    "body": str(_get(card, fm.get("body", "body")) or _get(card, fm.get("description", "description")) or ""),
+                    "url": _get(card, fm.get("url", "url")),
+                    "state": _get(card, fm.get("state", "state")),
+                    "labels": labels_list,
+                    "author": _get(card, fm.get("author", "author")),
+                    "raw": enriched,
+                })
     return out[:max_items]
 
 

@@ -153,6 +153,54 @@
         <label>Auth Token (optional)</label>
         <input type="password" class="form-control" id="http-token" placeholder="Bearer token" autocomplete="new-password" />
       </div>
+      <div class="form-group">
+        <label>Auth Header Name (default: Authorization)</label>
+        <input type="text" class="form-control" id="http-auth-header" placeholder="Authorization" />
+      </div>
+      <div class="form-group">
+        <label>Auth Scheme (default: Bearer; use "none" for a raw token header)</label>
+        <input type="text" class="form-control" id="http-auth-scheme" placeholder="Bearer" />
+      </div>
+      <hr style="margin:0.8rem 0;">
+      <div class="mini-note" style="margin-bottom:0.5rem;">
+        <strong>Board flattening (optional).</strong> If the endpoint returns a board structure
+        (<code>boards[] → columns[] → cards[]</code>), set the three field names below to turn each
+        card into a ticket item. Works with Trello, Jira, custom scrumboards, etc.
+      </div>
+      <div style="display:flex;gap:0.75rem;">
+        <div style="flex:1;">
+          <div class="form-group">
+            <label>Boards Array Field</label>
+            <input type="text" class="form-control" id="http-board-field" placeholder="boards" />
+          </div>
+        </div>
+        <div style="flex:1;">
+          <div class="form-group">
+            <label>Columns Array Field</label>
+            <input type="text" class="form-control" id="http-column-field" placeholder="columns" />
+          </div>
+        </div>
+        <div style="flex:1;">
+          <div class="form-group">
+            <label>Cards Array Field</label>
+            <input type="text" class="form-control" id="http-card-field" placeholder="cards" />
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:0.75rem;">
+        <div style="flex:1;">
+          <div class="form-group">
+            <label>Column Name Field</label>
+            <input type="text" class="form-control" id="http-column-name-field" placeholder="name" />
+          </div>
+        </div>
+        <div style="flex:1;">
+          <div class="form-group">
+            <label>Board Title Field</label>
+            <input type="text" class="form-control" id="http-board-title-field" placeholder="title" />
+          </div>
+        </div>
+      </div>
     </div>
 
     <div id="config-jira" class="source-config-panel" style="display:none;">
@@ -286,6 +334,22 @@ function buildConfig() {
     const fm = document.getElementById('http-field-map').value.trim();
     if (fm) { try { config.field_map = JSON.parse(fm); } catch(e) { alert('Invalid field map JSON'); return null; } }
     credential = document.getElementById('http-token').value.trim() || null;
+    const authHeader = document.getElementById('http-auth-header').value.trim();
+    const authScheme = document.getElementById('http-auth-scheme').value.trim();
+    if (authHeader) config.auth_header_name = authHeader;
+    if (authScheme) config.auth_scheme = authScheme;
+    const boardField = document.getElementById('http-board-field').value.trim();
+    const columnField = document.getElementById('http-column-field').value.trim();
+    const cardField = document.getElementById('http-card-field').value.trim();
+    if (boardField || columnField || cardField) {
+      config.board_field = boardField;
+      config.column_field = columnField;
+      config.card_field = cardField;
+    }
+    const columnNameField = document.getElementById('http-column-name-field').value.trim();
+    const boardTitleField = document.getElementById('http-board-title-field').value.trim();
+    if (columnNameField) config.column_name_field = columnNameField;
+    if (boardTitleField) config.board_title_field = boardTitleField;
   } else if (type === 'jira') {
     config.base_url = document.getElementById('jira-url').value.trim();
     config.jql = document.getElementById('jira-jql').value.trim();
