@@ -32,6 +32,7 @@ SpecialistKind = Literal[
     "code_reviewer",
     "code_implementer",
     "deployment_reviewer",
+    "planning_bot",
 ]
 
 
@@ -91,6 +92,44 @@ def _normalize_portfolio_ids(values: list[str], *, field_name: str) -> list[str]
     return normalized_values
 
 
+def _normalize_ticket_scope(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate and normalize a bot's ticket_scope restriction.
+
+    ticket_scope restricts which ticket-source items a bot may be handed:
+      - source_ids: list of ticket source IDs (empty = all sources in project)
+      - tags: list of tag strings (empty = all tags)
+      - tag_filter: "any" | "all" | "none" (default "any")
+      - states: list of provider states to include (empty = all)
+    """
+    if not isinstance(value, dict):
+        raise ValueError("ticket_scope must be an object.")
+
+    def _string_list(raw: Any, field_name: str, max_items: int = 50) -> list[str]:
+        if raw is None:
+            return []
+        if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+            raise ValueError(f"ticket_scope.{field_name} must be a list of strings.")
+        cleaned = [str(item).strip() for item in raw if str(item).strip()]
+        if len(cleaned) > max_items:
+            raise ValueError(f"ticket_scope.{field_name} cannot exceed {max_items} entries.")
+        return cleaned
+
+    source_ids = _string_list(value.get("source_ids"), "source_ids")
+    tags = _string_list(value.get("tags"), "tags")
+    states = _string_list(value.get("states"), "states")
+
+    tag_filter = str(value.get("tag_filter") or "any").strip().lower()
+    if tag_filter not in {"any", "all", "none"}:
+        raise ValueError("ticket_scope.tag_filter must be one of: any, all, none")
+
+    return {
+        "source_ids": source_ids,
+        "tags": tags,
+        "tag_filter": tag_filter,
+        "states": states,
+    }
+
+
 class SpecialistBlueprintRequest(BaseModel):
     """The operator-controlled inputs used to compose a specialist bot.
 
@@ -112,6 +151,7 @@ class SpecialistBlueprintRequest(BaseModel):
     cli_runtime_model: str | None = Field(default=None, max_length=128)
     portfolio_bot_ids: list[str] = Field(default_factory=list, max_length=100)
     portfolio_schedule_ids: list[str] = Field(default_factory=list, max_length=100)
+    ticket_scope: dict[str, Any] | None = Field(default=None)
 
     @model_validator(mode="before")
     @classmethod
@@ -160,6 +200,8 @@ class SpecialistBlueprintRequest(BaseModel):
             manager_bot_id = _normalize_bot_id(self.bot_id or self.name)
             if manager_bot_id in self.portfolio_bot_ids:
                 raise ValueError("operations_manager cannot include itself in portfolio_bot_ids.")
+        if self.ticket_scope is not None:
+            self.ticket_scope = _normalize_ticket_scope(self.ticket_scope)
         return self
 
 
@@ -385,6 +427,31 @@ _BLUEPRINTS: dict[str, dict[str, Any]] = {
             "Do not trigger or approve a deployment. Return a recommendation with evidence.",
         ],
     },
+    "planning_bot": {
+        "label": "Planning Bot",
+        "role": "planning_bot",
+        "description": "Turns a ticket or issue into a thorough work plan: problem statement, goals, acceptance criteria, and suspected files to investigate. Reads the repo and searches for context, but never builds or changes anything.",
+        "risk_level": "read_only",
+        "outputs": [
+            "status",
+            "problem_statement",
+            "goals",
+            "acceptance_criteria",
+            "suspected_files",
+            "investigation_notes",
+            "open_questions",
+            "handoff_notes",
+        ],
+        "receives": ["instruction", "ticket_items", "repo_context"],
+        "self_serve": ["repo", "vault"],
+        "workspace_context": True,
+        "rules": [
+            "Produce a plan only. Do not write, edit, commit, deploy, or alter repository files.",
+            "Read and search the repository to ground every suspected file and investigation note in real code.",
+            "Separate verified findings from assumptions; flag anything you could not confirm.",
+            "List concrete acceptance criteria that a future implementer can verify.",
+        ],
+    },
 }
 
 
@@ -474,6 +541,14 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
                 "allow_actions": list(_MANAGER_ACTIONS),
             },
         }
+    if request.kind == "planning_bot":
+        routing_rules["worker_profile"] = {
+            "role": "planning-analyst",
+            "task_scope": "read-only-planning",
+            "can_edit": False,
+        }
+    if request.ticket_scope is not None:
+        routing_rules["ticket_scope"] = request.ticket_scope
 
     return Bot(
         id=bot_id,

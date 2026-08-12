@@ -390,12 +390,17 @@ class TicketSourceStore:
         status: Optional[str] = None,
         manager_bot_id: Optional[str] = None,
         manager_unassigned_ok: bool = False,
+        tags: Optional[List[str]] = None,
+        tag_filter: str = "any",
+        states: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """List items with optional filters.
 
         When manager_bot_id is set and manager_unassigned_ok is True, returns
         items whose manager is either NULL or equal to manager_bot_id (i.e.
         unassigned items are still available to that bot's schedule).
+
+        tags/tag_filter/states filter on the item's labels and provider state.
         """
         await self._ensure_db()
         limit = max(1, min(limit, 500))
@@ -413,6 +418,10 @@ class TicketSourceStore:
             else:
                 clause += " AND manager_bot_id = ?"
             params.append(manager_bot_id)
+        if states:
+            placeholders = ", ".join("?" for _ in states)
+            clause += f" AND state IN ({placeholders})"
+            params.extend(states)
         params.extend([limit, offset])
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -421,7 +430,17 @@ class TicketSourceStore:
                 params,
             ) as cursor:
                 rows = await cursor.fetchall()
-        return [self._row_to_item(r) for r in rows]
+        items = [self._row_to_item(r) for r in rows]
+        if tags:
+            wanted = {str(t).strip().lower() for t in tags if str(t).strip()}
+            if wanted:
+                if tag_filter == "all":
+                    items = [i for i in items if wanted.issubset({str(t).lower() for t in (i.get("labels") or [])})]
+                elif tag_filter == "none":
+                    items = [i for i in items if not wanted.intersection({str(t).lower() for t in (i.get("labels") or [])})]
+                else:
+                    items = [i for i in items if wanted.intersection({str(t).lower() for t in (i.get("labels") or [])})]
+        return items
 
     async def update_item_status(
         self,

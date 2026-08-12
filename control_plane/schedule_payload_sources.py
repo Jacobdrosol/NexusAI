@@ -1183,12 +1183,14 @@ async def ticket_source_payload(
     schedule: Dict[str, Any],
     project_registry: Any,
     ticket_source_store: Any,
+    ticket_scope: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return pending ticket-source items for a scheduled bot.
 
     Selects items with status 'pending' (not ignored, not already assigned)
     for the configured source, optionally restricted to the schedule's
-    project and to items assigned to the schedule's target bot.
+    project, to items assigned to the schedule's target bot, and to the
+    bot's ticket_scope (source_ids / tags / tag_filter / states).
     """
     source_id = str(config.get("source_id") or "").strip()
     if not source_id:
@@ -1209,6 +1211,21 @@ async def ticket_source_payload(
             f"ticket source {source_id} belongs to project '{source.get('project_id')}', not '{project_id}'"
         )
 
+    # Apply the bot's ticket_scope source restriction.
+    scope = ticket_scope if isinstance(ticket_scope, dict) else {}
+    scope_source_ids = [str(s).strip() for s in (scope.get("source_ids") or []) if str(s).strip()]
+    if scope_source_ids and source_id not in scope_source_ids:
+        return {
+            "source": TICKET_SOURCE,
+            "source_id": source_id,
+            "source_name": source.get("name"),
+            "source_type": source.get("source_type"),
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "items": [],
+            "item_count": 0,
+            "skipped_reason": "source not in bot ticket_scope",
+        }
+
     manager_bot_id = None
     target_bot_id = str(schedule.get("target_bot_id") or "").strip()
     if target_bot_id:
@@ -1221,6 +1238,9 @@ async def ticket_source_payload(
         status="pending",
         manager_bot_id=manager_bot_id,
         manager_unassigned_ok=True,
+        tags=scope.get("tags") or None,
+        tag_filter=str(scope.get("tag_filter") or "any"),
+        states=scope.get("states") or None,
     )
     return {
         "source": TICKET_SOURCE,
@@ -1339,7 +1359,21 @@ async def _materialize_system_payload_source(
             config["target_field"]: json.dumps(payload, sort_keys=True, separators=(",", ":")),
         }
     if config["type"] == TICKET_SOURCE:
-        payload = await ticket_source_payload(config, schedule, project_registry, ticket_source_store)
+        ticket_scope = None
+        target_bot_id = str(schedule.get("target_bot_id") or "").strip()
+        if target_bot_id and bot_registry is not None:
+            try:
+                target_bot = await _await_if_needed(bot_registry.get(target_bot_id))
+                routing_rules = getattr(target_bot, "routing_rules", None)
+                if isinstance(routing_rules, dict):
+                    scope = routing_rules.get("ticket_scope")
+                    if isinstance(scope, dict):
+                        ticket_scope = scope
+            except Exception:
+                ticket_scope = None
+        payload = await ticket_source_payload(
+            config, schedule, project_registry, ticket_source_store, ticket_scope=ticket_scope
+        )
         return {
             config["target_field"]: json.dumps(payload, sort_keys=True, separators=(",", ":")),
         }

@@ -491,6 +491,32 @@
           <textarea class="form-control" id="specialist-manager-schedule-ids" name="portfolio_schedule_ids" rows="3" maxlength="2000" placeholder="One schedule ID per line"></textarea>
         </div>
       </fieldset>
+      <fieldset id="specialist-ticket-scope" style="display:none;margin:0 0 0.75rem;padding:0.75rem;">
+        <legend>Ticket Scope</legend>
+        <div class="mini-note" style="margin-bottom:0.65rem;">Restrict which ticket-source items this bot may be handed. Leave blank to allow all pending items in the project.</div>
+        <div class="form-group">
+          <label for="specialist-ticket-source-ids">Ticket Source IDs (one per line, optional)</label>
+          <textarea class="form-control" id="specialist-ticket-source-ids" name="ticket_source_ids" rows="2" maxlength="2000" placeholder="Leave blank to allow all sources"></textarea>
+        </div>
+        <div class="form-group">
+          <label for="specialist-ticket-tags">Tags (comma-separated, optional)</label>
+          <input class="form-control" id="specialist-ticket-tags" name="ticket_tags" placeholder="bug,frontend">
+        </div>
+        <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+          <div class="form-group">
+            <label for="specialist-ticket-tag-filter">Tag Filter</label>
+            <select class="form-control" id="specialist-ticket-tag-filter" name="ticket_tag_filter">
+              <option value="any">any</option>
+              <option value="all">all</option>
+              <option value="none">none</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="specialist-ticket-states">States (comma-separated, optional)</label>
+            <input class="form-control" id="specialist-ticket-states" name="ticket_states" placeholder="open,doing">
+          </div>
+        </div>
+      </fieldset>
       <div class="form-group">
         <label for="specialist-mission">Mission (optional)</label>
         <textarea class="form-control" id="specialist-mission" name="mission" rows="3" maxlength="4000"></textarea>
@@ -589,9 +615,11 @@ function refreshSpecialistDetails() {
   const description = document.getElementById('specialist-description');
   const writeOption = document.getElementById('specialist-write-option');
   const managerPortfolio = document.getElementById('specialist-manager-portfolio');
+  const ticketScope = document.getElementById('specialist-ticket-scope');
   if (description) description.textContent = selected ? selected.description : '';
   if (writeOption) writeOption.style.display = selected?.supports_repo_writes ? 'block' : 'none';
   if (managerPortfolio) managerPortfolio.style.display = selected?.kind === 'operations_manager' ? 'block' : 'none';
+  if (ticketScope) ticketScope.style.display = selected?.kind === 'planning_bot' ? 'block' : 'none';
   if (!selected?.supports_repo_writes) {
     const writes = document.getElementById('specialist-allow-writes');
     if (writes) writes.checked = false;
@@ -686,6 +714,7 @@ function specialistPayload() {
   if (kind === 'operations_manager' && !portfolioBotIds.length && !portfolioScheduleIds.length) {
     throw new Error('An Operations Manager requires at least one worker bot or schedule in its portfolio.');
   }
+  const ticketScope = buildTicketScope(fd);
   return {
     kind,
     name: String(fd.get('name') || '').trim(),
@@ -697,6 +726,7 @@ function specialistPayload() {
     cli_runtime_model: cliRuntimeModel || null,
     portfolio_bot_ids: portfolioBotIds,
     portfolio_schedule_ids: portfolioScheduleIds,
+    ticket_scope: ticketScope,
     backends: [{
       type: backendType,
       provider,
@@ -704,6 +734,29 @@ function specialistPayload() {
       worker_id: workerId || null,
       api_key_ref: String(fd.get('api_key_ref') || '').trim() || null,
     }],
+  };
+}
+
+function buildTicketScope(fd) {
+  const sourceIds = String(fd.get('ticket_source_ids') || '')
+    .split(/[\n,]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const tags = String(fd.get('ticket_tags') || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const states = String(fd.get('ticket_states') || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const tagFilter = String(fd.get('ticket_tag_filter') || 'any').trim() || 'any';
+  if (!sourceIds.length && !tags.length && !states.length) return null;
+  return {
+    source_ids: sourceIds,
+    tags,
+    tag_filter: tagFilter,
+    states,
   };
 }
 
