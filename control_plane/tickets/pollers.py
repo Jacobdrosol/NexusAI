@@ -27,10 +27,25 @@ from typing import Any, Dict, List, Optional
 # Maximum items returned by any single poll (hard cap)
 _MAX_ITEMS_CAP = 100
 
+# Default User-Agent. Some CDNs/APIs (Cloudflare, etc.) reject the stock
+# "Python-urllib/x" agent with HTTP 403. A real browser-like agent avoids
+# false blocks. Callers can override per-source via config "user_agent".
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (compatible; NexusAI-TicketSource/1.0; +https://nexusai.example)"
+)
 
-def _fetch_json(url: str, *, headers: Dict[str, str], timeout: int = 30) -> Any:
+
+def _fetch_json(
+    url: str,
+    *,
+    headers: Dict[str, str],
+    timeout: int = 30,
+    user_agent: str = _DEFAULT_USER_AGENT,
+) -> Any:
     """Fetch and parse JSON from a URL. Raises RuntimeError on failure."""
-    req = urllib.request.Request(url, headers=headers)
+    req_headers = dict(headers)
+    req_headers.setdefault("User-Agent", user_agent)
+    req = urllib.request.Request(url, headers=req_headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             body = response.read()
@@ -41,9 +56,18 @@ def _fetch_json(url: str, *, headers: Dict[str, str], timeout: int = 30) -> Any:
     return json.loads(body.decode("utf-8"))
 
 
-def _fetch_json_post(url: str, *, headers: Dict[str, str], data: bytes, timeout: int = 30) -> Any:
+def _fetch_json_post(
+    url: str,
+    *,
+    headers: Dict[str, str],
+    data: bytes,
+    timeout: int = 30,
+    user_agent: str = _DEFAULT_USER_AGENT,
+) -> Any:
     """POST and parse JSON from a URL."""
-    req = urllib.request.Request(url, headers=headers, data=data, method="POST")
+    req_headers = dict(headers)
+    req_headers.setdefault("User-Agent", user_agent)
+    req = urllib.request.Request(url, headers=req_headers, data=data, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             body = response.read()
@@ -174,6 +198,7 @@ async def poll_generic_http(
 
     results_path = str(config.get("results_path") or "").strip()
     field_map = config.get("field_map") or {}
+    user_agent = str(config.get("user_agent") or _DEFAULT_USER_AGENT).strip()
 
     def _resolve_path(obj: Any, path: str) -> Any:
         for part in path.split("."):
@@ -189,13 +214,13 @@ async def poll_generic_http(
     if method == "POST":
         post_body = json.dumps(config.get("post_body") or {}).encode("utf-8")
         headers.setdefault("Content-Type", "application/json")
-        raw_resp = _fetch_json_post(url, headers=headers, data=post_body)
+        raw_resp = _fetch_json_post(url, headers=headers, data=post_body, user_agent=user_agent)
     else:
-        raw_resp = _fetch_json(url, headers=headers)
+        raw_resp = _fetch_json(url, headers=headers, user_agent=user_agent)
 
     # Board-style flattening: boards[] -> columns[] -> cards[].
     # Any board-like API (Trello, Jira, custom scrumboards) can be consumed by
-    # pointing results_path at the boards array and naming the column/card fields.
+    # naming the boards/column/card array fields.
     board_field = str(config.get("board_field") or "").strip()
     column_field = str(config.get("column_field") or "").strip()
     card_field = str(config.get("card_field") or "").strip()
@@ -203,7 +228,13 @@ async def poll_generic_http(
     board_title_field = str(config.get("board_title_field") or "title").strip()
 
     if board_field and column_field and card_field:
-        boards = _resolve_path(raw_resp, results_path) if results_path else raw_resp
+        # Resolve the boards array: first try results_path, then board_field,
+        # then common keys on the response root.
+        boards: Any = None
+        if results_path:
+            boards = _resolve_path(raw_resp, results_path)
+        if boards is None:
+            boards = _resolve_path(raw_resp, board_field)
         if not isinstance(boards, list):
             if isinstance(boards, dict):
                 for key in ("boards", "data", "results", "items"):

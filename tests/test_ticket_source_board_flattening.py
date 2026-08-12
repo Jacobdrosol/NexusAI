@@ -172,6 +172,68 @@ def test_flatten_board_items_nested_field_map():
     assert items[0]["state"] == "In Progress"
 
 
+def test_fetch_json_sends_browser_like_user_agent(monkeypatch):
+    import urllib.request
+
+    captured = {}
+
+    class FakeResponse:
+        def __init__(self, body):
+            self._body = body
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(req, timeout=30):
+        captured["headers"] = {k: v for k, v in req.header_items()}
+        return FakeResponse(b'{"ok": true}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    from control_plane.tickets.pollers import _fetch_json
+
+    _fetch_json("https://example.com/api", headers={})
+    assert "Python-urllib" not in str(captured["headers"])
+    assert "User-agent" in captured["headers"] or "user-agent" in captured["headers"]
+    ua = captured["headers"].get("User-agent") or captured["headers"].get("user-agent")
+    assert ua and "Mozilla" in ua
+
+
+def test_fetch_json_respects_custom_user_agent(monkeypatch):
+    import urllib.request
+
+    captured = {}
+
+    class FakeResponse:
+        def __init__(self, body):
+            self._body = body
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(req, timeout=30):
+        captured["headers"] = {k: v for k, v in req.header_items()}
+        return FakeResponse(b'{"ok": true}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    from control_plane.tickets.pollers import _fetch_json
+
+    _fetch_json("https://example.com/api", headers={}, user_agent="CustomBot/2.0")
+    ua = captured["headers"].get("User-agent") or captured["headers"].get("user-agent")
+    assert ua == "CustomBot/2.0"
+
+
 @pytest.mark.asyncio
 async def test_poll_generic_http_board_mode(monkeypatch):
     payload = {
@@ -185,7 +247,7 @@ async def test_poll_generic_http_board_mode(monkeypatch):
         ]
     }
 
-    def fake_fetch(url, headers, timeout=30):
+    def fake_fetch(url, headers, timeout=30, user_agent=None):
         return payload
 
     monkeypatch.setattr("control_plane.tickets.pollers._fetch_json", fake_fetch)

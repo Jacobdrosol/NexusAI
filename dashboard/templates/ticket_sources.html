@@ -162,6 +162,10 @@
         <label>Auth Scheme (default: Bearer; use "none" for a raw token header)</label>
         <input type="text" class="form-control" id="http-auth-scheme" placeholder="Bearer" />
       </div>
+      <div class="form-group">
+        <label>User Agent (optional; some CDNs/APIs reject the default Python agent)</label>
+        <input type="text" class="form-control" id="http-user-agent" placeholder="Mozilla/5.0 (compatible; NexusAI-TicketSource/1.0)" />
+      </div>
       <hr style="margin:0.8rem 0;">
       <div class="mini-note" style="margin-bottom:0.5rem;">
         <strong>Board flattening (optional).</strong> If the endpoint returns a board structure
@@ -351,6 +355,8 @@ function buildConfig() {
     const boardTitleField = document.getElementById('http-board-title-field').value.trim();
     if (columnNameField) config.column_name_field = columnNameField;
     if (boardTitleField) config.board_title_field = boardTitleField;
+    const userAgent = document.getElementById('http-user-agent').value.trim();
+    if (userAgent) config.user_agent = userAgent;
   } else if (type === 'jira') {
     config.base_url = document.getElementById('jira-url').value.trim();
     config.jql = document.getElementById('jira-jql').value.trim();
