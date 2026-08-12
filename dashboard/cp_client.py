@@ -1074,6 +1074,17 @@ class CPClient:
     def delete_memory_profile(self, user_id: str, profile_id: str) -> Optional[Dict[str, Any]]:
         return self._request("DELETE", f"/v1/chat/memory-profiles/{profile_id}?user_id={user_id}")
 
+    def clear_memory_profile(
+        self, user_id: str, profile_id: str, confirm_phrase: str
+    ) -> Optional[Dict[str, Any]]:
+        return self._post(
+            f"/v1/chat/memory-profiles/{profile_id}/clear",
+            {"user_id": user_id, "confirm_phrase": confirm_phrase},
+        )
+
+    def count_memory_profile(self, user_id: str, profile_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/chat/memory-profiles/{profile_id}/count?user_id={user_id}")
+
     def update_conversation_route_defaults(
         self,
         conversation_id: str,

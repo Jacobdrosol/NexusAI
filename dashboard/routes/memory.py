@@ -5,7 +5,11 @@ from typing import Any
 from flask import Blueprint, jsonify, render_template, request
 from flask_login import current_user, login_required
 
+import bcrypt
+
 from dashboard.cp_client import get_cp_client
+from dashboard.db import get_db
+from dashboard.models import User
 
 bp = Blueprint("memory", __name__)
 
@@ -45,6 +49,7 @@ def memory_page() -> str:
     )
     profiles_result = cp.list_memory_profiles(user_id=user_id)
     profiles = (profiles_result or {}).get("profiles", []) if profiles_result else []
+    selected_profile = next((p for p in profiles if p.get("id") == profile_id), None)
     error = None
     if items is None:
         error = cp.unavailable_reason()
@@ -54,6 +59,7 @@ def memory_page() -> str:
         items=items,
         profile_id=profile_id,
         profiles=profiles,
+        selected_profile=selected_profile,
         error=error,
     )
 
@@ -116,6 +122,50 @@ def api_delete_memory_profile(profile_id: str):
     if not ok:
         return _cp_error_response(cp, "failed to delete memory profile")
     return "", 204
+
+
+@bp.post("/api/memory/profiles/<profile_id>/clear")
+@login_required
+def api_clear_memory_profile(profile_id: str):
+    """Clear all items in a memory profile (password + phrase required).
+
+    Requires the signed-in user's password AND the literal phrase
+    "DELETE" before any profile items are removed.
+    """
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    password = str(data.get("password") or "")
+    confirm_phrase = str(data.get("confirm_phrase") or "").strip()
+
+    if not password:
+        return jsonify({"error": "password is required"}), 400
+    if confirm_phrase != "DELETE":
+        return jsonify({"error": "confirmation phrase must be 'DELETE'"}), 400
+
+    # Verify the signed-in user's password before allowing a destructive clear.
+    email = str(getattr(current_user, "email", "") or "").strip().lower()
+    db = get_db()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+    finally:
+        db.close()
+    if user is None or not bcrypt.checkpw(str(password).encode(), user.password_hash.encode()):
+        return jsonify({"error": "incorrect password"}), 403
+
+    cp = get_cp_client()
+    result = cp.clear_memory_profile(_current_memory_user_id(), profile_id, confirm_phrase)
+    if result is None:
+        return _cp_error_response(cp, "failed to clear memory profile")
+    return jsonify(result)
+
+
+@bp.get("/api/memory/profiles/<profile_id>/count")
+@login_required
+def api_count_memory_profile(profile_id: str):
+    cp = get_cp_client()
+    result = cp.count_memory_profile(_current_memory_user_id(), profile_id)
+    if result is None:
+        return _cp_error_response(cp, "failed to count memory profile items")
+    return jsonify(result)
 
 
 @bp.get("/api/memory/items")

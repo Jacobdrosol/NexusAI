@@ -4520,6 +4520,45 @@ async def delete_memory_profile(
         raise HTTPException(status_code=404, detail="memory profile not found")
 
 
+class ClearMemoryProfileRequest(BaseModel):
+    user_id: str
+    confirm_phrase: str
+
+
+@router.post("/memory-profiles/{profile_id}/clear")
+async def clear_memory_profile(
+    profile_id: str,
+    request: Request,
+    body: ClearMemoryProfileRequest,
+) -> Dict[str, Any]:
+    """Delete all items in a memory profile without deleting the profile.
+
+    Requires the caller to supply the phrase "DELETE" to confirm. The
+    dashboard layer additionally requires the signed-in user's password
+    before invoking this endpoint.
+    """
+    if str(body.confirm_phrase or "").strip() != "DELETE":
+        raise HTTPException(status_code=400, detail="confirmation phrase must be 'DELETE'")
+    chat_manager = request.app.state.chat_manager
+    deleted = await chat_manager.clear_memory_profile_items(
+        user_id=body.user_id, profile_id=profile_id
+    )
+    return {"status": "ok", "deleted_count": deleted, "profile_id": profile_id}
+
+
+@router.get("/memory-profiles/{profile_id}/count")
+async def count_memory_profile(
+    profile_id: str,
+    request: Request,
+    user_id: str = Query(...),
+) -> Dict[str, Any]:
+    chat_manager = request.app.state.chat_manager
+    count = await chat_manager.count_memory_profile_items(
+        user_id=user_id, profile_id=profile_id
+    )
+    return {"profile_id": profile_id, "item_count": count}
+
+
 @router.delete("/conversations/{conversation_id}", status_code=204)
 async def delete_conversation(conversation_id: str, request: Request) -> None:
     chat_manager = request.app.state.chat_manager

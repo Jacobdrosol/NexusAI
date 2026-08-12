@@ -26,9 +26,31 @@
           {% endfor %}
         </select>
       </div>
+      {% if profile_id != 'default' %}
+      <div class="mini-note" style="margin-bottom:0.5rem;">
+        <strong>Edit selected profile:</strong>
+      </div>
+      <div class="form-group">
+        <label>Profile Name</label>
+        <input class="form-control" id="memory-profile-edit-name" value="{{ selected_profile.name if selected_profile else profile_id }}" maxlength="200">
+      </div>
+      <div class="form-group">
+        <label>Description (optional)</label>
+        <input class="form-control" id="memory-profile-edit-desc" value="{{ selected_profile.description if selected_profile and selected_profile.description else '' }}" maxlength="500">
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" id="memory-profile-edit-enabled" {% if not selected_profile or selected_profile.enabled %}checked{% endif %}> Enabled</label>
+      </div>
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <button class="btn btn-primary" type="button" onclick="updateMemoryProfile()">Save Profile</button>
+        <button class="btn btn-danger" type="button" onclick="showClearProfileModal()">Clear Profile Items</button>
+      </div>
+      <div class="mini-note" style="margin-top:0.5rem;">Clear removes every memory item in this profile. This cannot be undone.</div>
+      {% else %}
       <div class="mini-note" style="margin-bottom:0.5rem;">
         Memory is scoped to your account. Each profile is a separate memory store; conversations select which profile to use.
       </div>
+      {% endif %}
     </div>
     <div>
       <div class="form-group">
@@ -47,6 +69,31 @@
     </div>
   </div>
 </section>
+
+<!-- Clear Profile Confirmation Modal -->
+<div id="modal-clear-profile" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:480px;">
+    <h2>Clear Memory Profile</h2>
+    <p class="mini-note" style="margin-bottom:0.75rem;">
+      This will permanently delete <strong>every memory item</strong> in the
+      <code>{{ profile_id }}</code> profile. This cannot be undone. Enter your
+      password and type <code>DELETE</code> to confirm.
+    </p>
+    <div class="form-group">
+      <label>Password</label>
+      <input class="form-control" id="memory-clear-password" type="password" autocomplete="current-password">
+    </div>
+    <div class="form-group">
+      <label>Type DELETE to confirm</label>
+      <input class="form-control" id="memory-clear-phrase" placeholder="DELETE">
+    </div>
+    <div id="memory-clear-state" class="state-empty" style="margin-bottom:0.75rem;"></div>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="hideClearProfileModal()">Cancel</button>
+      <button class="btn btn-danger" type="button" onclick="clearMemoryProfile()">Delete All Items</button>
+    </div>
+  </div>
+</div>
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
@@ -172,6 +219,67 @@ async function createMemoryProfile() {
     setMemoryState('state-error', data.error || 'Failed to create memory profile.');
     return;
   }
+  window.location.href = '/memory?profile_id=' + encodeURIComponent(profileId);
+}
+
+async function updateMemoryProfile() {
+  const profileId = currentProfileId();
+  const name = String(document.getElementById('memory-profile-edit-name')?.value || '').trim();
+  const description = String(document.getElementById('memory-profile-edit-desc')?.value || '').trim();
+  const enabled = !!document.getElementById('memory-profile-edit-enabled')?.checked;
+  if (!name) {
+    setMemoryState('state-error', 'Profile name is required.');
+    return;
+  }
+  const res = await fetch('/api/memory/profiles/' + encodeURIComponent(profileId), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({name, description: description || null, enabled}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setMemoryState('state-error', data.error || 'Failed to update memory profile.');
+    return;
+  }
+  setMemoryState('state-info', 'Memory profile updated.');
+  window.location.href = '/memory?profile_id=' + encodeURIComponent(profileId);
+}
+
+function showClearProfileModal() {
+  document.getElementById('modal-clear-profile').style.display = 'flex';
+  const state = document.getElementById('memory-clear-state');
+  if (state) { state.className = 'state-empty'; state.textContent = ''; }
+}
+
+function hideClearProfileModal() {
+  document.getElementById('modal-clear-profile').style.display = 'none';
+  const p = document.getElementById('memory-clear-password');
+  const ph = document.getElementById('memory-clear-phrase');
+  if (p) p.value = '';
+  if (ph) ph.value = '';
+}
+
+async function clearMemoryProfile() {
+  const password = String(document.getElementById('memory-clear-password')?.value || '');
+  const phrase = String(document.getElementById('memory-clear-phrase')?.value || '').trim();
+  const profileId = currentProfileId();
+  const state = document.getElementById('memory-clear-state');
+  if (!password) { if (state) { state.className = 'state-error'; state.textContent = 'Password is required.'; } return; }
+  if (phrase !== 'DELETE') { if (state) { state.className = 'state-error'; state.textContent = 'Type DELETE to confirm.'; } return; }
+  if (!confirm('This will permanently delete ALL memory items in the ' + profileId + ' profile. Continue?')) return;
+  if (state) { state.className = 'state-loading'; state.textContent = 'Clearing profile...'; }
+  const res = await fetch('/api/memory/profiles/' + encodeURIComponent(profileId) + '/clear', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({password, confirm_phrase: phrase}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (state) { state.className = 'state-error'; state.textContent = data.error || 'Failed to clear memory profile.'; }
+    return;
+  }
+  if (state) { state.className = 'state-info'; state.textContent = 'Cleared ' + (data.deleted_count || 0) + ' item(s).'; }
+  hideClearProfileModal();
   window.location.href = '/memory?profile_id=' + encodeURIComponent(profileId);
 }
 

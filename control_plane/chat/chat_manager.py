@@ -1119,6 +1119,41 @@ class ChatManager:
                 await db.commit()
                 return cursor.rowcount > 0
 
+    async def clear_memory_profile_items(
+        self, *, user_id: str, profile_id: str
+    ) -> int:
+        """Delete every memory item in a profile without deleting the profile."""
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "default").strip() or "default"
+        if not normalized_user_id:
+            return 0
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                cursor = await db.execute(
+                    "DELETE FROM memory_profile_items WHERE user_id = ? AND profile_id = ?",
+                    (normalized_user_id, normalized_profile_id),
+                )
+                await db.commit()
+                return cursor.rowcount
+
+    async def count_memory_profile_items(
+        self, *, user_id: str, profile_id: str
+    ) -> int:
+        """Return the number of memory items in a profile."""
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "default").strip() or "default"
+        if not normalized_user_id:
+            return 0
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                "SELECT COUNT(*) FROM memory_profile_items WHERE user_id = ? AND profile_id = ?",
+                (normalized_user_id, normalized_profile_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
     async def search_memory_profile(
         self,
         *,
