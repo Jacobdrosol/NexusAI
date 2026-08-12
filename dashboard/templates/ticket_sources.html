@@ -11,6 +11,7 @@
     <button class="btn btn-sm btn-primary" onclick="showAddSourceModal()">+ Add Source</button>
   </div>
 </div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
 <div id="ts-state" class="state-empty" style="margin-bottom:0.75rem;">
   {% if sources %}Loaded {{ sources | length }} source{{ '' if sources | length == 1 else 's' }}.{% else %}No ticket sources configured for this project yet.{% endif %}
@@ -283,8 +284,8 @@
 const PROJECT_ID = {{ project_id | tojson }};
 
 function getCsrf() {
-  const m = document.cookie.match(/(?:^|;\s*)csrf_access_token=([^;]+)/);
-  return m ? m[1] : '';
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
 }
 
 function hideModal(id) { document.getElementById(id).style.display = 'none'; }
