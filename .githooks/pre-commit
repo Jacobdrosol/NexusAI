@@ -1,0 +1,36 @@
+#!/usr/bin/env sh
+# Pre-commit hook: block private identifiers from entering the public repo.
+# Runs scripts/check_private_identifiers.py against tracked files.
+set -eu
+
+ROOT="$(git rev-parse --show-toplevel)"
+SCRIPT="$ROOT/scripts/check_private_identifiers.py"
+if [ ! -f "$SCRIPT" ]; then
+  exit 0
+fi
+
+# Find a working Python interpreter. The Windows Store "python" stub
+# prints an error instead of running, so verify each candidate.
+find_python() {
+  for cand in python3 python py; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      if "$cand" -c "import sys" >/dev/null 2>&1; then
+        echo "$cand"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+PY="$(find_python || true)"
+if [ -z "$PY" ]; then
+  echo "pre-commit: no working python interpreter found; skipping private-identifier guard"
+  exit 0
+fi
+
+"$PY" "$SCRIPT" || {
+  echo "Commit blocked: private identifiers detected. See output above."
+  exit 1
+}
+exit 0

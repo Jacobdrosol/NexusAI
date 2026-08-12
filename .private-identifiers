@@ -1,0 +1,6 @@
+# Private identifiers that must never appear in the public NexusAI repo.
+# One per line. Lines starting with # are ignored.
+# Add your own private project names, domains, product names, etc.
+globeiq
+globaliq
+chat.globeiq.org
