@@ -1184,10 +1184,11 @@ async def ticket_source_payload(
     project_registry: Any,
     ticket_source_store: Any,
 ) -> Dict[str, Any]:
-    """Return ticket-source items not yet linked to a task, for a scheduled bot.
+    """Return pending ticket-source items for a scheduled bot.
 
-    Uses the TicketSourceStore to pull the newest unlinked items for the
-    configured source, optionally restricted to the schedule's project.
+    Selects items with status 'pending' (not ignored, not already assigned)
+    for the configured source, optionally restricted to the schedule's
+    project and to items assigned to the schedule's target bot.
     """
     source_id = str(config.get("source_id") or "").strip()
     if not source_id:
@@ -1208,8 +1209,18 @@ async def ticket_source_payload(
             f"ticket source {source_id} belongs to project '{source.get('project_id')}', not '{project_id}'"
         )
 
+    manager_bot_id = None
+    target_bot_id = str(schedule.get("target_bot_id") or "").strip()
+    if target_bot_id:
+        manager_bot_id = target_bot_id
+
     items = await ticket_source_store.list_items(
-        source_id, limit=max_items, unlinked_only=unlinked_only
+        source_id,
+        limit=max_items,
+        unlinked_only=unlinked_only,
+        status="pending",
+        manager_bot_id=manager_bot_id,
+        manager_unassigned_ok=True,
     )
     return {
         "source": TICKET_SOURCE,

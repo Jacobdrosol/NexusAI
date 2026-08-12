@@ -430,12 +430,13 @@ async function deleteSource(sourceId, name) {
 function hideItemsModal() { hideModal('modal-items'); }
 
 async function showItems(sourceId, sourceName) {
+  ACTIVE_SOURCE_ID = sourceId;
   document.getElementById('items-title').textContent = 'Items – ' + sourceName;
   document.getElementById('items-state').className = 'state-loading';
   document.getElementById('items-state').textContent = 'Loading…';
   document.getElementById('items-content').innerHTML = '';
   showModal('modal-items');
-  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-sources/' + encodeURIComponent(sourceId) + '/items?limit=100');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-sources/' + encodeURIComponent(sourceId) + '/items?limit=200');
   if (!res.ok) { document.getElementById('items-state').className = 'state-error'; document.getElementById('items-state').textContent = 'Failed to load items'; return; }
   const data = await res.json();
   const items = data.items || [];
@@ -447,21 +448,109 @@ async function showItems(sourceId, sourceName) {
     return;
   }
 
-  let html = '<div class="table-wrap"><table><thead><tr><th>#</th><th>Title</th><th>State</th><th>Labels</th><th>Task</th><th>Updated</th></tr></thead><tbody>';
+  const managerOptions = {{ (manager_bots or []) | map(attribute='id') | list | tojson }};
+
+  let html = '<div class="table-wrap"><table><thead><tr><th>#</th><th>Title</th><th>Status</th><th>State</th><th>Manager</th><th>Task</th><th>Updated</th><th>Actions</th></tr></thead><tbody>';
   for (const item of items) {
     const labels = (item.labels || []).map(l => '<span class="badge badge-muted">' + esc(l) + '</span>').join(' ');
+    const statusBadge = statusClass(item.status || 'pending');
     const taskLink = item.task_id ? '<a href="/tasks/' + encodeURIComponent(item.task_id) + '">Linked</a>' : '<span style="color:var(--muted);">—</span>';
+    const managerText = item.manager_bot_id
+      ? '<code>' + esc(item.manager_bot_id) + '</code>'
+      : '<span style="color:var(--muted);">—</span>';
+
+    let managerSelect = '<select class="form-control" style="display:inline-block;width:auto;padding:0.2rem 0.4rem;font-size:0.8rem;" id="mgr-' + esc(item.external_id) + '">';
+    managerSelect += '<option value="">(unassigned)</option>';
+    for (const mid of managerOptions) {
+      managerSelect += '<option value="' + esc(mid) + '"' + (item.manager_bot_id === mid ? ' selected' : '') + '>' + esc(mid) + '</option>';
+    }
+    managerSelect += '</select>';
+
+    const isPending = (item.status || 'pending') === 'pending';
+    const isIgnored = (item.status || 'pending') === 'ignored';
+
+    let actions = '';
+    actions += '<button class="btn btn-sm" onclick="assignManager(\'' + esc(item.external_id) + '\')">Assign</button> ';
+    if (isPending || isIgnored) {
+      actions += '<button class="btn btn-sm btn-primary" onclick="dispatchItem(\'' + esc(item.external_id) + '\')">Dispatch</button> ';
+    }
+    if (isPending) {
+      actions += '<button class="btn btn-sm" onclick="setItemStatus(\'' + esc(item.external_id) + '\', \'ignored\')">Ignore</button> ';
+    }
+    if (isIgnored) {
+      actions += '<button class="btn btn-sm" onclick="setItemStatus(\'' + esc(item.external_id) + '\', \'pending\')">Restore</button> ';
+    }
+
     html += '<tr>'
       + '<td><code>' + esc(item.external_id) + '</code></td>'
       + '<td>' + (item.url ? '<a href="' + esc(item.url) + '" target="_blank">' + esc(item.title) + '</a>' : esc(item.title)) + '</td>'
+      + '<td>' + statusBadge + '</td>'
       + '<td>' + esc(item.state || '—') + '</td>'
-      + '<td>' + labels + '</td>'
+      + '<td>' + managerSelect + ' ' + managerText + '</td>'
       + '<td>' + taskLink + '</td>'
       + '<td>' + esc((item.updated_at || '').slice(0,19).replace('T',' ')) + '</td>'
+      + '<td style="white-space:nowrap;">' + actions + '</td>'
       + '</tr>';
   }
   html += '</tbody></table></div>';
   document.getElementById('items-content').innerHTML = html;
+}
+
+function statusClass(status) {
+  switch (status) {
+    case 'pending': return '<span class="badge badge-queued">pending</span>';
+    case 'ignored': return '<span class="badge badge-muted">ignored</span>';
+    case 'assigned': return '<span class="badge badge-running">assigned</span>';
+    case 'done': return '<span class="badge badge-completed">done</span>';
+    default: return '<span class="badge badge-unknown">' + esc(status) + '</span>';
+  }
+}
+
+async function patchItem(externalId, body) {
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-sources/' + encodeURIComponent(ACTIVE_SOURCE_ID) + '/items/' + encodeURIComponent(externalId), {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) { const d = await res.json().catch(()=>({})); alert(d.error || 'Update failed'); return null; }
+  return res.json();
+}
+
+let ACTIVE_SOURCE_ID = null;
+
+async function assignManager(externalId) {
+  const sel = document.getElementById('mgr-' + externalId);
+  const manager = sel ? sel.value : '';
+  const updated = await patchItem(externalId, {manager_bot_id: manager || null, clear_manager: !manager});
+  if (updated) reloadItems();
+}
+
+async function setItemStatus(externalId, status) {
+  const updated = await patchItem(externalId, {status: status});
+  if (updated) reloadItems();
+}
+
+async function dispatchItem(externalId) {
+  const sel = document.getElementById('mgr-' + externalId);
+  const manager = sel ? sel.value : '';
+  if (!manager) { alert('Assign a manager bot first (or the item will need one).'); return; }
+  if (!confirm('Dispatch item ' + externalId + ' to ' + manager + '? This creates an orchestration and holds for plan approval.')) return;
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-sources/' + encodeURIComponent(ACTIVE_SOURCE_ID) + '/items/' + encodeURIComponent(externalId) + '/dispatch', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body: JSON.stringify({manager_bot_id: manager}),
+  });
+  if (!res.ok) { const d = await res.json().catch(()=>({})); alert(d.error || 'Dispatch failed'); return; }
+  const data = await res.json();
+  alert('Dispatched. Orchestration: ' + (data.orchestration_id || 'n/a'));
+  reloadItems();
+}
+
+async function reloadItems() {
+  if (!ACTIVE_SOURCE_ID) return;
+  const title = document.getElementById('items-title').textContent;
+  const name = title.replace(/^Items – /, '');
+  await showItems(ACTIVE_SOURCE_ID, name);
 }
 
 function esc(text) {

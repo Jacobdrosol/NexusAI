@@ -1155,11 +1155,65 @@ class CPClient:
         limit: int = 50,
         offset: int = 0,
         unlinked_only: bool = False,
+        status: Optional[str] = None,
+        manager_bot_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         params = f"?limit={limit}&offset={offset}"
         if unlinked_only:
             params += "&unlinked_only=true"
+        if status:
+            params += f"&status={status}"
+        if manager_bot_id:
+            params += f"&manager_bot_id={manager_bot_id}"
         return self._get(f"/v1/projects/{project_id}/ticket-sources/{source_id}/items{params}")
+
+    def update_ticket_source_item(
+        self,
+        project_id: str,
+        source_id: str,
+        external_id: str,
+        *,
+        status: Optional[str] = None,
+        manager_bot_id: Optional[str] = None,
+        clear_manager: bool = False,
+        clear_task: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {}
+        if status is not None:
+            body["status"] = status
+        if manager_bot_id is not None:
+            body["manager_bot_id"] = manager_bot_id
+        if clear_manager:
+            body["clear_manager"] = True
+        if clear_task:
+            body["clear_task"] = True
+        return self._request(
+            "PATCH",
+            f"/v1/projects/{project_id}/ticket-sources/{source_id}/items/{external_id}",
+            json=body,
+        )
+
+    def dispatch_ticket_source_item(
+        self,
+        project_id: str,
+        source_id: str,
+        external_id: str,
+        *,
+        manager_bot_id: Optional[str] = None,
+        instruction: Optional[str] = None,
+        plan_approval_required: Optional[bool] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {}
+        if manager_bot_id:
+            body["manager_bot_id"] = manager_bot_id
+        if instruction:
+            body["instruction"] = instruction
+        if plan_approval_required is not None:
+            body["plan_approval_required"] = plan_approval_required
+        return self._post(
+            f"/v1/projects/{project_id}/ticket-sources/{source_id}/items/{external_id}/dispatch",
+            body,
+        )
 
     # ------------------------------------------------------------------
     #  Plan approval gate

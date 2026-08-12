@@ -27,11 +27,19 @@ def ticket_sources_page(project_id: str):
     sources = (result or {}).get("sources", []) if result else []
     # Fetch projects list for the sidebar
     projects = cp.list_projects() or []
+    # PM bots available for manager assignment (role pm / workflow entry bots)
+    bots = cp.list_bots() or []
+    manager_bots = [
+        b for b in bots
+        if isinstance(b, dict) and (str(b.get("role") or "").strip().lower() in {"pm", "manager"}
+                                    or str(b.get("id") or "").strip().startswith("pm-"))
+    ]
     return render_template(
         "ticket_sources.html",
         project_id=project_id,
         projects=projects,
         sources=sources,
+        manager_bots=manager_bots,
     )
 
 
@@ -120,10 +128,47 @@ def api_list_ticket_source_items(project_id: str, source_id: str):
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
     unlinked_only = request.args.get("unlinked_only", "false").lower() == "true"
+    status = request.args.get("status") or None
+    manager_bot_id = request.args.get("manager_bot_id") or None
     cp = get_cp_client()
     result = cp.list_ticket_source_items(
-        project_id, source_id, limit=limit, offset=offset, unlinked_only=unlinked_only
+        project_id, source_id,
+        limit=limit, offset=offset, unlinked_only=unlinked_only,
+        status=status, manager_bot_id=manager_bot_id,
     )
     if result is None:
         return _cp_error_response(cp, "Failed to list ticket source items")
+    return jsonify(result)
+
+
+@bp.patch("/api/projects/<project_id>/ticket-sources/<source_id>/items/<external_id>")
+@login_required
+def api_update_ticket_source_item(project_id: str, source_id: str, external_id: str):
+    data = request.get_json(silent=True) or {}
+    cp = get_cp_client()
+    result = cp.update_ticket_source_item(
+        project_id, source_id, external_id,
+        status=data.get("status"),
+        manager_bot_id=data.get("manager_bot_id"),
+        clear_manager=bool(data.get("clear_manager")),
+        clear_task=bool(data.get("clear_task")),
+    )
+    if result is None:
+        return _cp_error_response(cp, "Failed to update ticket source item")
+    return jsonify(result)
+
+
+@bp.post("/api/projects/<project_id>/ticket-sources/<source_id>/items/<external_id>/dispatch")
+@login_required
+def api_dispatch_ticket_source_item(project_id: str, source_id: str, external_id: str):
+    data = request.get_json(silent=True) or {}
+    cp = get_cp_client()
+    result = cp.dispatch_ticket_source_item(
+        project_id, source_id, external_id,
+        manager_bot_id=data.get("manager_bot_id"),
+        instruction=data.get("instruction"),
+        plan_approval_required=data.get("plan_approval_required"),
+    )
+    if result is None:
+        return _cp_error_response(cp, "Failed to dispatch ticket source item")
     return jsonify(result)

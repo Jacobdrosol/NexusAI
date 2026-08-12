@@ -181,3 +181,85 @@ async def test_list_items_unlinked_only(store):
     unlinked = await store.list_items(source["id"], unlinked_only=True)
     assert len(unlinked) == 1
     assert unlinked[0]["external_id"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_new_item_defaults_to_pending(store):
+    source = await store.create_source(
+        project_id="proj-1", name="GH", source_type="github_issues",
+    )
+    item = await store.upsert_item(source_id=source["id"], external_id="1", title="A")
+    assert item["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_update_item_status_ignore_restore(store):
+    source = await store.create_source(
+        project_id="proj-1", name="GH", source_type="github_issues",
+    )
+    await store.upsert_item(source_id=source["id"], external_id="1", title="A")
+
+    ignored = await store.update_item_status(source["id"], "1", status="ignored")
+    assert ignored["status"] == "ignored"
+
+    restored = await store.update_item_status(source["id"], "1", status="pending")
+    assert restored["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_update_item_status_assigned_sets_task_and_timestamp(store):
+    source = await store.create_source(
+        project_id="proj-1", name="GH", source_type="github_issues",
+    )
+    await store.upsert_item(source_id=source["id"], external_id="1", title="A")
+
+    assigned = await store.update_item_status(source["id"], "1", status="assigned", task_id="task-9")
+    assert assigned["status"] == "assigned"
+    assert assigned["task_id"] == "task-9"
+    assert assigned["assigned_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_update_item_status_done_sets_completed(store):
+    source = await store.create_source(
+        project_id="proj-1", name="GH", source_type="github_issues",
+    )
+    await store.upsert_item(source_id=source["id"], external_id="1", title="A")
+
+    done = await store.update_item_status(source["id"], "1", status="done")
+    assert done["status"] == "done"
+    assert done["completed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_set_item_manager(store):
+    source = await store.create_source(
+        project_id="proj-1", name="GH", source_type="github_issues",
+    )
+    await store.upsert_item(source_id=source["id"], external_id="1", title="A")
+
+    assigned = await store.set_item_manager(source["id"], "1", "pm-orchestrator")
+    assert assigned["manager_bot_id"] == "pm-orchestrator"
+
+    cleared = await store.set_item_manager(source["id"], "1", None)
+    assert cleared["manager_bot_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_items_by_status_and_manager(store):
+    source = await store.create_source(
+        project_id="proj-1", name="GH", source_type="github_issues",
+    )
+    await store.upsert_item(source_id=source["id"], external_id="1", title="A")
+    await store.upsert_item(source_id=source["id"], external_id="2", title="B")
+    await store.set_item_manager(source["id"], "1", "pm-orchestrator")
+
+    pending = await store.list_items(source["id"], status="pending")
+    assert len(pending) == 2
+
+    manager_items = await store.list_items(source["id"], status="pending", manager_bot_id="pm-orchestrator", manager_unassigned_ok=True)
+    assert len(manager_items) == 2
+
+    strict = await store.list_items(source["id"], status="pending", manager_bot_id="pm-orchestrator", manager_unassigned_ok=False)
+    assert len(strict) == 1
+    assert strict[0]["external_id"] == "1"

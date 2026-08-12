@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS ticket_source_items (
     author TEXT,
     raw TEXT,
     task_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    manager_bot_id TEXT,
+    assigned_at TEXT,
+    completed_at TEXT,
     first_seen_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(source_id, external_id)
@@ -59,6 +63,14 @@ CREATE TABLE IF NOT EXISTS ticket_source_items (
 _CREATE_IDX_SOURCES_PROJECT = "CREATE INDEX IF NOT EXISTS idx_ticket_sources_project ON ticket_sources (project_id)"
 _CREATE_IDX_ITEMS_SOURCE = "CREATE INDEX IF NOT EXISTS idx_ticket_items_source ON ticket_source_items (source_id)"
 _CREATE_IDX_ITEMS_TASK = "CREATE INDEX IF NOT EXISTS idx_ticket_items_task ON ticket_source_items (task_id)"
+_CREATE_IDX_ITEMS_STATUS = "CREATE INDEX IF NOT EXISTS idx_ticket_items_status ON ticket_source_items (status, manager_bot_id)"
+
+# Item lifecycle statuses
+ITEM_STATUS_PENDING = "pending"
+ITEM_STATUS_IGNORED = "ignored"
+ITEM_STATUS_ASSIGNED = "assigned"
+ITEM_STATUS_DONE = "done"
+_VALID_ITEM_STATUSES = {ITEM_STATUS_PENDING, ITEM_STATUS_IGNORED, ITEM_STATUS_ASSIGNED, ITEM_STATUS_DONE}
 
 
 class TicketSourceStore:
@@ -90,8 +102,31 @@ class TicketSourceStore:
                 await db.execute(_CREATE_IDX_SOURCES_PROJECT)
                 await db.execute(_CREATE_IDX_ITEMS_SOURCE)
                 await db.execute(_CREATE_IDX_ITEMS_TASK)
+                await db.execute(_CREATE_IDX_ITEMS_STATUS)
+                await self._ensure_item_columns(db)
                 await db.commit()
             self._db_ready = True
+
+    async def _ensure_item_columns(self, db: aiosqlite.Connection) -> None:
+        """Add lifecycle columns to ticket_source_items for existing DBs."""
+        db.row_factory = aiosqlite.Row
+        async with db.execute("PRAGMA table_info(ticket_source_items)") as cursor:
+            rows = await cursor.fetchall()
+        columns = {str(row["name"]): row for row in rows}
+        if not columns:
+            return
+        if "status" not in columns:
+            await db.execute("ALTER TABLE ticket_source_items ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+        if "manager_bot_id" not in columns:
+            await db.execute("ALTER TABLE ticket_source_items ADD COLUMN manager_bot_id TEXT")
+        if "assigned_at" not in columns:
+            await db.execute("ALTER TABLE ticket_source_items ADD COLUMN assigned_at TEXT")
+        if "completed_at" not in columns:
+            await db.execute("ALTER TABLE ticket_source_items ADD COLUMN completed_at TEXT")
+        # Backfill existing unlinked items to 'pending' if status default didn't apply.
+        await db.execute(
+            "UPDATE ticket_source_items SET status = 'pending' WHERE status IS NULL OR status = ''"
+        )
 
     # ------------------------------------------------------------------
     #  Helper
@@ -122,6 +157,7 @@ class TicketSourceStore:
                 d["raw"] = json.loads(d["raw"])
             except (json.JSONDecodeError, TypeError):
                 pass
+        d["status"] = str(d.get("status") or "pending")
         return d
 
     # ------------------------------------------------------------------
@@ -311,8 +347,8 @@ class TicketSourceStore:
                 await db.execute(
                     """INSERT INTO ticket_source_items
                        (id, source_id, external_id, title, body, url, state,
-                        labels, author, raw, task_id, first_seen_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)""",
+                        labels, author, raw, task_id, status, first_seen_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'pending', ?, ?)""",
                     (
                         item_id,
                         source_id,
@@ -351,21 +387,105 @@ class TicketSourceStore:
         limit: int = 100,
         offset: int = 0,
         unlinked_only: bool = False,
+        status: Optional[str] = None,
+        manager_bot_id: Optional[str] = None,
+        manager_unassigned_ok: bool = False,
     ) -> List[Dict[str, Any]]:
+        """List items with optional filters.
+
+        When manager_bot_id is set and manager_unassigned_ok is True, returns
+        items whose manager is either NULL or equal to manager_bot_id (i.e.
+        unassigned items are still available to that bot's schedule).
+        """
         await self._ensure_db()
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
         clause = "source_id = ?"
+        params: List[Any] = [source_id]
         if unlinked_only:
             clause += " AND task_id IS NULL"
+        if status:
+            clause += " AND status = ?"
+            params.append(status)
+        if manager_bot_id:
+            if manager_unassigned_ok:
+                clause += " AND (manager_bot_id IS NULL OR manager_bot_id = ?)"
+            else:
+                clause += " AND manager_bot_id = ?"
+            params.append(manager_bot_id)
+        params.extend([limit, offset])
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 f"SELECT * FROM ticket_source_items WHERE {clause} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
-                (source_id, limit, offset),
+                params,
             ) as cursor:
                 rows = await cursor.fetchall()
         return [self._row_to_item(r) for r in rows]
+
+    async def update_item_status(
+        self,
+        source_id: str,
+        external_id: str,
+        *,
+        status: str,
+        task_id: Optional[str] = None,
+        clear_task: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Transition an item to a new lifecycle status.
+
+        - status='assigned' sets assigned_at and (optionally) links a task.
+        - status='done' sets completed_at.
+        - status='pending'/'ignored' clears assigned/completed timestamps.
+        """
+        if status not in _VALID_ITEM_STATUSES:
+            raise ValueError(f"invalid item status: {status}")
+        await self._ensure_db()
+        now = self._now()
+        sets = ["status = ?", "updated_at = ?"]
+        params: List[Any] = [status, now]
+        if status == ITEM_STATUS_ASSIGNED:
+            sets.append("assigned_at = ?")
+            params.append(now)
+            sets.append("completed_at = NULL")
+            if task_id:
+                sets.append("task_id = ?")
+                params.append(task_id)
+        elif status == ITEM_STATUS_DONE:
+            sets.append("completed_at = ?")
+            params.append(now)
+        else:
+            sets.append("assigned_at = NULL")
+            sets.append("completed_at = NULL")
+            if clear_task:
+                sets.append("task_id = NULL")
+        params.extend([source_id, external_id])
+        async with self._lock:
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute(
+                    f"UPDATE ticket_source_items SET {', '.join(sets)} WHERE source_id = ? AND external_id = ?",
+                    params,
+                )
+                await db.commit()
+        return await self.get_item_by_external_id(source_id, external_id)
+
+    async def set_item_manager(
+        self,
+        source_id: str,
+        external_id: str,
+        manager_bot_id: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Assign (or clear) the manager bot responsible for this item."""
+        await self._ensure_db()
+        now = self._now()
+        async with self._lock:
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute(
+                    "UPDATE ticket_source_items SET manager_bot_id = ?, updated_at = ? WHERE source_id = ? AND external_id = ?",
+                    (manager_bot_id, now, source_id, external_id),
+                )
+                await db.commit()
+        return await self.get_item_by_external_id(source_id, external_id)
 
     async def link_item_to_task(
         self, source_id: str, external_id: str, task_id: str
@@ -374,9 +494,9 @@ class TicketSourceStore:
         async with self._lock:
             async with aiosqlite.connect(self._db_path) as db:
                 cursor = await db.execute(
-                    """UPDATE ticket_source_items SET task_id = ?, updated_at = ?
+                    """UPDATE ticket_source_items SET task_id = ?, status = ?, assigned_at = ?, updated_at = ?
                        WHERE source_id = ? AND external_id = ?""",
-                    (task_id, self._now(), source_id, external_id),
+                    (task_id, ITEM_STATUS_ASSIGNED, self._now(), self._now(), source_id, external_id),
                 )
                 await db.commit()
         return cursor.rowcount > 0

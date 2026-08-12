@@ -325,13 +325,20 @@ async def list_ticket_source_items(
     limit: int = 50,
     offset: int = 0,
     unlinked_only: bool = False,
+    status: Optional[str] = None,
+    manager_bot_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     store = _get_store(request)
     source = await store.get_source(source_id)
     if source is None or source["project_id"] != project_id:
         raise HTTPException(status_code=404, detail="ticket source not found")
     items = await store.list_items(
-        source_id, limit=limit, offset=offset, unlinked_only=unlinked_only
+        source_id,
+        limit=limit,
+        offset=offset,
+        unlinked_only=unlinked_only,
+        status=status,
+        manager_bot_id=manager_bot_id,
     )
     return {"source_id": source_id, "items": items, "count": len(items)}
 
@@ -366,3 +373,174 @@ async def link_item_to_task(
     if not ok:
         raise HTTPException(status_code=404, detail="item not found")
     return {"status": "ok", "linked": {"source_id": source_id, "external_id": external_id, "task_id": task_id}}
+
+
+class UpdateItemBody(BaseModel):
+    status: Optional[str] = None
+    manager_bot_id: Optional[str] = None
+    clear_manager: bool = False
+    clear_task: bool = False
+
+
+@router.patch("/{project_id}/ticket-sources/{source_id}/items/{external_id}")
+async def update_ticket_item(
+    request: Request, project_id: str, source_id: str, external_id: str,
+    body: UpdateItemBody,
+) -> Dict[str, Any]:
+    """Update an item's lifecycle status and/or manager assignment."""
+    store = _get_store(request)
+    source = await store.get_source(source_id)
+    if source is None or source["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="ticket source not found")
+    item = await store.get_item_by_external_id(source_id, external_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="item not found")
+
+    updated = item
+    if body.manager_bot_id is not None or body.clear_manager:
+        manager_id = None if body.clear_manager else (body.manager_bot_id or "").strip() or None
+        updated = await store.set_item_manager(source_id, external_id, manager_id)
+    if body.status is not None:
+        updated = await store.update_item_status(
+            source_id, external_id, status=body.status, clear_task=body.clear_task
+        )
+    await record_audit_event(
+        request,
+        action="ticket_sources.items.update",
+        resource=f"project:{project_id}/ticket_source:{source_id}/item:{external_id}",
+        details={
+            "status": body.status,
+            "manager_bot_id": body.manager_bot_id,
+            "clear_manager": body.clear_manager,
+            "clear_task": body.clear_task,
+        },
+    )
+    return {"status": "ok", "item": updated}
+
+
+class DispatchItemBody(BaseModel):
+    manager_bot_id: Optional[str] = None
+    instruction: Optional[str] = None
+    plan_approval_required: Optional[bool] = None
+
+
+@router.post("/{project_id}/ticket-sources/{source_id}/items/{external_id}/dispatch")
+async def dispatch_ticket_item(
+    request: Request, project_id: str, source_id: str, external_id: str,
+    body: Optional[DispatchItemBody] = None,
+) -> Dict[str, Any]:
+    """Manually dispatch an item to a manager bot.
+
+    Creates a conversation + assignment (orchestration) for the item and
+    links the item to the resulting orchestration. The plan approval gate
+    holds execution until the operator approves the generated plan.
+    """
+    store = _get_store(request)
+    source = await store.get_source(source_id)
+    if source is None or source["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="ticket source not found")
+    item = await store.get_item_by_external_id(source_id, external_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="item not found")
+
+    manager_bot_id = str((body.manager_bot_id if body else None) or item.get("manager_bot_id") or "").strip()
+    if not manager_bot_id:
+        raise HTTPException(status_code=400, detail="manager_bot_id is required to dispatch")
+
+    chat_manager = getattr(request.app.state, "chat_manager", None)
+    assignment_service = getattr(request.app.state, "assignment_service", None)
+    if chat_manager is None or assignment_service is None:
+        raise HTTPException(status_code=500, detail="chat/assignment services not initialized")
+
+    bot_registry = getattr(request.app.state, "bot_registry", None)
+    if bot_registry is not None:
+        try:
+            await bot_registry.get(manager_bot_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"manager bot not found: {manager_bot_id}")
+
+    title = str(item.get("title") or f"Ticket {external_id}")
+    instruction = str((body.instruction if body else None) or "").strip()
+    if not instruction:
+        instruction = (
+            f"Work this ticket from the {source.get('name') or source_id} board.\n\n"
+            f"Title: {title}\n"
+            f"External ID: {external_id}\n"
+            f"URL: {item.get('url') or 'n/a'}\n"
+            f"Description:\n{item.get('body') or item.get('raw') or 'No description provided.'}"
+        )
+
+    plan_approval_required = None
+    if body and body.plan_approval_required is not None:
+        plan_approval_required = bool(body.plan_approval_required)
+
+    conversation = await chat_manager.create_conversation(
+        title=f"Ticket {external_id}: {title[:80]}",
+        project_id=project_id,
+        scope="project",
+        default_bot_id=manager_bot_id,
+        owner_user_id=None,
+    )
+
+    try:
+        assignment = await assignment_service.create_assignment(
+            conversation_id=conversation.id,
+            instruction=instruction,
+            pm_bot_id=manager_bot_id,
+            context_items=[],
+            node_overrides={},
+            task_source="ticket_dispatch",
+        )
+    except Exception as exc:
+        await chat_manager.delete_conversation(conversation.id)
+        raise HTTPException(status_code=500, detail=f"assignment failed: {exc}")
+
+    orchestration_id = str(assignment.get("orchestration_id") or "").strip()
+    task_id = str(assignment.get("task_id") or "").strip()
+
+    # Link the item to the orchestration (and task if available).
+    await store.update_item_status(
+        source_id, external_id,
+        status="assigned",
+        task_id=task_id or None,
+    )
+    await store.set_item_manager(source_id, external_id, manager_bot_id)
+
+    if plan_approval_required is not None:
+        try:
+            project_registry = getattr(request.app.state, "project_registry", None)
+            if project_registry is not None:
+                project = await project_registry.get(project_id)
+                settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+                workflow_cfg = settings.get("workflow") if isinstance(settings.get("workflow"), dict) else {}
+                merged = dict(workflow_cfg)
+                merged["plan_approval_required"] = plan_approval_required
+                from control_plane.api.projects import _merge_settings
+                updated = project.model_copy(update={"settings_overrides": _merge_settings(project, {"workflow": merged})})
+                await project_registry.update(project_id, updated)
+        except Exception:
+            pass
+
+    await record_audit_event(
+        request,
+        action="ticket_sources.items.dispatch",
+        resource=f"project:{project_id}/ticket_source:{source_id}/item:{external_id}",
+        details={
+            "manager_bot_id": manager_bot_id,
+            "orchestration_id": orchestration_id,
+            "task_id": task_id,
+        },
+    )
+    return {
+        "status": "ok",
+        "dispatched": True,
+        "item": {
+            "source_id": source_id,
+            "external_id": external_id,
+            "title": title,
+            "manager_bot_id": manager_bot_id,
+        },
+        "orchestration_id": orchestration_id or None,
+        "task_id": task_id or None,
+        "conversation_id": conversation.id,
+    }
