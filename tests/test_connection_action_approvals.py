@@ -45,7 +45,7 @@ def _course_update_payload() -> dict:
                         "scope": "Course.Update",
                         "targetType": "Course",
                         "targetId": "78",
-                        "approvedBy": "Jacob Drosol",
+                        "approvedBy": "Alex Example",
                         "expiresInMinutes": 5,
                         "maxUses": 1,
                         "source": "nexusai",

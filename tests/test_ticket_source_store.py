@@ -90,7 +90,7 @@ async def test_upsert_and_get_item(store):
         url="https://github.com/owner/repo/issues/42",
         state="open",
         labels=["bug", "auth"],
-        author="jacob",
+        author="alex",
     )
     assert item["external_id"] == "42"
     assert item["title"] == "Bug in auth"

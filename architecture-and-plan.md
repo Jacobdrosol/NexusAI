@@ -45,7 +45,7 @@ The primary challenge is to improve the stability and reliability of the audit p
 ### 5.1. Phase 1: Strengthen the Audit Program
 
 - **[ ] Task 1: Analyze audit artifacts.** Review the `runs`, `sessions`, `change_reports`, and `logs` to identify patterns and common failure modes.
-- **[ ] Task 2: Review and update objective files.** Ensure the objective files in `C:\Users\jacob\.nexusai-audit\objectives` are up-to-date and accurately reflect the desired behavior of the system.
+- **[ ] Task 2: Review and update objective files.** Ensure the objective files in the local audit objectives directory are up-to-date and accurately reflect the desired behavior of the system.
 - **[ ] Task 3: Review and update `audit_instructions.md`.** Update the audit instructions to incorporate lessons learned from the analysis of the audit artifacts.
 - **[ ] Task 4: Improve git integration.** The auditor needs to be able to commit and push changes to the `NexusAI-BotConfigs` and `NexusAI` repositories.
 - **[ ] Task 5: Rebuild the auditor program.** If necessary, rebuild the auditor program using the `.ps1` script to incorporate any changes.

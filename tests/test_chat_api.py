@@ -244,7 +244,7 @@ async def test_stream_message_edits_attached_docx_with_source_paragraph_style_pr
     from docx import Document
 
     source = Document()
-    source.add_heading("Jacob Derifield", level=1)
+    source.add_heading("Alex Example", level=1)
     source.add_paragraph("Professional Summary")
     bullet = source.add_paragraph("Built reliable software systems.", style="List Bullet")
     bullet.runs[0].bold = True
@@ -311,7 +311,7 @@ async def test_stream_message_edits_attached_docx_with_source_paragraph_style_pr
 
     _, edited_raw = decode_attachment_data_url(attachment["data_url"])
     edited = Document(BytesIO(edited_raw))
-    assert edited.paragraphs[0].text == "Jacob Derifield"
+    assert edited.paragraphs[0].text == "Alex Example"
     changed = next(p for p in edited.paragraphs if "Built C#/.NET" in p.text)
     assert changed.style.name == bullet.style.name
     assert changed.runs[0].bold is True
@@ -613,13 +613,13 @@ async def test_explicit_conversation_reference_includes_unscoped_transcript_for_
         )
         source = await client.post(
             "/v1/chat/conversations",
-            json={"title": "Private unscoped notes", "owner_user_id": "jacob@example.com"},
+            json={"title": "Private unscoped notes", "owner_user_id": "user@example.com"},
         )
         source_id = source.json()["id"]
         await cp_app.state.chat_manager.add_message(source_id, "user", "My telescope calibration uses a 12 minute warmup.")
         target = await client.post(
             "/v1/chat/conversations",
-            json={"title": "Follow up", "owner_user_id": "jacob@example.com"},
+            json={"title": "Follow up", "owner_user_id": "user@example.com"},
         )
         target_id = target.json()["id"]
         sent = await client.post(
@@ -627,7 +627,7 @@ async def test_explicit_conversation_reference_includes_unscoped_transcript_for_
             json={
                 "content": f"Use conversation:{source_id} to answer the calibration question.",
                 "bot_id": "bot-conversation-reference",
-                "user_id": "jacob@example.com",
+                "user_id": "user@example.com",
             },
         )
         assert sent.status_code == 200
@@ -665,7 +665,7 @@ async def test_explicit_conversation_reference_does_not_cross_owner_boundary(cp_
         await cp_app.state.chat_manager.add_message(source_id, "user", "This private conversation must not leak.")
         target = await client.post(
             "/v1/chat/conversations",
-            json={"title": "Jacob", "owner_user_id": "jacob@example.com"},
+            json={"title": "Alex", "owner_user_id": "user@example.com"},
         )
         target_id = target.json()["id"]
         sent = await client.post(
@@ -673,7 +673,7 @@ async def test_explicit_conversation_reference_does_not_cross_owner_boundary(cp_
             json={
                 "content": f"Use conversation:{source_id}.",
                 "bot_id": "bot-private-reference",
-                "user_id": "jacob@example.com",
+                "user_id": "user@example.com",
             },
         )
         assert sent.status_code == 200
@@ -985,7 +985,7 @@ async def test_user_scoped_memory_profile_retrieved_on_later_eligible_turn(cp_ap
 
         first = await client.post(
             f"/v1/chat/conversations/{conversation_id}/messages",
-            json={"content": "My preferred name is Jacob.", "bot_id": "bot-memory", "user_id": "user@example.com"},
+            json={"content": "My preferred name is Alex.", "bot_id": "bot-memory", "user_id": "user@example.com"},
         )
         assert first.status_code == 200
         assert first.json()["assistant_message"]["metadata"]["memory_profile"]["eligible"] is True
@@ -1001,7 +1001,7 @@ async def test_user_scoped_memory_profile_retrieved_on_later_eligible_turn(cp_ap
             if item["role"] == "system" and "Personal Memory Profile:" in str(item["content"])
         ]
         assert memory_blocks
-        assert "My preferred name is Jacob." in memory_blocks[0]["content"]
+        assert "My preferred name is Alex." in memory_blocks[0]["content"]
         assert second.json()["assistant_message"]["metadata"]["memory_profile"]["hit_count"] >= 1
 
 
@@ -2172,7 +2172,7 @@ async def test_stream_message_retrieves_user_scoped_memory_profile(cp_app):
 
         first = await client.post(
             f"/v1/chat/conversations/{conversation_id}/stream",
-            json={"content": "My preferred name is Jacob.", "bot_id": "bot-memory-stream", "user_id": "user@example.com"},
+            json={"content": "My preferred name is Alex.", "bot_id": "bot-memory-stream", "user_id": "user@example.com"},
         )
         assert first.status_code == 200
         assert "event: assistant_message" in first.text
@@ -2189,7 +2189,7 @@ async def test_stream_message_retrieves_user_scoped_memory_profile(cp_app):
         item["role"] == "system" and "Personal Memory Profile:" in str(item["content"])
         for item in captured_payloads[-1]
     )
-    assert "My preferred name is Jacob." in str(captured_payloads[-1][0]["content"])
+    assert "My preferred name is Alex." in str(captured_payloads[-1][0]["content"])
     messages = messages_resp.json()
     assert messages[-1]["metadata"]["memory_profile"]["eligible"] is True
     assert messages[-1]["metadata"]["memory_profile"]["hit_count"] >= 1

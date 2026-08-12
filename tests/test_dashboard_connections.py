@@ -552,9 +552,9 @@ def test_project_database_connection_create_test_and_schema_ingest(dashboard_cli
 
 def test_normalize_database_dsn_supports_postgres_keyword_string():
     dsn = normalize_database_dsn(
-        "host=db.example.com port=5432 dbname=acme user=jacob password=secret sslmode=require"
+        "host=db.example.com port=5432 dbname=acme user=alex password=secret sslmode=require"
     )
-    assert dsn.startswith("postgresql+psycopg2://jacob:secret@db.example.com:5432/acme")
+    assert dsn.startswith("postgresql+psycopg2://alex:secret@db.example.com:5432/acme")
     assert "sslmode=require" in dsn
 
 
