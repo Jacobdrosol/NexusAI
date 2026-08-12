@@ -20,10 +20,10 @@
       <div class="form-group">
         <label>Select Profile</label>
         <select class="form-control" id="memory-profile-select" onchange="switchMemoryProfile()">
+          <option value="default" {% if profile_id == 'default' %}selected{% endif %}>default</option>
           {% for p in profiles %}
           <option value="{{ p.id }}" {% if p.id == profile_id %}selected{% endif %}>{{ p.name }} ({{ p.id }})</option>
           {% endfor %}
-          <option value="default" {% if profile_id == 'default' and not profiles %}selected{% endif %}>default</option>
         </select>
       </div>
       <div class="mini-note" style="margin-bottom:0.5rem;">
