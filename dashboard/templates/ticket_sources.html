@@ -12,71 +12,74 @@
   </div>
 </div>
 
-<div id="ts-state" class="state-info" style="margin-bottom:0.75rem;">Loading sources…</div>
+<div id="ts-state" class="state-empty" style="margin-bottom:0.75rem;">
+  {% if sources %}Loaded {{ sources | length }} source{{ '' if sources | length == 1 else 's' }}.{% else %}No ticket sources configured for this project yet.{% endif %}
+</div>
 
 <div id="sources-list" style="margin-bottom:2rem;">
   {% if sources %}
-  <table class="data-table" style="width:100%;">
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Type</th>
-        <th>Status</th>
-        <th>Items</th>
-        <th>Last Polled</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for s in sources %}
-      <tr id="source-row-{{ s.id }}">
-        <td><strong>{{ s.name }}</strong>{% if not s.enabled %} <span class="badge badge-muted">disabled</span>{% endif %}</td>
-        <td><code>{{ s.source_type }}</code></td>
-        <td>
-          {% if s.last_poll_status == 'ok' %}
-            <span class="badge badge-ok">OK</span>
-          {% elif s.last_poll_status == 'error' %}
-            <span class="badge badge-error" title="{{ s.last_poll_error or '' }}">{{ s.last_poll_error[:60] if s.last_poll_error else 'Error' }}</span>
-          {% else %}
-            <span class="badge badge-muted">Not polled</span>
-          {% endif %}
-        </td>
-        <td>{{ s.item_count | default(0) }}</td>
-        <td>{{ s.last_polled_at[:19].replace('T',' ') if s.last_polled_at else '—' }}</td>
-        <td style="white-space:nowrap;">
-          <button class="btn btn-sm" onclick="pollSource('{{ s.id }}')">Poll</button>
-          <button class="btn btn-sm" onclick="showItems('{{ s.id }}', '{{ s.name | e }}')">Items</button>
-          <button class="btn btn-sm" onclick="toggleSource('{{ s.id }}', {{ (not s.enabled) | tojson }})">{% if s.enabled %}Disable{% else %}Enable{% endif %}</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteSource('{{ s.id }}', '{{ s.name | e }}')">Delete</button>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Items</th>
+          <th>Last Polled</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in sources %}
+        <tr id="source-row-{{ s.id }}">
+          <td><strong>{{ s.name }}</strong>{% if not s.enabled %} <span class="badge badge-muted">disabled</span>{% endif %}</td>
+          <td><code>{{ s.source_type }}</code></td>
+          <td>
+            {% if s.last_poll_status == 'ok' %}
+              <span class="badge badge-ok">OK</span>
+            {% elif s.last_poll_status == 'error' %}
+              <span class="badge badge-error" title="{{ s.last_poll_error or '' }}">{{ s.last_poll_error[:60] if s.last_poll_error else 'Error' }}</span>
+            {% else %}
+              <span class="badge badge-muted">Not polled</span>
+            {% endif %}
+          </td>
+          <td>{{ s.item_count | default(0) }}</td>
+          <td>{{ s.last_polled_at[:19].replace('T',' ') if s.last_polled_at else '—' }}</td>
+          <td style="white-space:nowrap;">
+            <button class="btn btn-sm" onclick="pollSource('{{ s.id }}')">Poll</button>
+            <button class="btn btn-sm" onclick="showItems('{{ s.id }}', '{{ s.name | e }}')">Items</button>
+            <button class="btn btn-sm" onclick="toggleSource('{{ s.id }}', {{ (not s.enabled) | tojson }})">{% if s.enabled %}Disable{% else %}Enable{% endif %}</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteSource('{{ s.id }}', '{{ s.name | e }}')">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
   {% else %}
   <div class="empty-state" style="text-align:center;padding:3rem 1rem;">
-    <p style="margin-bottom:0.5rem;color:var(--text-muted);">No ticket sources configured yet.</p>
-    <p style="font-size:0.85rem;color:var(--text-muted);">Click <strong>+ Add Source</strong> to connect a GitHub repo, custom HTTP endpoint, Jira, or Asana.</p>
+    <p style="margin-bottom:0.5rem;color:var(--muted);">No ticket sources configured yet.</p>
+    <p style="font-size:0.85rem;color:var(--muted);">Click <strong>+ Add Source</strong> to connect a GitHub repo, custom HTTP endpoint, Jira, or Asana.</p>
   </div>
   {% endif %}
 </div>
 
 <!-- Add Source Modal -->
 <div id="modal-add-source" class="modal" style="display:none;">
-  <div class="modal-backdrop" onclick="hideAddSourceModal()"></div>
-  <div class="modal-body" style="max-width:640px;">
+  <div class="modal-content" style="max-width:640px;max-height:90vh;overflow-y:auto;">
     <h2>Add Ticket Source</h2>
 
-    <div id="add-source-state" class="state-info" style="margin-bottom:0.5rem;display:none;"></div>
+    <div id="add-source-state" class="state-info" style="margin-bottom:0.75rem;display:none;"></div>
 
-    <div style="margin-bottom:0.75rem;">
+    <div class="form-group">
       <label>Source Name <span style="color:var(--accent);">*</span></label>
-      <input type="text" id="ts-name" placeholder="e.g. NexusAI GitHub Issues" style="width:100%;" />
+      <input type="text" class="form-control" id="ts-name" placeholder="e.g. NexusAI GitHub Issues" />
     </div>
 
-    <div style="margin-bottom:0.75rem;">
+    <div class="form-group">
       <label>Source Type <span style="color:var(--accent);">*</span></label>
-      <select id="ts-type" onchange="onTypeChange()">
+      <select class="form-control" id="ts-type" onchange="onTypeChange()">
         <option value="github_issues">GitHub Issues</option>
         <option value="generic_http">Custom HTTP Endpoint</option>
         <option value="jira">Jira</option>
@@ -84,115 +87,129 @@
       </select>
     </div>
 
-    <!-- GitHub Issues config -->
     <div id="config-github_issues" class="source-config-panel">
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>Repository (owner/repo) <span style="color:var(--accent);">*</span></label>
-        <input type="text" id="gh-repo" placeholder="Jacobdrosol/NexusAI" style="width:100%;" />
+        <input type="text" class="form-control" id="gh-repo" placeholder="Jacobdrosol/NexusAI" />
       </div>
-      <div style="display:flex;gap:0.75rem;margin-bottom:0.5rem;">
+      <div style="display:flex;gap:0.75rem;">
         <div style="flex:1;">
-          <label>State</label>
-          <select id="gh-state"><option value="open">open</option><option value="closed">closed</option><option value="all">all</option></select>
+          <div class="form-group">
+            <label>State</label>
+            <select class="form-control" id="gh-state"><option value="open">open</option><option value="closed">closed</option><option value="all">all</option></select>
+          </div>
         </div>
         <div style="flex:1;">
-          <label>Max Items</label>
-          <input type="number" id="gh-max-items" value="25" min="1" max="100" style="width:100%;" />
+          <div class="form-group">
+            <label>Max Items</label>
+            <input type="number" class="form-control" id="gh-max-items" value="25" min="1" max="100" />
+          </div>
         </div>
         <div style="flex:1;">
-          <label>Since Hours</label>
-          <input type="number" id="gh-since-hours" value="24" min="1" max="8760" style="width:100%;" />
+          <div class="form-group">
+            <label>Since Hours</label>
+            <input type="number" class="form-control" id="gh-since-hours" value="24" min="1" max="8760" />
+          </div>
         </div>
       </div>
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>Labels (comma-separated, optional)</label>
-        <input type="text" id="gh-labels" placeholder="ai-task,bug" style="width:100%;" />
+        <input type="text" class="form-control" id="gh-labels" placeholder="ai-task,bug" />
       </div>
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>GitHub PAT <span style="color:var(--accent);">*</span></label>
-        <input type="password" id="gh-pat" placeholder="ghp_..." style="width:100%;" />
+        <input type="password" class="form-control" id="gh-pat" placeholder="ghp_..." autocomplete="new-password" />
       </div>
     </div>
 
-    <!-- Generic HTTP config -->
     <div id="config-generic_http" class="source-config-panel" style="display:none;">
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>Endpoint URL <span style="color:var(--accent);">*</span></label>
-        <input type="text" id="http-url" placeholder="https://yoursite.com/api/tickets" style="width:100%;" />
+        <input type="text" class="form-control" id="http-url" placeholder="https://yoursite.com/api/tickets" />
       </div>
-      <div style="display:flex;gap:0.75rem;margin-bottom:0.5rem;">
+      <div style="display:flex;gap:0.75rem;">
         <div style="flex:1;">
-          <label>Method</label>
-          <select id="http-method"><option value="GET">GET</option><option value="POST">POST</option></select>
+          <div class="form-group">
+            <label>Method</label>
+            <select class="form-control" id="http-method"><option value="GET">GET</option><option value="POST">POST</option></select>
+          </div>
         </div>
         <div style="flex:1;">
-          <label>Max Items</label>
-          <input type="number" id="http-max-items" value="25" min="1" max="100" style="width:100%;" />
+          <div class="form-group">
+            <label>Max Items</label>
+            <input type="number" class="form-control" id="http-max-items" value="25" min="1" max="100" />
+          </div>
         </div>
       </div>
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>Results Path (dot-notation, e.g. "data.tickets")</label>
-        <input type="text" id="http-results-path" placeholder="tickets" style="width:100%;" />
+        <input type="text" class="form-control" id="http-results-path" placeholder="tickets" />
       </div>
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>Field Mapping (JSON, optional)</label>
-        <textarea id="http-field-map" rows="4" style="width:100%;font-family:monospace;font-size:0.85rem;" placeholder='{"id":"ticket_id","title":"subject","body":"description","url":"link","state":"status","labels":"tags","author":"reporter"}'></textarea>
+        <textarea class="form-control" id="http-field-map" rows="4" style="font-family:monospace;font-size:0.85rem;" placeholder='{"id":"ticket_id","title":"subject","body":"description","url":"link","state":"status","labels":"tags","author":"reporter"}'></textarea>
       </div>
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>Auth Token (optional)</label>
-        <input type="password" id="http-token" placeholder="Bearer token" style="width:100%;" />
+        <input type="password" class="form-control" id="http-token" placeholder="Bearer token" autocomplete="new-password" />
       </div>
     </div>
 
-    <!-- Jira config -->
     <div id="config-jira" class="source-config-panel" style="display:none;">
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>Jira Base URL <span style="color:var(--accent);">*</span></label>
-        <input type="text" id="jira-url" placeholder="https://yourorg.atlassian.net" style="width:100%;" />
+        <input type="text" class="form-control" id="jira-url" placeholder="https://yourorg.atlassian.net" />
       </div>
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>JQL Query</label>
-        <input type="text" id="jira-jql" placeholder='project = "NX" AND status = "To Do"' style="width:100%;" />
+        <input type="text" class="form-control" id="jira-jql" placeholder='project = "NX" AND status = "To Do"' />
       </div>
-      <div style="display:flex;gap:0.75rem;margin-bottom:0.5rem;">
+      <div style="display:flex;gap:0.75rem;">
         <div style="flex:1;">
-          <label>Email</label>
-          <input type="text" id="jira-email" placeholder="you@example.com" style="width:100%;" />
+          <div class="form-group">
+            <label>Email</label>
+            <input type="text" class="form-control" id="jira-email" placeholder="you@example.com" />
+          </div>
         </div>
         <div style="flex:1;">
-          <label>API Token <span style="color:var(--accent);">*</span></label>
-          <input type="password" id="jira-token" placeholder="ATATT3XF..." style="width:100%;" />
+          <div class="form-group">
+            <label>API Token <span style="color:var(--accent);">*</span></label>
+            <input type="password" class="form-control" id="jira-token" placeholder="ATATT3XF..." autocomplete="new-password" />
+          </div>
         </div>
       </div>
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>Max Items</label>
-        <input type="number" id="jira-max-items" value="25" min="1" max="100" style="width:100%;" />
+        <input type="number" class="form-control" id="jira-max-items" value="25" min="1" max="100" />
       </div>
     </div>
 
-    <!-- Asana config -->
     <div id="config-asana" class="source-config-panel" style="display:none;">
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>Asana Project ID <span style="color:var(--accent);">*</span></label>
-        <input type="text" id="asana-project-id" placeholder="1234567890" style="width:100%;" />
+        <input type="text" class="form-control" id="asana-project-id" placeholder="1234567890" />
       </div>
-      <div style="display:flex;gap:0.75rem;margin-bottom:0.5rem;">
+      <div style="display:flex;gap:0.75rem;">
         <div style="flex:1;">
-          <label>Max Items</label>
-          <input type="number" id="asana-max-items" value="25" min="1" max="100" style="width:100%;" />
+          <div class="form-group">
+            <label>Max Items</label>
+            <input type="number" class="form-control" id="asana-max-items" value="25" min="1" max="100" />
+          </div>
         </div>
         <div style="flex:1;">
-          <label>Completed</label>
-          <select id="asana-completed"><option value="false">Open only</option><option value="true">Include completed</option></select>
+          <div class="form-group">
+            <label>Completed</label>
+            <select class="form-control" id="asana-completed"><option value="false">Open only</option><option value="true">Include completed</option></select>
+          </div>
         </div>
       </div>
-      <div style="margin-bottom:0.5rem;">
+      <div class="form-group">
         <label>Asana Token <span style="color:var(--accent);">*</span></label>
-        <input type="password" id="asana-token" placeholder="2/..." style="width:100%;" />
+        <input type="password" class="form-control" id="asana-token" placeholder="2/..." autocomplete="new-password" />
       </div>
     </div>
 
-    <div style="margin-top:1rem;display:flex;justify-content:flex-end;gap:0.5rem;">
+    <div class="modal-actions">
       <button class="btn" onclick="hideAddSourceModal()">Cancel</button>
       <button class="btn btn-primary" onclick="createSource()">Create Source</button>
     </div>
@@ -201,12 +218,11 @@
 
 <!-- Items Modal -->
 <div id="modal-items" class="modal" style="display:none;">
-  <div class="modal-backdrop" onclick="hideItemsModal()"></div>
-  <div class="modal-body" style="max-width:900px;">
+  <div class="modal-content" style="max-width:900px;max-height:90vh;overflow-y:auto;">
     <h2 id="items-title">Items</h2>
-    <div id="items-state" class="state-info" style="margin-bottom:0.5rem;">Loading…</div>
-    <div id="items-content" style="max-height:60vh;overflow:auto;"></div>
-    <div style="margin-top:1rem;display:flex;justify-content:flex-end;">
+    <div id="items-state" class="state-info" style="margin-bottom:0.75rem;">Loading…</div>
+    <div id="items-content"></div>
+    <div class="modal-actions">
       <button class="btn" onclick="hideItemsModal()">Close</button>
     </div>
   </div>
@@ -356,14 +372,14 @@ async function showItems(sourceId, sourceName) {
   document.getElementById('items-state').textContent = items.length + ' items';
 
   if (!items.length) {
-    document.getElementById('items-content').innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:2rem;">No items fetched yet. Click <strong>Poll</strong> to fetch.</p>';
+    document.getElementById('items-content').innerHTML = '<p style="color:var(--muted);text-align:center;padding:2rem;">No items fetched yet. Click <strong>Poll</strong> to fetch.</p>';
     return;
   }
 
-  let html = '<table class="data-table" style="width:100%;"><thead><tr><th>#</th><th>Title</th><th>State</th><th>Labels</th><th>Task</th><th>Updated</th></tr></thead><tbody>';
+  let html = '<div class="table-wrap"><table><thead><tr><th>#</th><th>Title</th><th>State</th><th>Labels</th><th>Task</th><th>Updated</th></tr></thead><tbody>';
   for (const item of items) {
     const labels = (item.labels || []).map(l => '<span class="badge badge-muted">' + esc(l) + '</span>').join(' ');
-    const taskLink = item.task_id ? '<a href="/tasks/' + encodeURIComponent(item.task_id) + '">Linked</a>' : '<span style="color:var(--text-muted);">—</span>';
+    const taskLink = item.task_id ? '<a href="/tasks/' + encodeURIComponent(item.task_id) + '">Linked</a>' : '<span style="color:var(--muted);">—</span>';
     html += '<tr>'
       + '<td><code>' + esc(item.external_id) + '</code></td>'
       + '<td>' + (item.url ? '<a href="' + esc(item.url) + '" target="_blank">' + esc(item.title) + '</a>' : esc(item.title)) + '</td>'
@@ -373,7 +389,7 @@ async function showItems(sourceId, sourceName) {
       + '<td>' + esc((item.updated_at || '').slice(0,19).replace('T',' ')) + '</td>'
       + '</tr>';
   }
-  html += '</tbody></table>';
+  html += '</tbody></table></div>';
   document.getElementById('items-content').innerHTML = html;
 }
 
