@@ -138,6 +138,21 @@ table {
   min-width: max-content;
 }
 
+/* Keep the rightmost Actions column visible when the table scrolls
+   horizontally so row actions (save/delete) are never pushed off-screen. */
+.table-scroll > table th:last-child,
+.table-scroll > table td:last-child {
+  position: sticky;
+  right: 0;
+  background: var(--surface-2, #0f172a);
+  box-shadow: -6px 0 8px -6px rgba(0, 0, 0, 0.35);
+  z-index: 1;
+}
+
+.table-scroll > table td:last-child {
+  background: var(--surface, #0f172a);
+}
+
 thead {
   background: var(--surface-2);
 }
