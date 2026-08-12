@@ -1,6 +1,7 @@
 ﻿{% extends "base.html" %}
 {% set active_page = "chat" %}
 {% block title %}Chat{% if selected_conversation %} - {{ selected_conversation.title }}{% endif %}{% endblock %}
+{% block full_title %}Chat{% if selected_conversation %} - {{ selected_conversation.title }}{% endif %}{% endblock %}
 {% block content %}
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
