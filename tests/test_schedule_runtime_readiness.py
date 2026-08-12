@@ -109,7 +109,7 @@ def _project_bound_schedule_bot() -> Bot:
             "specialist": {
                 "kind": "quality_reviewer",
                 "risk_level": "read_only",
-                "project_id": "globeiq",
+                "project_id": "acme",
             }
         },
     )
@@ -151,7 +151,7 @@ async def test_autonomous_schedule_allows_matching_specialist_project_scope():
     await require_schedule_autonomy_safety(
         {
             "target_bot_id": bot.id,
-            "project_id": "globeiq",
+            "project_id": "acme",
             "metadata": {"mutation_safe": True},
         },
         bot_registry=_BotRegistry(bot),
@@ -172,7 +172,7 @@ async def test_autonomous_schedule_allows_attested_docs_hub_write():
         id="docs-hub-writer",
         name="Docs Hub Writer",
         role="docs-hub-writer",
-        project_id="globeiq",
+        project_id="acme",
         enabled=True,
         backends=[backend],
         execution_policy={
@@ -192,7 +192,7 @@ async def test_autonomous_schedule_allows_attested_docs_hub_write():
     await require_schedule_autonomy_safety(
         {
             "target_bot_id": bot.id,
-            "project_id": "globeiq",
+            "project_id": "acme",
             "task_payload": {
                 "action": "create",
                 "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
@@ -211,7 +211,7 @@ async def test_autonomous_schedule_enforces_explicit_bot_project_scope():
         id="project-bound-monitor",
         name="Project Bound Monitor",
         role="monitor",
-        project_id="globeiq",
+        project_id="acme",
         enabled=True,
         backends=[],
     )

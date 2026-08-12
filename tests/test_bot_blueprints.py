@@ -100,13 +100,13 @@ def test_content_writer_blueprint_is_disabled_and_draft_only_by_default():
             kind="content_writer",
             name="Course Lesson Writer",
             mission="Draft lessons for review.",
-            project_id="globeiq",
+            project_id="acme",
             backends=[_backend()],
         )
     )
 
     assert bot.id == "course-lesson-writer"
-    assert bot.project_id == "globeiq"
+    assert bot.project_id == "acme"
     assert bot.enabled is False
     assert bot.execution_policy.repo_output_mode == "deny"
     assert bot.routing_rules["specialist"]["risk_level"] == "draft_only"
@@ -121,8 +121,8 @@ def test_operations_manager_blueprint_stays_read_only_and_requests_operator_deci
     bot = build_specialist_bot(
         SpecialistBlueprintRequest(
             kind="operations_manager",
-            name="GlobeIQ Operations Manager",
-            project_id="globeiq",
+            name="acme Operations Manager",
+            project_id="acme",
             portfolio_bot_ids=["content-writer-01", "quality-review-01"],
             portfolio_schedule_ids=["quality-review-hourly"],
             backends=[_backend()],
@@ -153,7 +153,7 @@ def test_operations_manager_blueprint_stays_read_only_and_requests_operator_deci
     assert bot.routing_rules["supervision_manager"] == {
         "enabled": True,
         "portfolio": {
-            "project_id": "globeiq",
+            "project_id": "acme",
             "bot_ids": ["content-writer-01", "quality-review-01"],
             "schedule_ids": ["quality-review-hourly"],
         },
@@ -169,15 +169,15 @@ def test_operations_manager_blueprint_stays_read_only_and_requests_operator_deci
     "kwargs, message",
     [
         ({}, "requires at least one portfolio"),
-        ({"portfolio_bot_ids": ["GlobeIQ Operations Manager"]}, "control-plane identifiers"),
-        ({"portfolio_bot_ids": ["globeiq-operations-manager"]}, "cannot include itself"),
+        ({"portfolio_bot_ids": ["acme Operations Manager"]}, "control-plane identifiers"),
+        ({"portfolio_bot_ids": ["acme-operations-manager"]}, "cannot include itself"),
     ],
 )
 def test_operations_manager_blueprint_requires_a_bounded_external_portfolio(kwargs, message):
     with pytest.raises(ValueError, match=message):
         SpecialistBlueprintRequest(
             kind="operations_manager",
-            name="GlobeIQ Operations Manager",
+            name="acme Operations Manager",
             backends=[_backend()],
             **kwargs,
         )
@@ -381,8 +381,8 @@ async def test_specialist_blueprint_api_allows_ready_activation(cp_app):
 async def test_specialist_blueprint_api_requires_a_known_project_binding(cp_app):
     payload = {
         "kind": "researcher",
-        "name": "GlobeIQ Researcher",
-        "project_id": "globeiq",
+        "name": "acme Researcher",
+        "project_id": "acme",
         "backends": [
             {
                 "type": "cloud_api",
@@ -397,7 +397,7 @@ async def test_specialist_blueprint_api_requires_a_known_project_binding(cp_app)
         missing = await client.post("/v1/bot-blueprints/create", json=payload)
         project = await client.post(
             "/v1/projects",
-            json={"id": "globeiq", "name": "GlobeIQ", "mode": "isolated"},
+            json={"id": "acme", "name": "acme", "mode": "isolated"},
         )
         created = await client.post("/v1/bot-blueprints/create", json=payload)
 
@@ -405,4 +405,4 @@ async def test_specialist_blueprint_api_requires_a_known_project_binding(cp_app)
     assert missing.json()["detail"]["reason_code"] == "bot_project_not_found"
     assert project.status_code == 200
     assert created.status_code == 200
-    assert created.json()["bot"]["project_id"] == "globeiq"
+    assert created.json()["bot"]["project_id"] == "acme"

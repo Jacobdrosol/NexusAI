@@ -3027,7 +3027,7 @@ async def test_assign_message_includes_repo_profile_context_for_language_selecti
     workspace_root = tmp_path / "repo-profile"
     (workspace_root / "App" / "Pages").mkdir(parents=True, exist_ok=True)
     (workspace_root / "App" / "Services").mkdir(parents=True, exist_ok=True)
-    (workspace_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (workspace_root / "acme.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
     (workspace_root / "App" / "App.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n", encoding="utf-8")
     (workspace_root / "App" / "Pages" / "Index.razor").write_text("<h1>Hello</h1>\n", encoding="utf-8")
     (workspace_root / "App" / "Services" / "LessonService.cs").write_text("public class LessonService {}\n", encoding="utf-8")
@@ -3123,7 +3123,7 @@ async def test_assign_message_includes_repo_profile_context_for_language_selecti
 async def test_assign_message_includes_repo_profile_context_without_filesystem_tool_access(cp_app, tmp_path):
     workspace_root = tmp_path / "repo-profile-no-fs"
     (workspace_root / "App").mkdir(parents=True, exist_ok=True)
-    (workspace_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (workspace_root / "acme.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
     (workspace_root / "App" / "App.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n", encoding="utf-8")
 
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"steps": []})
@@ -3215,7 +3215,7 @@ async def test_assign_message_includes_repo_profile_context_without_filesystem_t
 async def test_assign_message_includes_repo_profile_context_even_when_tool_access_disabled(cp_app, tmp_path):
     workspace_root = tmp_path / "repo-profile-disabled"
     (workspace_root / "App").mkdir(parents=True, exist_ok=True)
-    (workspace_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (workspace_root / "acme.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
     (workspace_root / "App" / "App.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n", encoding="utf-8")
 
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"steps": []})
@@ -3848,7 +3848,7 @@ async def test_chat_repo_context_search_uses_focused_query_terms(cp_app):
         return_value=[
             {
                 "chunk_id": "row-lesson-1",
-                "title": "GlobeIQ.Server/Services/LessonBuilderService.cs",
+                "title": "acme.Server/Services/LessonBuilderService.cs",
                 "content": "FOCUSED_LESSON_CONTEXT_TOKEN",
                 "score": 0.72,
             }
@@ -4382,7 +4382,7 @@ async def test_post_message_inline_code_uses_task_manager_temp_workspace(cp_app,
             f"/v1/chat/conversations/{conversation_id}/messages",
             json={
                 "content": (
-                    "Can you look into GlobeIQ's repo and sketch month-end accounting reporting support? "
+                    "Can you look into acme's repo and sketch month-end accounting reporting support? "
                     "Can you code this?"
                 ),
                 "bot_id": "bot-inline-post",
@@ -4410,7 +4410,7 @@ async def test_post_message_inline_code_uses_task_manager_temp_workspace(cp_app,
         isinstance(item, dict)
         and item.get("role") == "system"
         and "Coding task for this turn (execute now):" in str(item.get("content") or "")
-        and "Can you look into GlobeIQ's repo and sketch month-end accounting reporting support?" in str(item.get("content") or "")
+        and "Can you look into acme's repo and sketch month-end accounting reporting support?" in str(item.get("content") or "")
         for item in payload
     )
 
@@ -4841,15 +4841,15 @@ async def test_post_message_inline_code_forwards_user_prompt_to_scheduler(cp_app
             [
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.Server/Program.cs",
-                    "path": "GlobeIQ.Server/Program.cs",
+                    "label": "acme.Server/Program.cs",
+                    "path": "acme.Server/Program.cs",
                     "content": "builder.Services.AddScoped<IMonthEndReportService, MonthEndReportService>();",
                     "status": "updated",
                     "source": "inline_temp_workspace",
                     "truncated": False,
                 }
             ],
-            ["GlobeIQ.Server/Program.cs"],
+            ["acme.Server/Program.cs"],
             [],
         )
 
@@ -4913,7 +4913,7 @@ async def test_post_message_inline_code_forwards_user_prompt_to_scheduler(cp_app
         assert bot.status_code == 200
 
         prompt = (
-            "Can you look into GlobeIQ's repo and add month-end scheduling/reporting? "
+            "Can you look into acme's repo and add month-end scheduling/reporting? "
             "Can you code this?"
         )
         resp = await client.post(
@@ -4980,15 +4980,15 @@ async def test_post_message_inline_code_warns_when_only_new_files_for_integratio
             [
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.Server/Services/MonthEndReportService.cs",
-                    "path": "GlobeIQ.Server/Services/MonthEndReportService.cs",
+                    "label": "acme.Server/Services/MonthEndReportService.cs",
+                    "path": "acme.Server/Services/MonthEndReportService.cs",
                     "content": "public class MonthEndReportService {}",
                     "status": "created",
                     "source": "inline_temp_workspace",
                     "truncated": False,
                 }
             ],
-            ["GlobeIQ.Server/Services/MonthEndReportService.cs"],
+            ["acme.Server/Services/MonthEndReportService.cs"],
             [],
         )
 
@@ -5092,7 +5092,7 @@ async def test_post_message_inline_code_fails_when_write_tool_evidence_missing(c
                 "output": "Updated scheduler code.",
                 "agent_loop_diagnostics": {"observed_write_tool_call": False},
                 "tool_calls_executed": [
-                    {"name": "read_file", "arguments": {"path": "GlobeIQ.Server/Program.cs"}},
+                    {"name": "read_file", "arguments": {"path": "acme.Server/Program.cs"}},
                 ],
             },
             "updated_at": "2026-01-01T00:00:02Z",
@@ -5112,15 +5112,15 @@ async def test_post_message_inline_code_fails_when_write_tool_evidence_missing(c
             [
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.Server/Program.cs",
-                    "path": "GlobeIQ.Server/Program.cs",
+                    "label": "acme.Server/Program.cs",
+                    "path": "acme.Server/Program.cs",
                     "content": "builder.Services.AddScoped<IMonthEndReportService, MonthEndReportService>();",
                     "status": "updated",
                     "source": "inline_temp_workspace",
                     "truncated": False,
                 }
             ],
-            ["GlobeIQ.Server/Program.cs"],
+            ["acme.Server/Program.cs"],
             [],
         )
 
@@ -5232,7 +5232,7 @@ async def test_post_message_inline_code_replaces_low_signal_output_with_change_s
                     {
                         "name": "edit_file",
                         "arguments": {
-                            "path": "GlobeIQ.Server/Controllers/Admin/ProgramsAdminController.cs",
+                            "path": "acme.Server/Controllers/Admin/ProgramsAdminController.cs",
                             "old_text": "old",
                             "new_text": "new",
                         },
@@ -5256,15 +5256,15 @@ async def test_post_message_inline_code_replaces_low_signal_output_with_change_s
             [
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.Server/Controllers/Admin/ProgramsAdminController.cs",
-                    "path": "GlobeIQ.Server/Controllers/Admin/ProgramsAdminController.cs",
+                    "label": "acme.Server/Controllers/Admin/ProgramsAdminController.cs",
+                    "path": "acme.Server/Controllers/Admin/ProgramsAdminController.cs",
                     "content": "public class ProgramsAdminController {}",
                     "status": "updated",
                     "source": "inline_temp_workspace",
                     "truncated": False,
                 }
             ],
-            ["GlobeIQ.Server/Controllers/Admin/ProgramsAdminController.cs"],
+            ["acme.Server/Controllers/Admin/ProgramsAdminController.cs"],
             [],
         )
 
@@ -5374,7 +5374,7 @@ async def test_post_message_inline_code_fails_when_required_surfaces_missing(cp_
                 "output": "Updated server scheduler.",
                 "agent_loop_diagnostics": {"observed_write_tool_call": True},
                 "tool_calls_executed": [
-                    {"name": "write_file", "arguments": {"path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs"}},
+                    {"name": "write_file", "arguments": {"path": "acme.Server/Services/ProgramSchedulerService.cs"}},
                 ],
             },
             "updated_at": "2026-01-01T00:00:02Z",
@@ -5394,15 +5394,15 @@ async def test_post_message_inline_code_fails_when_required_surfaces_missing(cp_
             [
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
-                    "path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                    "label": "acme.Server/Services/ProgramSchedulerService.cs",
+                    "path": "acme.Server/Services/ProgramSchedulerService.cs",
                     "content": "public class ProgramSchedulerService {}",
                     "status": "updated",
                     "source": "inline_temp_workspace",
                     "truncated": False,
                 }
             ],
-            ["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+            ["acme.Server/Services/ProgramSchedulerService.cs"],
             [],
         )
 
@@ -5535,23 +5535,23 @@ async def test_post_message_inline_code_runs_integration_remediation_pass(cp_app
                 [
                     {
                         "kind": "file",
-                        "label": "GlobeIQ.Server/Services/MonthEndReportService.cs",
-                        "path": "GlobeIQ.Server/Services/MonthEndReportService.cs",
+                        "label": "acme.Server/Services/MonthEndReportService.cs",
+                        "path": "acme.Server/Services/MonthEndReportService.cs",
                         "content": "public class MonthEndReportService {}",
                         "status": "created",
                         "source": "inline_temp_workspace",
                         "truncated": False,
                     }
                 ],
-                ["GlobeIQ.Server/Services/MonthEndReportService.cs"],
+                ["acme.Server/Services/MonthEndReportService.cs"],
                 [],
             )
         return (
             [
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.Server/Services/MonthEndReportService.cs",
-                    "path": "GlobeIQ.Server/Services/MonthEndReportService.cs",
+                    "label": "acme.Server/Services/MonthEndReportService.cs",
+                    "path": "acme.Server/Services/MonthEndReportService.cs",
                     "content": "public class MonthEndReportService {}",
                     "status": "created",
                     "source": "inline_temp_workspace",
@@ -5559,15 +5559,15 @@ async def test_post_message_inline_code_runs_integration_remediation_pass(cp_app
                 },
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.Server/Program.cs",
-                    "path": "GlobeIQ.Server/Program.cs",
+                    "label": "acme.Server/Program.cs",
+                    "path": "acme.Server/Program.cs",
                     "content": "builder.Services.AddScoped<IMonthEndReportService, MonthEndReportService>();",
                     "status": "updated",
                     "source": "inline_temp_workspace",
                     "truncated": False,
                 },
             ],
-            ["GlobeIQ.Server/Services/MonthEndReportService.cs", "GlobeIQ.Server/Program.cs"],
+            ["acme.Server/Services/MonthEndReportService.cs", "acme.Server/Program.cs"],
             [],
         )
 
@@ -5651,7 +5651,7 @@ async def test_post_message_inline_code_runs_integration_remediation_pass(cp_app
         body = resp.json()
         assistant = body["assistant_message"]
         assert assistant["metadata"]["run_status"] == "passed"
-        assert "GlobeIQ.Server/Program.cs" in assistant["content"]
+        assert "acme.Server/Program.cs" in assistant["content"]
         assert "Quality warning: this run created new files but did not modify existing tracked files." not in assistant["content"]
 
 
@@ -5680,7 +5680,7 @@ async def test_post_message_inline_code_runs_surface_remediation_pass(cp_app, tm
             "result": {
                 "output": "Updated scheduler service.",
                 "agent_loop_diagnostics": {"observed_write_tool_call": True},
-                "tool_calls_executed": [{"name": "edit_file", "arguments": {"path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs"}}],
+                "tool_calls_executed": [{"name": "edit_file", "arguments": {"path": "acme.Server/Services/ProgramSchedulerService.cs"}}],
             },
             "updated_at": "2026-01-01T00:00:01Z",
         }
@@ -5692,7 +5692,7 @@ async def test_post_message_inline_code_runs_surface_remediation_pass(cp_app, tm
             "result": {
                 "output": "Added webapp admin wiring updates.",
                 "agent_loop_diagnostics": {"observed_write_tool_call": True},
-                "tool_calls_executed": [{"name": "edit_file", "arguments": {"path": "GlobeIQ.WebApp/Pages/Admin/Programs.razor"}}],
+                "tool_calls_executed": [{"name": "edit_file", "arguments": {"path": "acme.WebApp/Pages/Admin/Programs.razor"}}],
             },
             "updated_at": "2026-01-01T00:00:02Z",
         }
@@ -5715,23 +5715,23 @@ async def test_post_message_inline_code_runs_surface_remediation_pass(cp_app, tm
                 [
                     {
                         "kind": "file",
-                        "label": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
-                        "path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                        "label": "acme.Server/Services/ProgramSchedulerService.cs",
+                        "path": "acme.Server/Services/ProgramSchedulerService.cs",
                         "content": "public class ProgramSchedulerService {}",
                         "status": "updated",
                         "source": "inline_temp_workspace",
                         "truncated": False,
                     }
                 ],
-                ["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+                ["acme.Server/Services/ProgramSchedulerService.cs"],
                 [],
             )
         return (
             [
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
-                    "path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                    "label": "acme.Server/Services/ProgramSchedulerService.cs",
+                    "path": "acme.Server/Services/ProgramSchedulerService.cs",
                     "content": "public class ProgramSchedulerService {}",
                     "status": "updated",
                     "source": "inline_temp_workspace",
@@ -5739,15 +5739,15 @@ async def test_post_message_inline_code_runs_surface_remediation_pass(cp_app, tm
                 },
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.WebApp/Pages/Admin/Programs.razor",
-                    "path": "GlobeIQ.WebApp/Pages/Admin/Programs.razor",
+                    "label": "acme.WebApp/Pages/Admin/Programs.razor",
+                    "path": "acme.WebApp/Pages/Admin/Programs.razor",
                     "content": "@code { }",
                     "status": "updated",
                     "source": "inline_temp_workspace",
                     "truncated": False,
                 },
             ],
-            ["GlobeIQ.Server/Services/ProgramSchedulerService.cs", "GlobeIQ.WebApp/Pages/Admin/Programs.razor"],
+            ["acme.Server/Services/ProgramSchedulerService.cs", "acme.WebApp/Pages/Admin/Programs.razor"],
             [],
         )
 
@@ -5834,7 +5834,7 @@ async def test_post_message_inline_code_runs_surface_remediation_pass(cp_app, tm
         body = resp.json()
         assistant = body["assistant_message"]
         assert assistant["metadata"]["run_status"] == "passed"
-        assert "GlobeIQ.WebApp/Pages/Admin/Programs.razor" in assistant["content"]
+        assert "acme.WebApp/Pages/Admin/Programs.razor" in assistant["content"]
 
 
 @pytest.mark.anyio
@@ -5865,7 +5865,7 @@ async def test_post_message_inline_code_preserves_cumulative_write_evidence_acro
                 "output": "Updated backend scheduling service.",
                 "agent_loop_diagnostics": {"observed_write_tool_call": True},
                 "tool_calls_executed": [
-                    {"name": "edit_file", "arguments": {"path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs"}}
+                    {"name": "edit_file", "arguments": {"path": "acme.Server/Services/ProgramSchedulerService.cs"}}
                 ],
             },
             "updated_at": "2026-01-01T00:00:01Z",
@@ -5899,15 +5899,15 @@ async def test_post_message_inline_code_preserves_cumulative_write_evidence_acro
             [
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
-                    "path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                    "label": "acme.Server/Services/ProgramSchedulerService.cs",
+                    "path": "acme.Server/Services/ProgramSchedulerService.cs",
                     "content": "public class ProgramSchedulerService {}",
                     "status": "updated",
                     "source": "inline_temp_workspace",
                     "truncated": False,
                 },
             ],
-            ["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+            ["acme.Server/Services/ProgramSchedulerService.cs"],
             [],
         )
 
@@ -6078,7 +6078,7 @@ def test_inline_code_surface_repair_prompt_mentions_missing_surfaces():
 
     prompt = chat_module._inline_code_surface_repair_prompt(
         ["webapp"],
-        ["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+        ["acme.Server/Services/ProgramSchedulerService.cs"],
     )
     assert "Missing surfaces: webapp" in prompt
     assert "edit existing UI files" in prompt
@@ -6088,10 +6088,10 @@ def test_inline_code_surface_repair_candidate_map_finds_existing_surface_files(t
     from control_plane.api import chat as chat_module
 
     repo_root = tmp_path / "repo"
-    (repo_root / "GlobeIQ.WebApp/Pages/Admin").mkdir(parents=True, exist_ok=True)
-    (repo_root / "GlobeIQ.Server/Services").mkdir(parents=True, exist_ok=True)
-    (repo_root / "GlobeIQ.WebApp/Pages/Admin/Programs.razor").write_text("@code { }", encoding="utf-8")
-    (repo_root / "GlobeIQ.Server/Services/ProgramSchedulerService.cs").write_text(
+    (repo_root / "acme.WebApp/Pages/Admin").mkdir(parents=True, exist_ok=True)
+    (repo_root / "acme.Server/Services").mkdir(parents=True, exist_ok=True)
+    (repo_root / "acme.WebApp/Pages/Admin/Programs.razor").write_text("@code { }", encoding="utf-8")
+    (repo_root / "acme.Server/Services/ProgramSchedulerService.cs").write_text(
         "public class ProgramSchedulerService {}",
         encoding="utf-8",
     )
@@ -6100,12 +6100,12 @@ def test_inline_code_surface_repair_candidate_map_finds_existing_surface_files(t
     candidates = chat_module._inline_code_surface_repair_candidate_map(
         workspace_root=str(repo_root),
         missing_surfaces=["server", "webapp"],
-        touched_paths=["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+        touched_paths=["acme.Server/Services/ProgramSchedulerService.cs"],
     )
 
     assert "webapp" in candidates
-    assert "GlobeIQ.WebApp/Pages/Admin/Programs.razor" in candidates["webapp"]
-    assert "GlobeIQ.Server/Services/ProgramSchedulerService.cs" not in candidates.get("server", [])
+    assert "acme.WebApp/Pages/Admin/Programs.razor" in candidates["webapp"]
+    assert "acme.Server/Services/ProgramSchedulerService.cs" not in candidates.get("server", [])
 
 
 def test_inline_code_surface_repair_prompt_lists_candidate_files():
@@ -6113,12 +6113,12 @@ def test_inline_code_surface_repair_prompt_lists_candidate_files():
 
     prompt = chat_module._inline_code_surface_repair_prompt(
         ["webapp"],
-        ["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
-        candidate_map={"webapp": ["GlobeIQ.WebApp/Pages/Admin/Programs.razor"]},
+        ["acme.Server/Services/ProgramSchedulerService.cs"],
+        candidate_map={"webapp": ["acme.WebApp/Pages/Admin/Programs.razor"]},
     )
 
     assert "Candidate existing webapp files to edit now" in prompt
-    assert "GlobeIQ.WebApp/Pages/Admin/Programs.razor" in prompt
+    assert "acme.WebApp/Pages/Admin/Programs.razor" in prompt
 
 
 def test_inline_code_has_write_tool_evidence_ignores_noop_edit_call():
@@ -6129,7 +6129,7 @@ def test_inline_code_has_write_tool_evidence_ignores_noop_edit_call():
             {
                 "name": "edit_file",
                 "arguments": {
-                    "path": "GlobeIQ.Server/Program.cs",
+                    "path": "acme.Server/Program.cs",
                     "old_text": "same",
                     "new_text": "same",
                 },
@@ -6144,8 +6144,8 @@ def test_inline_code_existing_code_surface_coverage_requires_code_edits():
 
     breakdown = {
         "updated_paths": [
-            "GlobeIQ.Server/GlobeIQ.Server.csproj",
-            "GlobeIQ.WebApp/Pages/Admin/Programs.razor",
+            "acme.Server/acme.Server.csproj",
+            "acme.WebApp/Pages/Admin/Programs.razor",
         ],
         "deleted_paths": [],
     }
@@ -6176,12 +6176,12 @@ def test_inline_code_deliverable_contract_detects_missing_reporting_and_pdf():
             "Add end of month scheduling and accounting reporting with PDF exports in the admin programs page."
         ),
         files_touched=[
-            "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
-            "GlobeIQ.WebApp/Pages/Admin/Programs.razor",
+            "acme.Server/Services/ProgramSchedulerService.cs",
+            "acme.WebApp/Pages/Admin/Programs.razor",
         ],
         artifacts=[
             {
-                "path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                "path": "acme.Server/Services/ProgramSchedulerService.cs",
                 "content": "if (schedule.Frequency.StartsWith(\"End of \")) { return ShouldRunEndOfPeriodSchedule(schedule, now); }",
             }
         ],
@@ -6202,7 +6202,7 @@ def test_inline_code_test_coverage_requires_test_edits_for_feature_work(monkeypa
     coverage = chat_module._inline_code_test_coverage(
         requested_task="Can you add this feature and code this in the existing admin app?",
         integration_required=True,
-        files_touched=["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+        files_touched=["acme.Server/Services/ProgramSchedulerService.cs"],
         deleted_paths=[],
     )
     assert coverage["tests_required"] is True
@@ -6212,14 +6212,14 @@ def test_inline_code_test_coverage_requires_test_edits_for_feature_work(monkeypa
         requested_task="Can you add this feature and code this in the existing admin app?",
         integration_required=True,
         files_touched=[
-            "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
-            "GlobeIQ.Server.Tests/ProgramSchedulerServiceTests.cs",
+            "acme.Server/Services/ProgramSchedulerService.cs",
+            "acme.Server.Tests/ProgramSchedulerServiceTests.cs",
         ],
         deleted_paths=[],
     )
     assert passing["tests_required"] is True
     assert passing["passed"] is True
-    assert "GlobeIQ.Server.Tests/ProgramSchedulerServiceTests.cs" in passing["test_paths"]
+    assert "acme.Server.Tests/ProgramSchedulerServiceTests.cs" in passing["test_paths"]
 
 
 def test_inline_code_missing_tests_gate_is_advisory_by_default(monkeypatch):
@@ -6424,8 +6424,8 @@ async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
                 "I'll read through the actual files in your repository to give you a proper review.\n"
                 "Now let me read what I found:\n"
                 "Now I have the actual file contents.\n"
-                "GlobeIQ.Server/Models/Lesson.cs\n"
-                "GlobeIQ.Server/Controllers/LessonsController.cs\n"
+                "acme.Server/Models/Lesson.cs\n"
+                "acme.Server/Controllers/LessonsController.cs\n"
                 "\"BlockType\" \"LessonBlock\" \"BlockSettings\"\n"
                 "Please confirm which files you'd like me to read first.\n"
                 "Should I start with the controller files?\n"
@@ -6508,7 +6508,7 @@ async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
         assert "I'll read through the actual files" not in content
         assert "Now let me read what I found" not in content
         assert "Now I have the actual file contents" not in content
-        assert "GlobeIQ.Server/Models/Lesson.cs" not in content
+        assert "acme.Server/Models/Lesson.cs" not in content
         assert '"BlockType" "LessonBlock" "BlockSettings"' not in content
         assert "Please confirm which files you'd like me to read first" not in content
         assert "Should I start with the controller files" not in content
@@ -7338,7 +7338,7 @@ async def test_update_conversation_tool_access_endpoint(cp_app):
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post(
             "/v1/chat/conversations",
-            json={"title": "Tool Access Conversation", "scope": "project", "project_id": "globeiq"},
+            json={"title": "Tool Access Conversation", "scope": "project", "project_id": "acme"},
         )
         assert create_resp.status_code == 200
         conversation_id = create_resp.json()["id"]
@@ -7382,7 +7382,7 @@ async def test_create_conversation_blocks_workspace_tools_without_enabled_mode(c
             json={
                 "title": "Mode-less Tool Conversation",
                 "scope": "project",
-                "project_id": "globeiq",
+                "project_id": "acme",
                 "tool_access_enabled": True,
                 "tool_access_filesystem": False,
                 "tool_access_repo_search": False,
@@ -7443,7 +7443,7 @@ async def test_update_conversation_tool_access_clears_modes_when_disabled(cp_app
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post(
             "/v1/chat/conversations",
-            json={"title": "Disabled Update Modes", "scope": "project", "project_id": "globeiq"},
+            json={"title": "Disabled Update Modes", "scope": "project", "project_id": "acme"},
         )
         assert create_resp.status_code == 200
         conversation_id = create_resp.json()["id"]
@@ -7465,7 +7465,7 @@ async def test_update_conversation_tool_access_blocks_enabled_without_mode(cp_ap
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post(
             "/v1/chat/conversations",
-            json={"title": "Mode-less Update Guard", "scope": "project", "project_id": "globeiq"},
+            json={"title": "Mode-less Update Guard", "scope": "project", "project_id": "acme"},
         )
         assert create_resp.status_code == 200
         conversation_id = create_resp.json()["id"]

@@ -113,7 +113,7 @@ def test_chat_import_manifest_validator_blocks_tools_memory_secrets_and_unsafe_a
         ],
     )
     projects_file = tmp_path / "projects.json"
-    projects_file.write_text(json.dumps(["globeiq"]), encoding="utf-8")
+    projects_file.write_text(json.dumps(["acme"]), encoding="utf-8")
 
     result = validate_manifest(manifest_dir, projects_file=projects_file)
     codes = {item.code for item in result.findings}
@@ -139,7 +139,7 @@ def test_chat_import_manifest_validator_blocks_unlinked_and_duplicate_source_rec
                 "title": "Project planning",
                 "owner_user_id": "jacob@example.com",
                 "scope": "bridged",
-                "project_id": "globeiq",
+                "project_id": "acme",
                 "bridge_project_ids": ["unknown-project"],
                 "memory_profiles_enabled": False,
                 "tool_access_enabled": False,
@@ -205,7 +205,7 @@ def test_chat_import_manifest_validator_blocks_unlinked_and_duplicate_source_rec
         ],
     )
     projects_file = tmp_path / "projects.json"
-    projects_file.write_text(json.dumps(["globeiq"]), encoding="utf-8")
+    projects_file.write_text(json.dumps(["acme"]), encoding="utf-8")
 
     result = validate_manifest(manifest_dir, projects_file=projects_file)
     codes = {item.code for item in result.findings}

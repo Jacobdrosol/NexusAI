@@ -149,7 +149,7 @@ def _expand_worker_replicas(raw_workers: list[Any], fleet: dict[str, Any]) -> li
                     count=replicas,
                     field=field,
                 )
-            for field in ("site_account", "site_user", "site_username", "globeiq_user_email"):
+            for field in ("site_account", "site_user", "site_username", "site_user_email"):
                 if worker.get(field):
                     worker[field] = _render_replica_text(
                         worker.get(field),
@@ -211,7 +211,7 @@ def _as_list(value: Any) -> list[str]:
 
 
 def _site_account_label(worker: dict[str, Any]) -> str:
-    for field in ("site_account", "site_user", "site_username", "globeiq_user_email"):
+    for field in ("site_account", "site_user", "site_username", "site_user_email"):
         value = str(worker.get(field) or "").strip()
         if not value:
             continue

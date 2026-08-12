@@ -132,7 +132,7 @@ Validate the dry-run files before approving any import:
 python scripts/validate_chat_import_manifest.py <operator-staging-root>/normalized --projects-file <approved-projects.json>
 ```
 
-The optional projects file may be a JSON list such as `["globeiq", "nexusai"]` or an object with `project_ids`/`projects`. The validator exits non-zero when import blockers are present.
+The optional projects file may be a JSON list such as `["project-a", "project-b"]` or an object with `project_ids`/`projects`. The validator exits non-zero when import blockers are present.
 
 Dry-run validation also enforces source-link integrity before import:
 

@@ -164,7 +164,7 @@ def _worker_profile(bot: dict[str, Any]) -> dict[str, Any]:
     if not profile:
         return {}
     site_account = ""
-    for key in ("site_account", "site_user", "site_username", "globeiq_user_email"):
+    for key in ("site_account", "site_user", "site_username", "site_user_email"):
         site_account = _safe_reference_label(profile.get(key))
         if site_account:
             break

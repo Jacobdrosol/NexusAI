@@ -26,7 +26,7 @@ _SCHEMA = json.dumps(
 
 def _course_update_payload() -> dict:
     return {
-        "connection": {"name": "GlobeIQ Agent API"},
+        "connection": {"name": "acme Agent API"},
         "connection_action": {
             "operation_id": "updateCourse",
             "method": "PATCH",
@@ -52,7 +52,7 @@ def _course_update_payload() -> dict:
                     },
                 },
                 "response_token_field": "token",
-                "inject_header": "X-GLOBEIQ-AGENT-APPROVAL",
+                "inject_header": "X-acme-AGENT-APPROVAL",
             },
         },
     }
@@ -61,12 +61,12 @@ def _course_update_payload() -> dict:
 class _ConnectionResolver:
     def find_bot_connection(self, bot_id, *, requested_name=None, requested_id=None):
         assert bot_id == "course-metadata-applier"
-        assert requested_name == "GlobeIQ Agent API"
+        assert requested_name == "acme Agent API"
         return {
             "id": 90,
-            "name": "GlobeIQ Agent API",
+            "name": "acme Agent API",
             "kind": "http",
-            "config": {"base_url": "https://globeiq.test"},
+            "config": {"base_url": "https://acme.test"},
             "auth": {"type": "none"},
             "schema_text": _SCHEMA,
         }
@@ -78,7 +78,7 @@ async def test_connection_action_approval_is_payload_bound_and_single_use(tmp_pa
     payload = _course_update_payload()
     approval = await store.create(
         bot_id="course-metadata-applier",
-        action_key="globeiq-agent-api.updatecourse",
+        action_key="acme-agent-api.updatecourse",
         payload=payload,
         expires_in_seconds=60,
     )
@@ -87,13 +87,13 @@ async def test_connection_action_approval_is_payload_bound_and_single_use(tmp_pa
     assert await store.consume(
         approval_id=approval["id"],
         bot_id="course-metadata-applier",
-        action_key="globeiq-agent-api.updatecourse",
+        action_key="acme-agent-api.updatecourse",
         payload=approved_payload,
     )
     assert not await store.consume(
         approval_id=approval["id"],
         bot_id="course-metadata-applier",
-        action_key="globeiq-agent-api.updatecourse",
+        action_key="acme-agent-api.updatecourse",
         payload=approved_payload,
     )
 
@@ -108,8 +108,8 @@ async def test_scheduler_requires_owner_approval_for_one_connection_mutation(mon
         name="Course Metadata Applier",
         role="course-metadata-applier",
         execution_policy={
-            "connection_action_allowlist": ["globeiq-agent-api.updatecourse"],
-            "connection_action_owner_approval_required": ["globeiq-agent-api.updatecourse"],
+            "connection_action_allowlist": ["acme-agent-api.updatecourse"],
+            "connection_action_owner_approval_required": ["acme-agent-api.updatecourse"],
         },
         backends=[backend],
     )
@@ -124,7 +124,7 @@ async def test_scheduler_requires_owner_approval_for_one_connection_mutation(mon
     payload = _course_update_payload()
     approval = await store.create(
         bot_id=bot.id,
-        action_key="globeiq-agent-api.updatecourse",
+        action_key="acme-agent-api.updatecourse",
         payload=payload,
         expires_in_seconds=60,
     )
@@ -158,13 +158,13 @@ def test_bot_rejects_unallowlisted_connection_action_approval():
         name="Unsafe Connection Policy",
         role="test",
         execution_policy={
-            "connection_action_allowlist": ["globeiq-agent-api.updatecourse"],
-            "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+            "connection_action_allowlist": ["acme-agent-api.updatecourse"],
+            "connection_action_owner_approval_required": ["acme-agent-api.updateLesson"],
         },
         backends=[],
     )
 
     assert validate_bot_configuration(bot) == [
         "Bot 'unsafe-connection-policy' requires owner approval for connection actions not present "
-        "in its allowlist: globeiq-agent-api.updateLesson"
+        "in its allowlist: acme-agent-api.updateLesson"
     ]

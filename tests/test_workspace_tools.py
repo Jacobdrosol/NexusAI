@@ -52,7 +52,7 @@ def test_build_focus_query_prioritizes_domain_terms_from_long_prompt():
 
 
 def test_search_workspace_snippets_deprioritizes_migrations_and_temp_issue_files(tmp_path):
-    migrations = tmp_path / "GlobeIQ.Server" / "Migrations"
+    migrations = tmp_path / "acme.Server" / "Migrations"
     migrations.mkdir(parents=True, exist_ok=True)
     (migrations / "20250907194502_AddLessonContentModeAndRawCode.Designer.cs").write_text(
         "migration for lesson content mode",
@@ -66,7 +66,7 @@ def test_search_workspace_snippets_deprioritizes_migrations_and_temp_issue_files
         encoding="utf-8",
     )
 
-    services = tmp_path / "GlobeIQ.Server" / "Services"
+    services = tmp_path / "acme.Server" / "Services"
     services.mkdir(parents=True, exist_ok=True)
     (services / "LessonBuilderService.cs").write_text(
         "public class LessonBuilderService { /* lesson block assembly */ }",

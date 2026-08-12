@@ -19,7 +19,7 @@ class _DatabaseEngineer:
         return [
             {
                 "id": 90,
-                "name": "globeiq-agent-api",
+                "name": "acme-agent-api",
                 "connection_string": "https://example.invalid/secret",
                 "config_json": {},
             }

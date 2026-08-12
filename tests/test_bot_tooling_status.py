@@ -42,13 +42,13 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 "routing_rules": {
                     "worker_profile": {
                         "worker_id": "browser-worker",
-                        "service": "globeiq-browser-worker",
+                        "service": "acme-browser-worker",
                         "role": "browser-inspector",
                         "task_scope": "single-lesson-browser-qc",
                         "can_edit": False,
                         "course_scope": ["57"],
                         "lesson_scope": ["1201"],
-                        "site_account": "content-kc@globaliq.local",
+                        "site_account": "content-kc@acme.local",
                     }
                 },
             },
@@ -62,14 +62,14 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 "id": "connection-bot",
                 "name": "Connection Bot",
                 "enabled": True,
-                "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http", "api_key_ref": "GLOBEIQ_AGENT_TOKEN"}],
-                "routing_rules": {"connection_context": {"connection_name": "globeiq-agent-api"}},
+                "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http", "api_key_ref": "acme_AGENT_TOKEN"}],
+                "routing_rules": {"connection_context": {"connection_name": "acme-agent-api"}},
                 "execution_policy": {
                     "connection_action_allowlist": [
-                        "globeiq-agent-api.updateLesson",
-                        "globeiq-agent-api.updateLesson",
+                        "acme-agent-api.updateLesson",
+                        "acme-agent-api.updateLesson",
                     ],
-                    "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                    "connection_action_owner_approval_required": ["acme-agent-api.updateLesson"],
                 },
             },
             {
@@ -170,7 +170,7 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 {"worker_id": "llm-worker", "probe_status": "ready"},
             ]
         },
-        api_keys=[{"name": "GLOBEIQ_AGENT_TOKEN"}],
+        api_keys=[{"name": "acme_AGENT_TOKEN"}],
     )
 
     assert status["summary"]["ready"] == 2
@@ -197,7 +197,7 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert status["summary"]["recommended_action"]["level"] == "critical"
     assert "1 bot(s)" in status["summary"]["recommended_action"]["detail"]
     assert status["required_tools"] == [{"tool": "browser-ui", "bot_count": 1}]
-    assert status["connection_actions"] == [{"action": "globeiq-agent-api.updateLesson", "bot_count": 1}]
+    assert status["connection_actions"] == [{"action": "acme-agent-api.updateLesson", "bot_count": 1}]
     assert status["browser_actions"] == [{"action": "question_bank.patch_existing", "bot_count": 1}]
     browser_row = next(row for row in status["rows"] if row["bot_id"] == "browser-bot")
     assert browser_row["browser_actions"] == ["question_bank.patch_existing"]
@@ -208,13 +208,13 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert browser_row["worker_profile"]["can_edit"] is False
     assert browser_row["worker_profile"]["course_scope"] == ["57"]
     assert browser_row["worker_profile"]["lesson_scope"] == ["1201"]
-    assert browser_row["worker_profile"]["site_account"] == "content-kc@globaliq.local"
+    assert browser_row["worker_profile"]["site_account"] == "content-kc@acme.local"
     connection_row = next(row for row in status["rows"] if row["bot_id"] == "connection-bot")
-    assert connection_row["connection_actions"] == ["globeiq-agent-api.updateLesson"]
-    assert connection_row["owner_approval_actions"] == ["globeiq-agent-api.updateLesson"]
+    assert connection_row["connection_actions"] == ["acme-agent-api.updateLesson"]
+    assert connection_row["owner_approval_actions"] == ["acme-agent-api.updateLesson"]
     assert connection_row["connection_backend_count"] == 1
-    assert connection_row["connection_context"] == "globeiq-agent-api"
-    assert connection_row["credential_refs"] == ["GLOBEIQ_AGENT_TOKEN"]
+    assert connection_row["connection_context"] == "acme-agent-api"
+    assert connection_row["credential_refs"] == ["acme_AGENT_TOKEN"]
     raw_secret_row = next(row for row in status["rows"] if row["bot_id"] == "raw-secret-bot")
     assert raw_secret_row["state"] == "blocked"
     assert raw_secret_row["credential_refs"] == ["[redacted raw credential]"]
@@ -301,12 +301,12 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
                     "routing_rules": {
                         "worker_profile": {
                             "worker_id": "browser-worker",
-                            "service": "globeiq-browser-worker",
+                            "service": "acme-browser-worker",
                             "role": "browser-inspector",
                             "task_scope": "single-lesson-browser-qc",
                             "can_edit": False,
                             "course_scope": ["57"],
-                            "site_username": "content-kc@globaliq.local",
+                            "site_username": "content-kc@acme.local",
                             "cli_tools": ["browser-ui", "codex-cli"],
                         }
                     },
@@ -316,11 +316,11 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
                     "name": "Connection Bot",
                     "role": "site-updater",
                     "enabled": True,
-                    "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http", "api_key_ref": "GLOBEIQ_AGENT_TOKEN"}],
-                    "routing_rules": {"connection_context": {"connection_name": "globeiq-agent-api"}},
+                    "backends": [{"type": "custom", "provider": "http_connection", "model": "attached-http", "api_key_ref": "acme_AGENT_TOKEN"}],
+                    "routing_rules": {"connection_context": {"connection_name": "acme-agent-api"}},
                     "execution_policy": {
-                        "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
-                        "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                        "connection_action_allowlist": ["acme-agent-api.updateLesson"],
+                        "connection_action_owner_approval_required": ["acme-agent-api.updateLesson"],
                     },
                 },
                 {
@@ -387,7 +387,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
             return []
 
         def list_keys(self):
-            return [{"name": "GLOBEIQ_AGENT_TOKEN"}]
+            return [{"name": "acme_AGENT_TOKEN"}]
 
         def list_projects(self):
             return []
@@ -416,11 +416,11 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Route: browser on browser-worker" in page.data
     assert b"Scope: single-lesson-browser-qc" in page.data
     assert b"Worker profile: browser-worker" in page.data
-    assert b"Service: globeiq-browser-worker" in page.data
+    assert b"Service: acme-browser-worker" in page.data
     assert b"Edits: not allowed" in page.data
     assert b"Courses: 57" in page.data
     assert b"CLI tools: browser-ui, codex-cli" in page.data
-    assert b"Site login: content-kc@globaliq.local" in page.data
+    assert b"Site login: content-kc@acme.local" in page.data
     assert b"Route: http_connection / attached-http" in page.data
     assert b"Disabled Needs Fix" in page.data
     assert b"setBotTableFilter('disabled-needs-fix')" in page.data
@@ -435,12 +435,12 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Degraded Probes" in page.data
     assert b"Connection actions" in page.data
     assert b"Browser actions" in page.data
-    assert b"globeiq-agent-api.updateLesson" in page.data
+    assert b"acme-agent-api.updateLesson" in page.data
     assert b"question_bank.patch_existing" in page.data
     assert b"Owner approval: 1" in page.data
     assert b"Browser owner approval: 1" in page.data
-    assert b"Context: globeiq-agent-api" in page.data
-    assert b"Credential refs: GLOBEIQ_AGENT_TOKEN" in page.data
+    assert b"Context: acme-agent-api" in page.data
+    assert b"Credential refs: acme_AGENT_TOKEN" in page.data
     page_html = page.data.decode("utf-8")
     connection_row_start = page_html.index('data-id="connection-bot"')
     connection_row = page_html[connection_row_start:page_html.index("</tr>", connection_row_start)]

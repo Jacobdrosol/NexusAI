@@ -24,7 +24,7 @@ def test_platform_ai_cli_backend_uses_approved_ollama_profile():
         "backend_type": "cli",
         "provider": "cli",
         "model": "claude",
-        "worker_id": "globeiq-coding-sandbox-01",
+        "worker_id": "acme-coding-sandbox-01",
     }
 
     _apply_cli_backend_profile(
@@ -42,7 +42,7 @@ def test_platform_ai_cli_backend_rejects_unsafe_runtime_model():
         "backend_type": "cli",
         "provider": "cli",
         "model": "claude",
-        "worker_id": "globeiq-coding-sandbox-01",
+        "worker_id": "acme-coding-sandbox-01",
     }
 
     with pytest.raises(Exception, match="valid Ollama model name"):
@@ -281,7 +281,7 @@ async def test_platform_brain_specialist_catalog_exposes_only_ready_nonsecret_wo
     probes = WorkerProbeStore(db_path=str(tmp_path / "probes.db"))
     projects = ProjectRegistry(db_path=str(tmp_path / "projects.db"))
     await projects.register(
-        Project(id="globeiq", name="Private GlobeIQ Project", mode="isolated", enabled=True)
+        Project(id="acme", name="Private acme Project", mode="isolated", enabled=True)
     )
     await projects.register(
         Project(id="disabled-project", name="Disabled Private Project", mode="isolated", enabled=False)
@@ -368,13 +368,13 @@ async def test_platform_brain_specialist_catalog_exposes_only_ready_nonsecret_wo
     assert "ready-catalog-worker" in system_prompt
     assert "glm-5.2:cloud" in system_prompt
     assert "claude" in system_prompt
-    assert "globeiq" in system_prompt
+    assert "acme" in system_prompt
     assert "unready-catalog-worker" not in system_prompt
     assert "disabled-project" not in system_prompt
     assert "10.24.8.19" not in system_prompt
     assert "9911" not in system_prompt
     assert "Private Worker Name" not in system_prompt
-    assert "Private GlobeIQ Project" not in system_prompt
+    assert "Private acme Project" not in system_prompt
     assert "Disabled Private Project" not in system_prompt
     assert "PRIVATE_REQUEST_TOKEN" not in system_prompt
     assert "do-not-disclose" not in system_prompt
@@ -1456,10 +1456,10 @@ async def test_launch_autonomous_orchestration_propagates_project_and_conversati
         status="running",
         metadata={
             "pipeline_bot_id": "pm-orchestrator",
-            "project_id": "globeiq",
+            "project_id": "acme",
             "conversation_id": "conv-123",
             "seed_binding": {
-                "seed_project_id": "globeiq",
+                "seed_project_id": "acme",
                 "seed_conversation_id": "conv-123",
             },
         },
@@ -1490,7 +1490,7 @@ async def test_launch_autonomous_orchestration_propagates_project_and_conversati
     assert launched
     metadata = captured.get("metadata")
     assert metadata is not None
-    assert str(getattr(metadata, "project_id", "") or "") == "globeiq"
+    assert str(getattr(metadata, "project_id", "") or "") == "acme"
     assert str(getattr(metadata, "conversation_id", "") or "") == "conv-123"
 
 
@@ -1509,7 +1509,7 @@ async def test_derive_seed_binding_from_context_extracts_lineage_instruction(tmp
                 "metadata": {
                     "workflow_root_task_id": "task-root",
                     "source": "chat_assign",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "conversation_id": "conv-root",
                 },
                 "payload": {
@@ -1523,7 +1523,7 @@ async def test_derive_seed_binding_from_context_extracts_lineage_instruction(tmp
     assert str(derived.get("seed_assignment_id") or "") == "assign-1"
     assert str(derived.get("seed_run_id") or "") == "run-1"
     assert str(derived.get("seed_orchestration_id") or "") == "orch-1"
-    assert str(derived.get("seed_project_id") or "") == "globeiq"
+    assert str(derived.get("seed_project_id") or "") == "acme"
     assert str(derived.get("seed_conversation_id") or "") == "conv-root"
     assert "please go the repo as context" in str(derived.get("instruction") or "").lower()
     assert isinstance(derived.get("node_overrides"), dict)
@@ -1556,7 +1556,7 @@ async def test_backfill_seed_binding_merges_missing_fields_only(tmp_path):
                 "metadata": {
                     "workflow_root_task_id": "task-root",
                     "source": "chat_assign",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "conversation_id": "conv-root",
                 },
                 "payload": {"instruction": "new instruction should not overwrite existing"},
@@ -1573,7 +1573,7 @@ async def test_backfill_seed_binding_merges_missing_fields_only(tmp_path):
     assert str(binding.get("seed_assignment_id") or "") == "assign-existing"
     assert str(binding.get("seed_run_id") or "") == "run-new"
     assert str(binding.get("seed_orchestration_id") or "") == "orch-new"
-    assert str(binding.get("seed_project_id") or "") == "globeiq"
+    assert str(binding.get("seed_project_id") or "") == "acme"
     assert str(binding.get("seed_conversation_id") or "") == "conv-root"
 
 
@@ -2080,7 +2080,7 @@ async def test_specialist_proposal_is_bound_to_its_creator_session_project(tmp_p
     session = await store.create_session(
         mode="bot_creator",
         status="running",
-        metadata={"project_id": "globeiq"},
+        metadata={"project_id": "acme"},
     )
     directive = {
         "platform_ai_action": "propose_specialist_bot",
@@ -2106,8 +2106,8 @@ async def test_specialist_proposal_is_bound_to_its_creator_session_project(tmp_p
     specialist_request = after_state.get("specialist_request") if isinstance(after_state.get("specialist_request"), dict) else {}
     bot = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
 
-    assert specialist_request["project_id"] == "globeiq"
-    assert bot["routing_rules"]["specialist"]["project_id"] == "globeiq"
+    assert specialist_request["project_id"] == "acme"
+    assert bot["routing_rules"]["specialist"]["project_id"] == "acme"
 
 
 @pytest.mark.anyio
@@ -2118,7 +2118,7 @@ async def test_specialist_proposal_rejects_project_scope_mismatch(tmp_path):
     session = await store.create_session(
         mode="bot_creator",
         status="running",
-        metadata={"project_id": "globeiq"},
+        metadata={"project_id": "acme"},
     )
     directive = {
         "platform_ai_action": "propose_specialist_bot",
@@ -2190,7 +2190,7 @@ async def test_schedule_proposal_is_paused_project_bound_and_owner_approved(tmp_
             enabled=False,
             backends=[{"type": "cloud_api", "provider": "ollama_cloud", "model": "glm-5.2:cloud"}],
             routing_rules={
-                "specialist": {"project_id": "globeiq", "kind": "monitoring", "risk_level": "read_only"},
+                "specialist": {"project_id": "acme", "kind": "monitoring", "risk_level": "read_only"},
                 "worker_profile": {"role": "monitor", "task_scope": "read-only-monitoring", "can_edit": False},
             },
         )
@@ -2209,7 +2209,7 @@ async def test_schedule_proposal_is_paused_project_bound_and_owner_approved(tmp_
         mode="bot_creator",
         status="running",
         operator_id="operator",
-        metadata={"project_id": "globeiq"},
+        metadata={"project_id": "acme"},
     )
     schedule_directive = {
         "platform_ai_action": "propose_schedule",
@@ -2245,7 +2245,7 @@ async def test_schedule_proposal_is_paused_project_bound_and_owner_approved(tmp_
     after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
     schedule_payload = after_state.get("schedule") if isinstance(after_state.get("schedule"), dict) else {}
     assert schedule_payload["status"] == "paused"
-    assert schedule_payload["project_id"] == "globeiq"
+    assert schedule_payload["project_id"] == "acme"
     assert schedule_payload["metadata"]["mutation_safe"] is True
 
     preflight = await runtime.preflight_patch_proposal(session["id"], proposal_id, operator_id="operator")
@@ -2264,7 +2264,7 @@ async def test_schedule_proposal_is_paused_project_bound_and_owner_approved(tmp_
     assert created is not None
     assert created["status"] == "paused"
     assert created["target_bot_id"] == "project-monitor"
-    assert created["project_id"] == "globeiq"
+    assert created["project_id"] == "acme"
 
     duplicate_approval = await runtime.approve_patch_proposal(
         session["id"],

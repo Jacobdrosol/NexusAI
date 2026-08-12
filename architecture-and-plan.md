@@ -18,7 +18,7 @@ NexusAI is the core platform, providing the central control plane, user-facing d
 
 ### 2.2. NexusAI-BotConfigs
 
-This repository stores bot configurations in JSON format. These configurations are likely loaded and used by the NexusAI platform to define the behavior of different bots. The repository is organized by bot category (e.g., "Chat", "GlobeIQ Course Writer").
+This repository stores bot configurations in JSON format. These configurations are likely loaded and used by the NexusAI platform to define the behavior of different bots. The repository is organized by bot category (e.g., "Chat", "Course Writer").
 
 ### 2.3. NexusAI-Audit
 

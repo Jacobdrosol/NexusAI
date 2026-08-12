@@ -40,7 +40,7 @@ _READ_TOOLS: list[dict] = [
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative path to the file from the workspace root (e.g. 'GlobeIQ.Server/Models/Assignment.cs').",
+                        "description": "Relative path to the file from the workspace root (e.g. 'src/Models/Assignment.cs').",
                     }
                 },
                 "required": ["path"],
@@ -60,7 +60,7 @@ _READ_TOOLS: list[dict] = [
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative directory path (e.g. 'GlobeIQ.Server/Models' or '.').",
+                        "description": "Relative directory path (e.g. 'src/Models' or '.').",
                     }
                 },
                 "required": ["path"],
@@ -125,7 +125,7 @@ _WRITE_TOOLS: list[dict] = [
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative path for the file (e.g. 'GlobeIQ.Server/Models/Assignment.cs').",
+                        "description": "Relative path for the file (e.g. 'src/Models/Assignment.cs').",
                     },
                     "content": {
                         "type": "string",
@@ -150,7 +150,7 @@ _WRITE_TOOLS: list[dict] = [
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative path for the file (e.g. 'GlobeIQ.Server/Program.cs').",
+                        "description": "Relative path for the file (e.g. 'src/Program.cs').",
                     },
                     "old_text": {
                         "type": "string",

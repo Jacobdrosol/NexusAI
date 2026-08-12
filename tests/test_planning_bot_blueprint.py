@@ -22,14 +22,14 @@ def test_planning_bot_in_catalog():
 def test_planning_bot_is_read_only_with_workspace_tools():
     req = SpecialistBlueprintRequest(
         kind="planning_bot",
-        name="GlobeIQ Planner",
+        name="proj-alpha Planner",
         backends=[_backend()],
-        project_id="globeiq",
+        project_id="proj-alpha",
         activate=True,
     )
     bot = build_specialist_bot(req)
     assert bot.role == "planning_bot"
-    assert bot.project_id == "globeiq"
+    assert bot.project_id == "proj-alpha"
     assert bot.execution_policy.workspace_context_injection is True
     assert bot.execution_policy.repo_output_mode == "deny"
     assert bot.execution_policy.can_apply_db_actions is False
@@ -45,7 +45,7 @@ def test_planning_bot_ticket_scope_lands_in_routing_rules():
         kind="planning_bot",
         name="Scoped Planner",
         backends=[_backend()],
-        project_id="globeiq",
+        project_id="proj-alpha",
         activate=True,
         ticket_scope={
             "source_ids": ["src-1"],

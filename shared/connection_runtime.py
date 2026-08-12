@@ -238,7 +238,7 @@ def test_http_connection(
             }
         action_headers = action_payload.get("headers")
         headers = dict(action_headers) if isinstance(action_headers, dict) else {}
-        headers[str(approval_spec.get("inject_header") or "X-GLOBEIQ-AGENT-APPROVAL")] = token
+        headers[str(approval_spec.get("inject_header") or "X-NEXUS-AGENT-APPROVAL")] = token
         action_payload["headers"] = headers
         result = test_http_connection(
             config=config,

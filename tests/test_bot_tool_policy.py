@@ -25,8 +25,8 @@ def test_connection_actions_do_not_require_worker_tools():
         name="Connection Policy",
         role="test",
         execution_policy={
-            "connection_action_allowlist": ["globeiq-agent-api.updatecourse"],
-            "connection_action_owner_approval_required": ["globeiq-agent-api.updatecourse"],
+            "connection_action_allowlist": ["acme-agent-api.updatecourse"],
+            "connection_action_owner_approval_required": ["acme-agent-api.updatecourse"],
         },
         backends=[],
     )

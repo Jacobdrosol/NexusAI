@@ -183,7 +183,7 @@ def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:
             worker_profile.get("site_account")
             or worker_profile.get("site_user")
             or worker_profile.get("site_username")
-            or worker_profile.get("globeiq_user_email")
+            or worker_profile.get("site_user_email")
             or ""
         ).strip()
         row["worker_profile_view"] = {

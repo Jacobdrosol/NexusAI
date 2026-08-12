@@ -43,7 +43,7 @@ def test_schedule_payload_validation_normalizes_without_persisting() -> None:
     payload.update(
         {
             "status": "paused",
-            "project_id": "globeiq",
+            "project_id": "acme",
             "task_payload": {"scope": "read_only"},
             "metadata": {"mutation_safe": True},
         }
@@ -52,7 +52,7 @@ def test_schedule_payload_validation_normalizes_without_persisting() -> None:
     normalized = AgentScheduleEngine.validate_schedule_payload(payload)
 
     assert normalized["status"] == "paused"
-    assert normalized["project_id"] == "globeiq"
+    assert normalized["project_id"] == "acme"
     assert normalized["task_payload"] == {"scope": "read_only"}
     assert normalized["metadata"]["mutation_safe"] is True
     assert normalized["metadata"]["task_payload"] == {"scope": "read_only"}
@@ -566,17 +566,17 @@ async def test_scheduler_rejects_equivalent_schedule_creates_and_updates(tmp_pat
         task_manager=_FakeTaskManager(),
         db_path=str(tmp_path / "schedules.db"),
     )
-    first = await engine.create_schedule({**_schedule_payload(), "project_id": "globeiq"})
+    first = await engine.create_schedule({**_schedule_payload(), "project_id": "acme"})
 
     with pytest.raises(ValueError, match="schedule_duplicate_exists"):
         await engine.create_schedule(
-            {**_schedule_payload(), "name": "Renamed duplicate", "status": "active", "project_id": "globeiq"}
+            {**_schedule_payload(), "name": "Renamed duplicate", "status": "active", "project_id": "acme"}
         )
 
     second = await engine.create_schedule(
-        {**_schedule_payload(), "name": "Different cadence", "cron_expression": "30 * * * *", "project_id": "globeiq"}
+        {**_schedule_payload(), "name": "Different cadence", "cron_expression": "30 * * * *", "project_id": "acme"}
     )
-    duplicate = await engine.find_equivalent_schedule({**_schedule_payload(), "project_id": "globeiq"})
+    duplicate = await engine.find_equivalent_schedule({**_schedule_payload(), "project_id": "acme"})
     assert duplicate == {"schedule_id": first["id"], "status": "paused"}
 
     with pytest.raises(ValueError, match="schedule_duplicate_exists"):

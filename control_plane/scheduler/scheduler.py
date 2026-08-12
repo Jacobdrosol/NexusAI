@@ -888,11 +888,11 @@ def _http_action_error_hint(op_id: str, action: dict[str, Any], result: dict[str
     if op == "importcoursepackage" or "/api/agent/import/course-package" in path or "/api/agent/import/course-package" in url:
         return (
             " Endpoint /api/agent/import/course-package is not available on the target server. "
-            "Deploy GlobeIQ build with agent bulk import support (commit 03f1270 or later) "
+            "Deploy a build with agent bulk import support (commit 03f1270 or later) "
             "or update the connection base_url to the server that hosts the agent API."
         )
     if path.startswith("/api/agent/") or "/api/agent/" in url:
-        return " Target server does not expose the requested /api/agent route. Verify base_url and deployed GlobeIQ API version."
+        return " Target server does not expose the requested /api/agent route. Verify base_url and deployed agent API version."
     return ""
 
 

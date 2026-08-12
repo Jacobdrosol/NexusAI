@@ -326,7 +326,7 @@ def main() -> int:
     parser.add_argument(
         "--terminal-bot",
         action="append",
-        default=["course-globeiq-importer"],
+        default=["course-importer"],
         help="Bot id allowed to have no downstream triggers (repeatable).",
     )
     parser.add_argument(

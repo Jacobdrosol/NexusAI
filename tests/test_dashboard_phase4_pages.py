@@ -43,23 +43,23 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
 
     class FakeCP:
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "memory_profiles_enabled": True, "bot_ids": []}]
+            return [{"id": "acme", "name": "acme", "mode": "isolated", "enabled": True, "memory_profiles_enabled": True, "bot_ids": []}]
 
         def list_bots(self):
             return [
                 {
                     "id": "writer",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "enabled": True,
                     "execution_policy": {
                         "required_worker_tools": ["browser-ui"],
-                        "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
+                        "connection_action_allowlist": ["acme-agent-api.updateLesson"],
                     },
                 },
-                {"id": "reviewer", "project_id": "globeiq", "enabled": False},
+                {"id": "reviewer", "project_id": "acme", "enabled": False},
                 {
                     "id": "researcher",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "enabled": True,
                     "execution_policy": {
                         "browser_action_allowlist": ["lesson_preview.read"],
@@ -73,12 +73,12 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
             return {
                 "schedules": [
                     {
-                        "project_id": "globeiq",
+                        "project_id": "acme",
                         "target_bot_id": "writer",
                         "status": "active",
                         "last_run_status": "completed",
                     },
-                    {"project_id": "globeiq", "target_bot_id": "reviewer", "status": "paused"},
+                    {"project_id": "acme", "target_bot_id": "reviewer", "status": "paused"},
                 ]
             }
 
@@ -92,12 +92,12 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
             }
 
         def get_project_chat_tool_access(self, project_id):
-            assert project_id == "globeiq"
+            assert project_id == "acme"
             return {
                 "enabled": True,
                 "filesystem": True,
                 "repo_search": True,
-                "workspace_root": "/srv/repos/globeiq",
+                "workspace_root": "/srv/repos/acme",
             }
 
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
@@ -118,9 +118,9 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
     assert isinstance(projects, list)
     assert len(projects) == 1
     p = projects[0]
-    assert p["id"] == "globeiq"
+    assert p["id"] == "acme"
     assert p["chat_tool_access"]["filesystem"] is True
-    assert p["chat_tool_access"]["workspace_root"] == "/srv/repos/globeiq"
+    assert p["chat_tool_access"]["workspace_root"] == "/srv/repos/acme"
     ac = p["autonomy_coverage"]
     assert ac["enabled_configured_bot_count"] == 2
     assert ac["configured_bot_count"] == 3
@@ -167,7 +167,7 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
         def get_project(self, project_id):
             return {
                 "id": project_id,
-                "name": "GlobeIQ",
+                "name": "acme",
                 "mode": "isolated",
                 "enabled": True,
                 "description": "test project",
@@ -177,20 +177,20 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
             }
 
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "bridge_project_ids": [], "bot_ids": []}]
+            return [{"id": "acme", "name": "acme", "mode": "isolated", "enabled": True, "bridge_project_ids": [], "bot_ids": []}]
 
         def list_bots(self):
             return [
                 {
-                    "id": "globeiq-reviewer",
-                    "name": "GlobeIQ Reviewer",
+                    "id": "acme-reviewer",
+                    "name": "acme Reviewer",
                     "role": "reviewer",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                 }
             ]
 
         def list_bot_artifacts(self, bot_id, limit=20):
-            assert bot_id == "globeiq-reviewer"
+            assert bot_id == "acme-reviewer"
             return []
 
         def list_tasks(self):
@@ -206,10 +206,10 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
             return {"events": []}
 
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
-        resp = dashboard_client.get("/projects/globeiq")
+        resp = dashboard_client.get("/projects/acme")
 
     assert resp.status_code == 200
-    assert b"GlobeIQ" in resp.data
+    assert b"acme" in resp.data
     assert b"Project Data Vault" in resp.data
     assert b"Chat Workspace Tools" in resp.data
     assert b"Repository Workspace" in resp.data
@@ -227,25 +227,25 @@ def test_project_detail_section_endpoint_renders_bots(dashboard_client):
         def get_project(self, project_id):
             return {
                 "id": project_id,
-                "name": "GlobeIQ",
+                "name": "acme",
                 "mode": "isolated",
                 "enabled": True,
                 "description": "test project",
                 "settings_overrides": {},
                 "bridge_project_ids": [],
-                "bot_ids": ["globeiq-reviewer"],
+                "bot_ids": ["acme-reviewer"],
             }
 
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "bridge_project_ids": [], "bot_ids": []}]
+            return [{"id": "acme", "name": "acme", "mode": "isolated", "enabled": True, "bridge_project_ids": [], "bot_ids": []}]
 
         def list_bots(self):
             return [
                 {
-                    "id": "globeiq-reviewer",
-                    "name": "GlobeIQ Reviewer",
+                    "id": "acme-reviewer",
+                    "name": "acme Reviewer",
                     "role": "reviewer",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "backends": [],
                 }
             ]
@@ -263,12 +263,12 @@ def test_project_detail_section_endpoint_renders_bots(dashboard_client):
             return []
 
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
-        resp = dashboard_client.get("/api/projects/globeiq/detail/section?section=bots")
+        resp = dashboard_client.get("/api/projects/acme/detail/section?section=bots")
 
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["section"] == "bots"
-    assert "GlobeIQ Reviewer" in data["html"]
+    assert "acme Reviewer" in data["html"]
 
 
 def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
@@ -278,7 +278,7 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
         def get_project(self, project_id):
             return {
                 "id": project_id,
-                "name": "GlobeIQ",
+                "name": "acme",
                 "mode": "isolated",
                 "enabled": True,
                 "description": "test project",
@@ -291,8 +291,8 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
         def list_projects(self):
             return [
                 {
-                    "id": "globeiq",
-                    "name": "GlobeIQ",
+                    "id": "acme",
+                    "name": "acme",
                     "mode": "isolated",
                     "enabled": True,
                     "bridge_project_ids": [],
@@ -306,14 +306,14 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
                     "id": "bot-1",
                     "name": "Research Bot",
                     "role": "researcher",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "enabled": True,
                     "backends": [
                         {
                             "type": "remote_llm",
                             "provider": "ollama_cloud",
                             "model": "qwen3.5:cloud",
-                            "worker_id": "globeiq-reader",
+                            "worker_id": "acme-reader",
                             "api_key_ref": "OLLAMA_CLOUD_KEY",
                         },
                         {
@@ -325,20 +325,20 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
                     ],
                     "execution_policy": {
                         "required_worker_tools": ["browser-ui"],
-                        "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
-                        "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                        "connection_action_allowlist": ["acme-agent-api.updateLesson"],
+                        "connection_action_owner_approval_required": ["acme-agent-api.updateLesson"],
                         "browser_action_allowlist": ["lesson_preview.read"],
                         "browser_action_owner_approval_required": ["lesson_preview.read"],
                         "repo_output_mode": "allow",
                     },
                     "routing_rules": {
                         "worker_profile": {
-                            "worker_id": "globeiq-reader",
-                            "service": "GlobeIQ",
+                            "worker_id": "acme-reader",
+                            "service": "acme",
                             "role": "lesson auditor",
                             "task_scope": "published-lesson-quality-audit",
                             "can_edit": False,
-                            "globeiq_user_email": "qc.quinn@globaliq.local",
+                            "site_user_email": "qc.quinn@acme.local",
                             "course_scope": ["57", "101"],
                             "lesson_scope": ["lesson-1"],
                             "allowed_pages": ["lesson_preview"],
@@ -372,7 +372,7 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
         def get_project_github_status(self, project_id):
             return {
                 "connected": True,
-                "context_sync": {"namespace": "project:globeiq:github"},
+                "context_sync": {"namespace": "project:acme:github"},
             }
 
         def list_project_github_webhook_events(self, project_id, limit=30):
@@ -390,16 +390,16 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
             }
 
         def list_workers(self):
-            return [{"id": "globeiq-reader", "status": "online", "enabled": True}]
+            return [{"id": "acme-reader", "status": "online", "enabled": True}]
 
         def list_worker_probes(self):
-            return {"probes": [{"worker_id": "globeiq-reader", "probe_status": "expired_browser_session"}]}
+            return {"probes": [{"worker_id": "acme-reader", "probe_status": "expired_browser_session"}]}
 
         def list_keys(self):
             return [{"name": "OLLAMA_CLOUD_KEY"}]
 
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
-        resp = dashboard_client.get("/projects/globeiq")
+        resp = dashboard_client.get("/projects/acme")
 
     assert resp.status_code == 200
     assert b"AI Workspace Readiness" in resp.data
@@ -408,7 +408,7 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert b"collapsible-section" in resp.data
     # Rich data now lazy-loads via the section endpoint
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
-        resp = dashboard_client.get("/api/projects/globeiq/detail/section?section=readiness")
+        resp = dashboard_client.get("/api/projects/acme/detail/section?section=readiness")
     assert resp.status_code == 200
     data = resp.get_json()
     assert "1 setup item(s) need attention" in data["html"]
@@ -416,20 +416,20 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert "1 enabled / 1 total" in data["html"]
     assert "Enabled for filesystem, repo search." in data["html"]
     assert "managed workspace enabled; default branch main; command runner allowed." in data["html"]
-    assert "context namespace project:globeiq:github" in data["html"]
+    assert "context namespace project:acme:github" in data["html"]
 
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
-        resp = dashboard_client.get("/api/projects/globeiq/detail/section?section=tooling")
+        resp = dashboard_client.get("/api/projects/acme/detail/section?section=tooling")
     assert resp.status_code == 200
     data = resp.get_json()
     assert "restore browser session" in data["html"]
     assert "Authenticated browser session" in data["html"]
-    assert "globeiq-reader" in data["html"]
+    assert "acme-reader" in data["html"]
     assert "expired_browser_session" in data["html"]
     assert "Raw Credential Refs" in data["html"]
 
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
-        resp = dashboard_client.get("/api/projects/globeiq/detail/section?section=bots")
+        resp = dashboard_client.get("/api/projects/acme/detail/section?section=bots")
     assert resp.status_code == 200
     data = resp.get_json()
     assert "Research Bot" in data["html"]
@@ -438,13 +438,13 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert "sk-live-secret" not in data["html"]
     assert "Routes: ollama_cloud / qwen3.5:cloud" in data["html"]
     assert "Tools: browser-ui" in data["html"]
-    assert "Site/API actions: globeiq-agent-api.updateLesson" in data["html"]
+    assert "Site/API actions: acme-agent-api.updateLesson" in data["html"]
     assert "Browser actions: lesson_preview.read" in data["html"]
     assert "Credential refs: OLLAMA_CLOUD_KEY" in data["html"]
     assert "Repo output: allow" in data["html"]
     assert "Worker scope: published-lesson-quality-audit" in data["html"]
     assert "Edits: not allowed" in data["html"]
-    assert "Site login: qc.quinn@globaliq.local" in data["html"]
+    assert "Site login: qc.quinn@acme.local" in data["html"]
     assert "Courses: 57, 101" in data["html"]
     assert "Lessons: lesson-1" in data["html"]
     assert "Pages: lesson_preview" in data["html"]
@@ -623,13 +623,13 @@ def test_projects_api_lists_control_plane_projects(dashboard_client):
 
     class FakeCP:
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ", "memory_profiles_enabled": True}]
+            return [{"id": "acme", "name": "acme", "memory_profiles_enabled": True}]
 
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/api/projects")
 
     assert resp.status_code == 200
-    assert resp.get_json()[0]["id"] == "globeiq"
+    assert resp.get_json()[0]["id"] == "acme"
     assert resp.get_json()[0]["memory_profiles_enabled"] is True
 
 
@@ -803,15 +803,15 @@ def test_project_memory_toggle_updates_project(dashboard_client):
 
     class FakeCP:
         def get_project(self, project_id):
-            assert project_id == "globeiq"
-            return {"id": "globeiq", "name": "GlobeIQ", "memory_profiles_enabled": False}
+            assert project_id == "acme"
+            return {"id": "acme", "name": "acme", "memory_profiles_enabled": False}
 
         def update_project(self, project_id, project):
             updated_payload.update(project)
             return dict(project)
 
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
-        resp = dashboard_client.put("/api/projects/globeiq/memory-profile", json={"enabled": True})
+        resp = dashboard_client.put("/api/projects/acme/memory-profile", json={"enabled": True})
 
     assert resp.status_code == 200
     assert updated_payload["memory_profiles_enabled"] is True
@@ -898,7 +898,7 @@ def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client)
                 {
                     "id": "c-legacy",
                     "title": "Legacy Active",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "bridge_project_ids": 1,
                     "updated_at": "2026-03-10T12:00:00+00:00",
                     "archived_at": None,
@@ -962,7 +962,7 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
                 {
                     "id": "c-proj",
                     "title": "Project Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "bridge_project_ids": ["bridge-a", "bridge-b"],
                     "default_bot_id": "personal-general-chat",
                     "default_model_id": "ollama-cloud/gpt-oss-120b",
@@ -975,7 +975,7 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
                 {
                     "id": "c-archived",
                     "title": "Archived Project Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "bridge_project_ids": [],
                     "default_bot_id": "personal-research-chat",
                     "default_model_id": "ollama-cloud/kimi-k2",
@@ -997,7 +997,7 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
             ]
 
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ", "enabled": True}]
+            return [{"id": "acme", "name": "acme", "enabled": True}]
 
         def list_models(self):
             return [
@@ -1012,12 +1012,12 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
         resp = dashboard_client.get("/chat?conversation_id=c-proj")
 
     assert resp.status_code == 200
-    assert b'data-project-id="globeiq"' in resp.data
+    assert b'data-project-id="acme"' in resp.data
     assert b'data-bridge-project-ids="bridge-a,bridge-b"' in resp.data
     assert b"bridgeProjectIds.includes(projectFilter)" in resp.data
     assert b"row.hidden = !matches" in resp.data
     assert b"All projects" in resp.data
-    assert b"Project globeiq" in resp.data
+    assert b"Project acme" in resp.data
     assert b'Bot Personal General Chat (personal-general-chat)' in resp.data
     assert b'title="Bot personal-general-chat"' in resp.data
     assert b"Model ollama_cloud / gpt-oss:120b" in resp.data
@@ -1025,7 +1025,7 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert b"Bot Personal Research Chat (personal-research-chat)" in resp.data
     assert b"Model ollama_cloud / kimi-k2" in resp.data
     page_html = resp.data.decode("utf-8")
-    active_row_start = page_html.index('data-project-id="globeiq"')
+    active_row_start = page_html.index('data-project-id="acme"')
     active_row = page_html[active_row_start:page_html.index("</div>", active_row_start)]
     archived_row_start = page_html.index('data-search-text="archived project chat')
     archived_row = page_html[archived_row_start:page_html.index("</div>", archived_row_start)]
@@ -1127,7 +1127,7 @@ def test_chat_page_project_filter_is_client_side_and_keeps_full_conversation_lis
                 {
                     "id": "c-primary",
                     "title": "Primary Project Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "bridge_project_ids": [],
                     "updated_at": "2026-03-12T00:00:00+00:00",
                     "archived_at": None,
@@ -1139,7 +1139,7 @@ def test_chat_page_project_filter_is_client_side_and_keeps_full_conversation_lis
                     "id": "c-bridged",
                     "title": "Bridged Project Chat",
                     "project_id": "nexusai",
-                    "bridge_project_ids": ["globeiq"],
+                    "bridge_project_ids": ["acme"],
                     "updated_at": "2026-03-11T00:00:00+00:00",
                     "archived_at": None,
                     "tool_access_enabled": False,
@@ -1167,7 +1167,7 @@ def test_chat_page_project_filter_is_client_side_and_keeps_full_conversation_lis
 
         def list_projects(self):
             return [
-                {"id": "globeiq", "name": "GlobeIQ", "enabled": True},
+                {"id": "acme", "name": "acme", "enabled": True},
                 {"id": "nexusai", "name": "NexusAI", "enabled": True},
                 {"id": "other", "name": "Other", "enabled": True},
             ]
@@ -1179,13 +1179,13 @@ def test_chat_page_project_filter_is_client_side_and_keeps_full_conversation_lis
             return []
 
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
-        resp = dashboard_client.get("/chat?project_id=globeiq")
+        resp = dashboard_client.get("/chat?project_id=acme")
 
     assert resp.status_code == 200
     assert b"Primary Project Chat" in resp.data
     assert b"Bridged Project Chat" in resp.data
     assert b"Other Project Chat" in resp.data
-    assert b'option value="globeiq" selected' in resp.data
+    assert b'option value="acme" selected' in resp.data
     assert b"Unscoped chats" in resp.data
     assert b"This chat will be scoped to the selected project." in resp.data
     assert b"Select a project before creating this scoped chat." in resp.data
@@ -1210,7 +1210,7 @@ def test_chat_page_surfaces_selected_project_work_snapshot(dashboard_client):
                 {
                     "id": "c-project-work",
                     "title": "Project Work Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "bridge_project_ids": ["nexusai"],
                     "updated_at": "2026-03-12T00:00:00+00:00",
                     "archived_at": None,
@@ -1233,7 +1233,7 @@ def test_chat_page_surfaces_selected_project_work_snapshot(dashboard_client):
 
         def list_projects(self):
             return [
-                {"id": "globeiq", "name": "GlobeIQ", "enabled": True, "memory_profiles_enabled": True},
+                {"id": "acme", "name": "acme", "enabled": True, "memory_profiles_enabled": True},
                 {"id": "nexusai", "name": "NexusAI", "enabled": True, "memory_profiles_enabled": True},
             ]
 
@@ -1253,7 +1253,7 @@ def test_chat_page_surfaces_selected_project_work_snapshot(dashboard_client):
                     "id": "task-running",
                     "bot_id": "writer",
                     "status": "running",
-                    "metadata": {"project_id": "globeiq", "manager_bot_id": "content-manager"},
+                    "metadata": {"project_id": "acme", "manager_bot_id": "content-manager"},
                     "updated_at": "2026-03-12T10:00:00+00:00",
                 },
                 {
@@ -1267,7 +1267,7 @@ def test_chat_page_surfaces_selected_project_work_snapshot(dashboard_client):
                     "id": "task-blocked",
                     "bot_id": "browser",
                     "status": "blocked",
-                    "metadata": {"project_id": "globeiq", "manager_bot_id": "content-manager"},
+                    "metadata": {"project_id": "acme", "manager_bot_id": "content-manager"},
                     "updated_at": "2026-03-12T08:00:00+00:00",
                 },
                 {
@@ -1286,7 +1286,7 @@ def test_chat_page_surfaces_selected_project_work_snapshot(dashboard_client):
     assert seen["statuses"] == ["queued", "blocked", "running", "failed"]
     assert seen["include_content"] is False
     assert b"Project Work" in resp.data
-    assert b"Projects: globeiq, nexusai" in resp.data
+    assert b"Projects: acme, nexusai" in resp.data
     assert b"content-manager" in resp.data
     assert b"platform-manager" in resp.data
     assert b"task-running" in resp.data
@@ -1361,8 +1361,8 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
                     "assignment_capabilities": None,
                 },
                 {
-                    "id": "globeiq-live-audit-qc-02-bot",
-                    "name": "GlobeIQ Live Audit QC 02",
+                    "id": "acme-live-audit-qc-02-bot",
+                    "name": "acme Live Audit QC 02",
                     "role": "qc",
                     "routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}},
                     "assignment_capabilities": None,
@@ -1454,7 +1454,7 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert '<optgroup label="General Chat">' in chat_selector
     assert '<optgroup label="Blocked Chat">' in chat_selector
     assert '<optgroup label="Missing Key Chat">' in chat_selector
-    assert "GlobeIQ Live Audit QC 02" not in chat_selector
+    assert "acme Live Audit QC 02" not in chat_selector
     assert 'value="personal-blocked-chat"  disabled title="model credential missing"' in chat_selector
     assert "Personal Missing Key Chat - Missing Key Chat - blocked" in chat_selector
     assert 'value="personal-missing-key-chat"  disabled title="Missing key-vault credential reference(s): MISSING_OLLAMA_KEY"' in chat_selector
@@ -1499,7 +1499,7 @@ def test_chat_page_warns_when_conversation_default_bot_is_not_chat_selectable(da
                     "bridge_project_ids": [],
                     "updated_at": "2026-03-12T00:00:00+00:00",
                     "archived_at": None,
-                    "default_bot_id": "globeiq-live-audit-qc-02-bot",
+                    "default_bot_id": "acme-live-audit-qc-02-bot",
                     "memory_profiles_enabled": True,
                     "memory_profile_id": "default",
                     "tool_access_enabled": False,
@@ -1523,8 +1523,8 @@ def test_chat_page_warns_when_conversation_default_bot_is_not_chat_selectable(da
                     },
                 },
                 {
-                    "id": "globeiq-live-audit-qc-02-bot",
-                    "name": "GlobeIQ Live Audit QC 02",
+                    "id": "acme-live-audit-qc-02-bot",
+                    "name": "acme Live Audit QC 02",
                     "role": "qc",
                     "routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}},
                 },
@@ -1534,7 +1534,7 @@ def test_chat_page_warns_when_conversation_default_bot_is_not_chat_selectable(da
             return {
                 "readiness": [
                     {"bot_id": "personal-general-chat", "state": "ready", "ready": True, "checks": []},
-                    {"bot_id": "globeiq-live-audit-qc-02-bot", "state": "ready", "ready": True, "checks": []},
+                    {"bot_id": "acme-live-audit-qc-02-bot", "state": "ready", "ready": True, "checks": []},
                 ]
             }
 
@@ -1561,13 +1561,13 @@ def test_chat_page_warns_when_conversation_default_bot_is_not_chat_selectable(da
 
     assert resp.status_code == 200
     assert b'id="chat-default-bot-route-warning"' in resp.data
-    assert b"Default bot unavailable: GlobeIQ Live Audit QC 02 (globeiq-live-audit-qc-02-bot)." in resp.data
+    assert b"Default bot unavailable: acme Live Audit QC 02 (acme-live-audit-qc-02-bot)." in resp.data
     assert b"not configured for manual chat use" in resp.data
     assert b"Default bot unavailable</span>" in resp.data
     page_html = resp.data.decode("utf-8")
     selector_start = page_html.index('id="chat-bot-selector"')
     chat_selector = page_html[selector_start:page_html.index("</select>", selector_start)]
-    assert "GlobeIQ Live Audit QC 02" not in chat_selector
+    assert "acme Live Audit QC 02" not in chat_selector
 
 
 def test_chat_page_does_not_warn_for_plain_model_backed_default_bot(dashboard_client):
@@ -1839,7 +1839,7 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
                 {
                     "id": "c-project-chat",
                     "title": "Project Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "bridge_project_ids": [],
                     "updated_at": "2026-03-12T00:00:00+00:00",
                     "archived_at": None,
@@ -1872,7 +1872,7 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
             ]
 
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ", "enabled": True, "memory_profiles_enabled": True}]
+            return [{"id": "acme", "name": "acme", "enabled": True, "memory_profiles_enabled": True}]
 
         def list_models(self):
             return []
@@ -1911,7 +1911,7 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"Workspace tools are not available:" in resp.data
     assert b"Inline coding is not available:" in resp.data
     assert b"inline coding inactive: message toggle off" in resp.data
-    assert b"const selectedConversationProjectId = \"globeiq\";" in resp.data
+    assert b"const selectedConversationProjectId = \"acme\";" in resp.data
     assert b"const selectedProjectMemoryProfilesEnabled = true;" in resp.data
     assert b"\"repo_search\": true" in resp.data
     assert b"const assignmentContext = selectedContextItems();" in resp.data
@@ -1930,7 +1930,7 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
                 {
                     "id": "c-project-chat",
                     "title": "Project Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "default_bot_id": "coding-chat",
                     "default_model_id": "ollama-cloud-gpt-oss-120b",
                     "memory_profiles_enabled": True,
@@ -1957,8 +1957,8 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
                     },
                     "execution_policy": {
                         "repo_output_mode": "allow",
-                        "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
-                        "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                        "connection_action_allowlist": ["acme-agent-api.updateLesson"],
+                        "connection_action_owner_approval_required": ["acme-agent-api.updateLesson"],
                         "browser_action_allowlist": ["lesson_preview.read"],
                         "browser_action_owner_approval_required": ["lesson_preview.read"],
                     },
@@ -1966,7 +1966,7 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
             ]
 
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ", "memory_profiles_enabled": True}]
+            return [{"id": "acme", "name": "acme", "memory_profiles_enabled": True}]
 
         def list_models(self):
             return [
@@ -1980,7 +1980,7 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
             ]
 
         def get_project_chat_tool_access(self, project_id):
-            assert project_id == "globeiq"
+            assert project_id == "acme"
             return {"enabled": True, "filesystem": True, "repo_search": False}
 
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
@@ -1995,8 +1995,8 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
     assert payload["bot"]["id"] == "coding-chat"
     assert payload["bot"]["chat_profile"]["label"] == "Coding"
     assert payload["bot"]["chat_profile"]["use_label"] == "Tool-enabled chat"
-    assert payload["bot"]["connection_actions"] == ["globeiq-agent-api.updateLesson"]
-    assert payload["bot"]["owner_approval_actions"] == ["globeiq-agent-api.updateLesson"]
+    assert payload["bot"]["connection_actions"] == ["acme-agent-api.updateLesson"]
+    assert payload["bot"]["owner_approval_actions"] == ["acme-agent-api.updateLesson"]
     assert payload["bot"]["browser_actions"] == ["lesson_preview.read"]
     assert payload["bot"]["browser_owner_approval_actions"] == ["lesson_preview.read"]
     assert payload["bot"]["http_connection_backend_count"] == 1
@@ -2025,7 +2025,7 @@ def test_chat_effective_context_api_uses_explicit_bot_backend_model(dashboard_cl
                 {
                     "id": "c-project-chat",
                     "title": "Project Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "default_bot_id": "default-chat",
                     "default_model_id": "vision-default",
                     "memory_profiles_enabled": True,
@@ -2050,7 +2050,7 @@ def test_chat_effective_context_api_uses_explicit_bot_backend_model(dashboard_cl
             ]
 
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ", "memory_profiles_enabled": True}]
+            return [{"id": "acme", "name": "acme", "memory_profiles_enabled": True}]
 
         def list_models(self):
             return [
@@ -2148,7 +2148,7 @@ def test_chat_effective_context_api_normalizes_stale_tool_modes(dashboard_client
                 {
                     "id": "c-project",
                     "title": "Project Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "default_bot_id": "chat-bot",
                     "memory_profiles_enabled": False,
                     "tool_access_enabled": False,
@@ -2169,7 +2169,7 @@ def test_chat_effective_context_api_normalizes_stale_tool_modes(dashboard_client
             ]
 
         def list_projects(self):
-            return [{"id": "globeiq", "memory_profiles_enabled": False}]
+            return [{"id": "acme", "memory_profiles_enabled": False}]
 
         def get_project_chat_tool_access(self, project_id):
             return {"enabled": False, "filesystem": True, "repo_search": True}
@@ -2213,7 +2213,7 @@ def test_chat_effective_context_api_reports_mode_less_tool_policy(dashboard_clie
                 {
                     "id": "c-project",
                     "title": "Project Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "default_bot_id": "chat-bot",
                     "memory_profiles_enabled": False,
                     "tool_access_enabled": True,
@@ -2234,7 +2234,7 @@ def test_chat_effective_context_api_reports_mode_less_tool_policy(dashboard_clie
             ]
 
         def list_projects(self):
-            return [{"id": "globeiq", "memory_profiles_enabled": False}]
+            return [{"id": "acme", "memory_profiles_enabled": False}]
 
         def get_project_chat_tool_access(self, project_id):
             return {"enabled": True, "filesystem": True, "repo_search": False}
@@ -2274,7 +2274,7 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
                     "id": "c-project",
                     "title": "Project Chat",
                     "scope": "project",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "bridge_project_ids": [],
                     "updated_at": "2026-03-11T00:00:00+00:00",
                     "archived_at": None,
@@ -2287,7 +2287,7 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
                     "title": "Bridged Chat",
                     "scope": "bridged",
                     "project_id": "nexusai",
-                    "bridge_project_ids": ["globeiq"],
+                    "bridge_project_ids": ["acme"],
                     "updated_at": "2026-03-10T00:00:00+00:00",
                     "archived_at": None,
                     "tool_access_enabled": False,
@@ -2304,7 +2304,7 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
 
         def list_projects(self):
             return [
-                {"id": "globeiq", "name": "GlobeIQ", "enabled": True},
+                {"id": "acme", "name": "acme", "enabled": True},
                 {"id": "nexusai", "name": "NexusAI", "enabled": True},
             ]
 
@@ -2324,7 +2324,7 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     assert b'option value="__unscoped__" selected' in resp.data
     assert b"All projects (3 active / 0 archived)" in resp.data
     assert b"Unscoped chats (1 active / 0 archived)" in resp.data
-    assert b"GlobeIQ (globeiq) - 2 active / 0 archived" in resp.data
+    assert b"acme (acme) - 2 active / 0 archived" in resp.data
     assert b"NexusAI (nexusai) - 1 active / 0 archived" in resp.data
     assert b'option value="global" selected' in resp.data
     assert b"Unscoped chat" in resp.data
@@ -2590,7 +2590,7 @@ def test_chat_page_handles_non_json_serializable_message_fields(dashboard_client
                 {
                     "id": "c-proj",
                     "title": "Project Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "bridge_project_ids": [],
                     "updated_at": "2026-03-12T00:00:00+00:00",
                     "archived_at": None,
@@ -2615,7 +2615,7 @@ def test_chat_page_handles_non_json_serializable_message_fields(dashboard_client
             return []
 
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ"}]
+            return [{"id": "acme", "name": "acme"}]
 
         def list_vault_items(self, **kwargs):
             return []
@@ -2721,7 +2721,7 @@ def test_chat_page_handles_wrapped_vault_item_responses(dashboard_client):
                 {
                     "id": "c-proj-vault",
                     "title": "Project Vault Chat",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "bridge_project_ids": [],
                     "updated_at": "2026-03-12T00:00:00+00:00",
                     "archived_at": None,
@@ -2738,7 +2738,7 @@ def test_chat_page_handles_wrapped_vault_item_responses(dashboard_client):
             return []
 
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ"}]
+            return [{"id": "acme", "name": "acme"}]
 
         def list_vault_items(self, **kwargs):
             if kwargs.get("namespace"):
@@ -2901,7 +2901,7 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                     "worker_profile": {
                         "task_scope": "single-repo-coding-help",
                         "can_edit": False,
-                        "site_account": "code.casey@globaliq.local",
+                        "site_account": "code.casey@acme.local",
                         "course_scope": ["nexusai"],
                         "lesson_scope": ["chat-ui"],
                         "allowed_pages": ["chat", "bots"],
@@ -2912,8 +2912,8 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                     "required_worker_tools": ["repo-search"],
                     "repo_output_mode": "allow",
                     "inline_coding_default": True,
-                    "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
-                    "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                    "connection_action_allowlist": ["acme-agent-api.updateLesson"],
+                    "connection_action_owner_approval_required": ["acme-agent-api.updateLesson"],
                     "browser_action_allowlist": ["lesson_preview.read"],
                     "browser_action_owner_approval_required": ["lesson_preview.read"],
                 },
@@ -3020,14 +3020,14 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"owner approval gates" in resp.data
     assert b"Connection Actions" in resp.data
     assert b"Owner Approval Actions" in resp.data
-    assert b"globeiq-agent-api.updateLesson" in resp.data
+    assert b"acme-agent-api.updateLesson" in resp.data
     assert b"Browser Actions" in resp.data
     assert b"Browser Owner Approval Actions" in resp.data
     assert b"lesson_preview.read" in resp.data
     assert b"Required Worker Tools" in resp.data
     assert b"Worker profile:" in resp.data
     assert b"single-repo-coding-help" in resp.data
-    assert b"Site login: code.casey@globaliq.local" in resp.data
+    assert b"Site login: code.casey@acme.local" in resp.data
     assert b"Courses: nexusai" in resp.data
     assert b"Lessons: chat-ui" in resp.data
     assert b"Pages: chat, bots" in resp.data
@@ -3481,7 +3481,7 @@ def test_bot_launch_api_uses_saved_launch_profile(dashboard_client):
                         "enabled": True,
                         "label": "Run Course Pipeline",
                         "payload": {"topic": "AP World History"},
-                        "project_id": "globeiq",
+                        "project_id": "acme",
                         "priority": 2,
                     }
                 },
@@ -3499,7 +3499,7 @@ def test_bot_launch_api_uses_saved_launch_profile(dashboard_client):
     assert resp.status_code == 201
     body = resp.get_json()
     assert body["payload"]["topic"] == "AP World History"
-    assert body["metadata"]["project_id"] == "globeiq"
+    assert body["metadata"]["project_id"] == "acme"
     assert body["metadata"]["tooling_preflight"]["tooling_state"] in {"ready", "unknown"}
 
 
@@ -4037,13 +4037,13 @@ def test_chat_ingest_api_excludes_failed_pm_reports(dashboard_client):
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.post(
             "/api/chat/ingest",
-            json={"conversation_id": "c1", "namespace": "project:globeiq"},
+            json={"conversation_id": "c1", "namespace": "project:acme"},
         )
 
     assert resp.status_code == 201
     body = seen["body"]
     assert body["title"] == "Chat: Project Chat"
-    assert body["namespace"] == "project:globeiq"
+    assert body["namespace"] == "project:acme"
     assert "build this" in body["content"]
     assert "safe summary" in body["content"]
     assert "failed implementation output" not in body["content"]
@@ -4077,7 +4077,7 @@ def test_chat_ingest_api_excludes_failed_pm_reports_with_json_metadata(dashboard
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.post(
             "/api/chat/ingest",
-            json={"conversation_id": "c1", "namespace": "project:globeiq"},
+            json={"conversation_id": "c1", "namespace": "project:acme"},
         )
 
     assert resp.status_code == 201
@@ -4375,7 +4375,7 @@ def test_chat_message_api_proxies_attachments(dashboard_client):
 
     class FakeCP:
         def list_conversations(self, archived="all"):
-            return [{"id": "c1", "project_id": "globeiq", "default_bot_id": "coding-bot"}]
+            return [{"id": "c1", "project_id": "acme", "default_bot_id": "coding-bot"}]
 
         def list_bot_readiness(self):
             return {"readiness": []}
@@ -5460,7 +5460,7 @@ def test_chat_create_conversation_api_warns_when_project_gate_blocks_memory(dash
             }
 
         def list_projects(self):
-            return [{"id": "globeiq", "memory_profiles_enabled": False}]
+            return [{"id": "acme", "memory_profiles_enabled": False}]
 
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.post(
@@ -5468,7 +5468,7 @@ def test_chat_create_conversation_api_warns_when_project_gate_blocks_memory(dash
             json={
                 "title": "Project Memory",
                 "scope": "project",
-                "project_id": "globeiq",
+                "project_id": "acme",
                 "memory_profiles_enabled": True,
                 "memory_profile_id": "default",
             },
@@ -5515,7 +5515,7 @@ def test_chat_create_conversation_api_blocks_tool_access_without_modes(dashboard
             json={
                 "title": "Mode-less tools",
                 "scope": "project",
-                "project_id": "globeiq",
+                "project_id": "acme",
                 "tool_access_enabled": True,
                 "tool_access_filesystem": False,
                 "tool_access_repo_search": False,
@@ -5927,7 +5927,7 @@ def test_chat_message_api_blocks_workspace_tools_without_project_policy(dashboar
             return [
                 {
                     "id": "c1",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "default_bot_id": "tool-bot",
                     "tool_access_enabled": True,
                     "tool_access_filesystem": True,
@@ -5949,7 +5949,7 @@ def test_chat_message_api_blocks_workspace_tools_without_project_policy(dashboar
             ]
 
         def get_project_chat_tool_access(self, project_id):
-            assert project_id == "globeiq"
+            assert project_id == "acme"
             return {"enabled": False, "filesystem": True, "repo_search": True}
 
         def post_message(self, conversation_id, body):
@@ -5969,7 +5969,7 @@ def test_chat_message_api_blocks_workspace_tools_without_project_policy(dashboar
     assert payload["effective_context"]["workspace_tools"]["requested"] is True
     assert payload["effective_context"]["workspace_tools"]["available"] is False
     assert "project off" in payload["effective_context"]["workspace_tools"]["reasons"]
-    assert payload["effective_context"]["project_id"] == "globeiq"
+    assert payload["effective_context"]["project_id"] == "acme"
 
 
 def test_chat_message_api_blocks_workspace_tools_with_mode_less_chat_policy(dashboard_client):
@@ -5980,7 +5980,7 @@ def test_chat_message_api_blocks_workspace_tools_with_mode_less_chat_policy(dash
             return [
                 {
                     "id": "c1",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "default_bot_id": "tool-bot",
                     "tool_access_enabled": True,
                     "tool_access_filesystem": False,
@@ -6027,7 +6027,7 @@ def test_chat_message_api_allows_workspace_tools_when_all_gates_overlap(dashboar
             return [
                 {
                     "id": "c1",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "default_bot_id": "tool-bot",
                     "tool_access_enabled": True,
                     "tool_access_filesystem": True,
@@ -6072,7 +6072,7 @@ def test_chat_message_api_blocks_inline_coding_for_repo_output_denied_bot(dashbo
 
     class FakeCP:
         def list_conversations(self, archived="all"):
-            return [{"id": "c1", "project_id": "globeiq", "default_bot_id": "read-only-bot"}]
+            return [{"id": "c1", "project_id": "acme", "default_bot_id": "read-only-bot"}]
 
         def list_bot_readiness(self):
             return {"readiness": []}
@@ -6184,7 +6184,7 @@ def test_chat_conversation_tool_access_api_surfaces_control_plane_error(dashboar
 
     class FakeCP:
         def list_conversations(self, archived="all"):
-            return [{"id": "c1", "scope": "project", "project_id": "globeiq"}]
+            return [{"id": "c1", "scope": "project", "project_id": "acme"}]
 
         def update_conversation_tool_access(self, conversation_id, enabled, filesystem, repo_search):
             return None
@@ -6284,16 +6284,16 @@ def test_chat_conversation_memory_profile_api_warns_when_project_gate_blocks_mem
         def update_conversation_memory_profile(self, conversation_id, enabled, profile_id):
             return {
                 "id": conversation_id,
-                "project_id": "globeiq",
+                "project_id": "acme",
                 "memory_profiles_enabled": enabled,
                 "memory_profile_id": profile_id,
             }
 
         def list_conversations(self, archived="all"):
-            return [{"id": "c-project", "scope": "project", "project_id": "globeiq"}]
+            return [{"id": "c-project", "scope": "project", "project_id": "acme"}]
 
         def list_projects(self):
-            return [{"id": "globeiq", "memory_profiles_enabled": False}]
+            return [{"id": "acme", "memory_profiles_enabled": False}]
 
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.put(
@@ -6624,7 +6624,7 @@ def test_chat_stream_api_blocks_workspace_tools_without_shared_mode(dashboard_cl
             return [
                 {
                     "id": "c1",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "default_bot_id": "tool-bot",
                     "tool_access_enabled": True,
                     "tool_access_filesystem": True,
@@ -6679,7 +6679,7 @@ def test_chat_stream_api_blocks_workspace_tools_with_mode_less_chat_policy(dashb
             return [
                 {
                     "id": "c1",
-                    "project_id": "globeiq",
+                    "project_id": "acme",
                     "default_bot_id": "tool-bot",
                     "tool_access_enabled": True,
                     "tool_access_filesystem": False,
@@ -7473,10 +7473,10 @@ def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client
 
     class FakeCP:
         def get_worker(self, worker_id):
-            assert worker_id == "globeiq-worker"
+            assert worker_id == "acme-worker"
             return {
-                "id": "globeiq-worker",
-                "name": "GlobeIQ Worker",
+                "id": "acme-worker",
+                "name": "acme Worker",
                 "host": "100.81.64.82",
                 "port": 8080,
                 "status": "online",
@@ -7498,25 +7498,25 @@ def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client
                     {
                         "id": "course-repair-bot",
                         "name": "Course Repair Bot",
-                        "project_id": "globeiq",
+                        "project_id": "acme",
                         "enabled": True,
-                        "backends": [{"type": "browser", "provider": "browser", "model": "browser-ui", "worker_id": "globeiq-worker"}],
+                        "backends": [{"type": "browser", "provider": "browser", "model": "browser-ui", "worker_id": "acme-worker"}],
                         "routing_rules": {
                             "worker_profile": {
                                 "can_edit": False,
                                 "task_scope": "published-lesson-quality-audit",
-                                "site_scope": "GlobeIQ",
-                                "site_account": "qc.quinn@globaliq.local",
+                                "site_scope": "acme",
+                                "site_account": "qc.quinn@acme.local",
                                 "course_scope": ["101", "102"],
                                 "lesson_scope": ["lesson-1001", "lesson-1002"],
                                 "allowed_pages": ["lesson_preview", "lesson_builder"],
-                                "cli_tools": ["browser-ui", "globeiq-agent-api"],
+                                "cli_tools": ["browser-ui", "acme-agent-api"],
                             }
                         },
                         "execution_policy": {
                             "required_worker_tools": ["browser-ui"],
-                            "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
-                            "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                            "connection_action_allowlist": ["acme-agent-api.updateLesson"],
+                            "connection_action_owner_approval_required": ["acme-agent-api.updateLesson"],
                             "browser_action_allowlist": ["lesson_preview.read"],
                             "browser_action_owner_approval_required": ["lesson_preview.read"],
                         },
@@ -7529,22 +7529,22 @@ def test_worker_detail_page_surfaces_dependent_bot_worker_scope(dashboard_client
             return []
 
     with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
-        resp = dashboard_client.get("/workers/globeiq-worker")
+        resp = dashboard_client.get("/workers/acme-worker")
 
     assert resp.status_code == 200
     assert b"Worker Scope" in resp.data
-    assert b"Routes: browser / browser-ui on globeiq-worker" in resp.data
+    assert b"Routes: browser / browser-ui on acme-worker" in resp.data
     assert b"published-lesson-quality-audit" in resp.data
-    assert b"Site: GlobeIQ" in resp.data
-    assert b"Site login: qc.quinn@globaliq.local" in resp.data
+    assert b"Site: acme" in resp.data
+    assert b"Site login: qc.quinn@acme.local" in resp.data
     assert b"Courses: 101, 102" in resp.data
     assert b"Lessons: lesson-1001, lesson-1002" in resp.data
     assert b"Pages: lesson_preview, lesson_builder" in resp.data
-    assert b"CLI: browser-ui, globeiq-agent-api" in resp.data
+    assert b"CLI: browser-ui, acme-agent-api" in resp.data
     assert b"read only" in resp.data
     assert b"Action Policy" in resp.data
     assert b"Tools: browser-ui" in resp.data
-    assert b"Site/API actions: globeiq-agent-api.updateLesson" in resp.data
+    assert b"Site/API actions: acme-agent-api.updateLesson" in resp.data
     assert b"Browser actions: lesson_preview.read" in resp.data
     assert b"Owner approvals: 2" in resp.data
 
@@ -7571,8 +7571,8 @@ def test_workers_page_surfaces_runtime_tool_evidence(dashboard_client):
         def list_bots(self):
             return [
                 {
-                    "id": "globeiq-browser-auditor",
-                    "name": "GlobeIQ Browser Auditor",
+                    "id": "acme-browser-auditor",
+                    "name": "acme Browser Auditor",
                     "enabled": True,
                     "backends": [
                         {
@@ -7647,7 +7647,7 @@ def test_workers_page_surfaces_runtime_tool_evidence(dashboard_client):
     assert b"ollama_cloud ok" in resp.data
     assert b"1 enabled bot(s), 1 disabled" in resp.data
     assert b"Routes: browser / browser-ui on nexus-browser-worker, ollama_cloud / qwen3.5:cloud on nexus-browser-worker" in resp.data
-    assert b"GlobeIQ Browser Auditor" in resp.data
+    assert b"acme Browser Auditor" in resp.data
     assert b"Parked Helper" in resp.data
     assert b"Other Worker Bot" not in resp.data
     assert b"Open worker detail and reassign or disable dependent bots before disabling this worker." in resp.data
@@ -7880,8 +7880,8 @@ def test_settings_page_handles_noncanonical_cp_payloads(dashboard_client):
         def list_projects(self):
             return [
                 {
-                    "id": "globeiq",
-                    "name": "GlobeIQ",
+                    "id": "acme",
+                    "name": "acme",
                     "mode": "isolated",
                     "enabled": True,
                     "bridge_project_ids": None,
@@ -7893,7 +7893,7 @@ def test_settings_page_handles_noncanonical_cp_payloads(dashboard_client):
 
     assert resp.status_code == 200
     assert b"Projects" in resp.data
-    assert b"GlobeIQ" in resp.data
+    assert b"acme" in resp.data
 
 
 def test_settings_tools_api_reports_install_support(dashboard_client):
@@ -8640,13 +8640,13 @@ def test_work_page_surfaces_provider_model_usage(dashboard_client):
                     "id": "task-1",
                     "bot_id": "research-bot",
                     "status": "completed",
-                    "metadata": {"project_id": "globeiq", "manager_id": "research-manager"},
+                    "metadata": {"project_id": "acme", "manager_id": "research-manager"},
                     "updated_at": "2026-03-12T00:00:00+00:00",
                 }
             ]
 
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ", "enabled": True}]
+            return [{"id": "acme", "name": "acme", "enabled": True}]
 
         def list_bots(self):
             return [{"id": "research-bot", "name": "Research Bot", "enabled": True}]
@@ -8665,8 +8665,8 @@ def test_work_page_surfaces_provider_model_usage(dashboard_client):
                     "tasks_with_usage": 1,
                     "tasks_without_usage": 0,
                 },
-                "by_project": [{"project_id": "globeiq", "total_tokens": 12345, "tasks_with_usage": 1, "tasks_without_usage": 0}],
-                "by_manager": [{"project_id": "globeiq", "manager_id": "research-manager", "total_tokens": 12345, "tasks_with_usage": 1}],
+                "by_project": [{"project_id": "acme", "total_tokens": 12345, "tasks_with_usage": 1, "tasks_without_usage": 0}],
+                "by_manager": [{"project_id": "acme", "manager_id": "research-manager", "total_tokens": 12345, "tasks_with_usage": 1}],
                 "by_bot": [{"bot_id": "research-bot", "total_tokens": 12345, "tasks_with_usage": 1, "tasks_without_usage": 0}],
                 "by_provider_model": [
                     {

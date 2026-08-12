@@ -193,7 +193,7 @@ def test_http_connection_injects_one_time_remote_approval_without_returning_toke
                     "body_json": {"scope": "Course.Update"},
                 },
                 "response_token_field": "token",
-                "inject_header": "X-GLOBEIQ-AGENT-APPROVAL",
+                "inject_header": "X-acme-AGENT-APPROVAL",
             },
         },
     )
@@ -201,7 +201,7 @@ def test_http_connection_injects_one_time_remote_approval_without_returning_toke
     assert result["ok"] is True
     assert result["agent_approval"]["operation_id"] == "createApproval"
     assert "remote-one-time-token" not in json.dumps(result)
-    assert captured_headers[1]["X-globeiq-agent-approval"] == "remote-one-time-token"
+    assert captured_headers[1]["X-acme-agent-approval"] == "remote-one-time-token"
 
 
 def test_http_connection_rejects_html_when_json_is_required(monkeypatch):

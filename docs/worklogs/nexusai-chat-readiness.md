@@ -54,7 +54,7 @@ Make the dashboard chat page safe to begin using as the daily NexusAI workspace 
 - `python -m compileall -q control_plane\api\chat.py control_plane\chat\chat_manager.py dashboard\routes\chat.py dashboard\cp_client.py`
 - Browser verification against local dashboard and control plane:
   - desktop 1366x820: top nav only, no horizontal overflow
-  - project filter `ui-globeiq`: primary and bridged conversations visible, unrelated conversation hidden
+  - project filter `ui-project-a`: primary and bridged conversations visible, unrelated conversation hidden
   - selected chat: messages area and composer present, composer remains within viewport
   - mobile 390x844: menu collapsed by default, opens on tap, links visible, no horizontal overflow
   - console warnings/errors: none observed

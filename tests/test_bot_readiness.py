@@ -90,7 +90,7 @@ async def test_bot_project_binding_requires_an_enabled_project(cp_client):
         "id": "project-bound-bot",
         "name": "Project Bound Bot",
         "role": "reviewer",
-        "project_id": "globeiq",
+        "project_id": "acme",
         "backends": [],
     }
 
@@ -100,13 +100,13 @@ async def test_bot_project_binding_requires_an_enabled_project(cp_client):
 
     project = await cp_client.post(
         "/v1/projects",
-        json={"id": "globeiq", "name": "GlobeIQ", "mode": "isolated"},
+        json={"id": "acme", "name": "acme", "mode": "isolated"},
     )
     assert project.status_code == 200
 
     created = await cp_client.post("/v1/bots", json=payload)
     assert created.status_code == 200
-    assert created.json()["project_id"] == "globeiq"
+    assert created.json()["project_id"] == "acme"
 
 
 @pytest.mark.anyio

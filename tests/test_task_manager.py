@@ -89,7 +89,7 @@ async def test_work_dispatch_hold_keeps_matching_project_manager_task_queued(tmp
         mock_scheduler.schedule.return_value = {"answer": "42"}
         tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "tasks.db"))
         await tm.set_work_dispatch_hold(
-            project_id="globeiq",
+            project_id="acme",
             manager_id="manager-a",
             reason="operator checkpoint",
             created_by="admin@test.com",
@@ -98,7 +98,7 @@ async def test_work_dispatch_hold_keeps_matching_project_manager_task_queued(tmp
         task = await tm.create_task(
             bot_id="lesson-writer",
             payload={"q": "hello"},
-            metadata=TaskMetadata(project_id="globeiq", root_pm_bot_id="manager-a"),
+            metadata=TaskMetadata(project_id="acme", root_pm_bot_id="manager-a"),
         )
         await asyncio.sleep(0.05)
 
@@ -107,11 +107,11 @@ async def test_work_dispatch_hold_keeps_matching_project_manager_task_queued(tmp
         mock_scheduler.schedule.assert_not_awaited()
 
         holds = await tm.list_work_dispatch_holds()
-        assert holds["holds"][0]["id"] == "globeiq::manager-a"
+        assert holds["holds"][0]["id"] == "acme::manager-a"
         assert holds["holds"][0]["queued_task_count"] == 1
 
         await tm.release_work_dispatch_hold(
-            project_id="globeiq",
+            project_id="acme",
             manager_id="manager-a",
             released_by="admin@test.com",
         )
@@ -305,15 +305,15 @@ async def test_token_governor_rejects_extra_queued_llm_task_for_same_project(tmp
     first = await tm.create_task(
         bot_id="lesson-auditor-a",
         payload={"q": "expensive"},
-        metadata=TaskMetadata(project_id="globeiq"),
+        metadata=TaskMetadata(project_id="acme"),
     )
     await asyncio.sleep(0.1)
 
-    with pytest.raises(ValueError, match="project 'globeiq'"):
+    with pytest.raises(ValueError, match="project 'acme'"):
         await tm.create_task(
             bot_id="lesson-auditor-b",
             payload={"q": "also expensive"},
-            metadata=TaskMetadata(project_id="globeiq"),
+            metadata=TaskMetadata(project_id="acme"),
         )
 
     updated = await tm.get_task(first.id)
@@ -354,7 +354,7 @@ async def test_token_governor_rejects_manager_when_hourly_budget_would_be_exceed
     first = await tm.create_task(
         bot_id="lesson-auditor-a",
         payload={"q": "audit"},
-        metadata=TaskMetadata(project_id="globeiq", root_pm_bot_id="audit-manager"),
+        metadata=TaskMetadata(project_id="acme", root_pm_bot_id="audit-manager"),
     )
     for _ in range(40):
         updated = await tm.get_task(first.id)
@@ -363,7 +363,7 @@ async def test_token_governor_rejects_manager_when_hourly_budget_would_be_exceed
         await asyncio.sleep(0.05)
 
     assert updated.status == "completed"
-    manager_key = "globeiq::audit-manager"
+    manager_key = "acme::audit-manager"
     for _ in range(40):
         usage = await tm._token_usage_totals_since(hours=1)
         manager_used = int((usage.get("by_manager") or {}).get(manager_key, {}).get("total_tokens") or 0)
@@ -371,11 +371,11 @@ async def test_token_governor_rejects_manager_when_hourly_budget_would_be_exceed
             break
         await asyncio.sleep(0.05)
     assert manager_used == 80
-    with pytest.raises(ValueError, match="manager 'audit-manager' in project 'globeiq'"):
+    with pytest.raises(ValueError, match="manager 'audit-manager' in project 'acme'"):
         await tm.create_task(
             bot_id="lesson-auditor-b",
             payload={"q": "audit next"},
-            metadata=TaskMetadata(project_id="globeiq", root_pm_bot_id="audit-manager"),
+            metadata=TaskMetadata(project_id="acme", root_pm_bot_id="audit-manager"),
         )
 
 
@@ -478,7 +478,7 @@ async def test_token_governor_dispatch_reserves_project_budget(tmp_path, monkeyp
         id="project-budget-1",
         bot_id="lesson-auditor-a",
         payload={"q": "audit"},
-        metadata=TaskMetadata(project_id="globeiq"),
+        metadata=TaskMetadata(project_id="acme"),
         status="queued",
         created_at=now,
         updated_at=now,
@@ -487,7 +487,7 @@ async def test_token_governor_dispatch_reserves_project_budget(tmp_path, monkeyp
         id="project-budget-2",
         bot_id="lesson-auditor-b",
         payload={"q": "audit"},
-        metadata=TaskMetadata(project_id="globeiq"),
+        metadata=TaskMetadata(project_id="acme"),
         status="queued",
         created_at=now,
         updated_at=now,
@@ -774,8 +774,8 @@ async def test_token_usage_summary_groups_by_project_manager_and_model(tmp_path)
         payload={"instruction": "write lesson"},
         metadata=TaskMetadata(
             source="chat_assign",
-            project_id="globeiq",
-            root_pm_bot_id="globeiq-pm",
+            project_id="acme",
+            root_pm_bot_id="acme-pm",
             execution_provenance={"provider": "ollama_cloud", "model": "qwen3.5:cloud"},
         ),
     )
@@ -789,13 +789,13 @@ async def test_token_usage_summary_groups_by_project_manager_and_model(tmp_path)
     usage = await tm.summarize_token_usage(hours=24)
 
     assert usage["totals"]["total_tokens"] == 140
-    assert usage["by_project"][0]["project_id"] == "globeiq"
+    assert usage["by_project"][0]["project_id"] == "acme"
     assert usage["by_project"][0]["total_tokens"] == 140
-    assert usage["by_manager"][0]["project_id"] == "globeiq"
-    assert usage["by_manager"][0]["manager_id"] == "globeiq-pm"
+    assert usage["by_manager"][0]["project_id"] == "acme"
+    assert usage["by_manager"][0]["manager_id"] == "acme-pm"
     assert usage["by_manager"][0]["total_tokens"] == 140
-    assert usage["by_project_manager_bot"][0]["project_id"] == "globeiq"
-    assert usage["by_project_manager_bot"][0]["manager_id"] == "globeiq-pm"
+    assert usage["by_project_manager_bot"][0]["project_id"] == "acme"
+    assert usage["by_project_manager_bot"][0]["manager_id"] == "acme-pm"
     assert usage["by_project_manager_bot"][0]["bot_id"] == "lesson-writer"
     assert usage["by_project_manager_bot"][0]["total_tokens"] == 140
     assert usage["by_bot"][0]["bot_id"] == "lesson-writer"
@@ -2129,10 +2129,10 @@ async def test_create_task_enforces_and_inherits_bound_bot_project_scope(tmp_pat
     bot_registry = BotRegistry(db_path=str(tmp_path / "project-bound-bots.db"))
     await bot_registry.register(
         Bot(
-            id="globeiq-reviewer",
-            name="GlobeIQ Reviewer",
+            id="acme-reviewer",
+            name="acme Reviewer",
             role="quality_reviewer",
-            project_id="globeiq",
+            project_id="acme",
             backends=[],
         )
     )
@@ -2142,20 +2142,20 @@ async def test_create_task_enforces_and_inherits_bound_bot_project_scope(tmp_pat
         bot_registry=bot_registry,
     )
 
-    task = await tm.create_task(bot_id="globeiq-reviewer", payload={"instruction": "Review lesson"})
+    task = await tm.create_task(bot_id="acme-reviewer", payload={"instruction": "Review lesson"})
     assert task.metadata is not None
-    assert task.metadata.project_id == "globeiq"
+    assert task.metadata.project_id == "acme"
 
-    with pytest.raises(ValueError, match="does not match bot 'globeiq-reviewer' project 'globeiq'"):
+    with pytest.raises(ValueError, match="does not match bot 'acme-reviewer' project 'acme'"):
         await tm.create_task(
-            bot_id="globeiq-reviewer",
+            bot_id="acme-reviewer",
             payload={"instruction": "Review lesson"},
             metadata=TaskMetadata(project_id="another-project"),
         )
 
     with pytest.raises(ValueError, match="Task payload project 'another-project'"):
         await tm.create_task(
-            bot_id="globeiq-reviewer",
+            bot_id="acme-reviewer",
             payload={"instruction": "Review lesson", "project_id": "another-project"},
         )
 
@@ -2195,10 +2195,10 @@ async def test_trigger_keeps_project_scope_when_optional_metadata_is_not_inherit
     bot_registry = BotRegistry(db_path=str(tmp_path / "trigger-project-scope-bots.db"))
     await bot_registry.register(
         Bot(
-            id="globeiq-source",
-            name="GlobeIQ Source",
+            id="acme-source",
+            name="acme Source",
             role="assistant",
-            project_id="globeiq",
+            project_id="acme",
             backends=[],
             workflow={
                 "triggers": [
@@ -2221,8 +2221,8 @@ async def test_trigger_keeps_project_scope_when_optional_metadata_is_not_inherit
     )
 
     root = await tm.create_task(
-        bot_id="globeiq-source",
-        payload={"instruction": "Review the GlobeIQ course"},
+        bot_id="acme-source",
+        payload={"instruction": "Review the acme course"},
     )
     for _ in range(40):
         tasks = await tm.list_tasks()
@@ -2233,7 +2233,7 @@ async def test_trigger_keeps_project_scope_when_optional_metadata_is_not_inherit
     tasks = await tm.list_tasks()
     child = next(task for task in tasks if task.id != root.id)
     assert child.metadata is not None
-    assert child.metadata.project_id == "globeiq"
+    assert child.metadata.project_id == "acme"
     assert child.metadata.parent_task_id == root.id
 
 
@@ -6627,7 +6627,7 @@ async def test_chat_assign_repo_change_fails_with_placeholder_commit_and_pr_evid
                     "```\n"
                     "Evidence Placeholders (User to fill):\n"
                     "Commit Hash: $(git rev-parse HEAD)\n"
-                    "PR URL: https://repo.globeiq/pulls/<number>\n"
+                    "PR URL: https://repo.acme/pulls/<number>\n"
                 )
             }
 
@@ -7284,14 +7284,14 @@ async def test_chat_assign_test_execution_fails_when_generated_tests_do_not_matc
 
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
-    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
-    (repo_root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
+    (repo_root / "acme.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (repo_root / "acme.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
     monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
-        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M GlobeIQ.Tests.csproj"]}
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M acme.Tests.csproj"]}
 
     monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
     monkeypatch.setattr(
@@ -7479,8 +7479,8 @@ async def test_bot_trigger_final_qc_payload_from_tester_is_not_misclassified_as_
 
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
-    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
-    tests_project = repo_root / "GlobeIQ.Server.Tests" / "GlobeIQ.Server.Tests.csproj"
+    (repo_root / "acme.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    tests_project = repo_root / "acme.Server.Tests" / "acme.Server.Tests.csproj"
     tests_project.parent.mkdir(parents=True, exist_ok=True)
     tests_project.write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
@@ -7488,15 +7488,15 @@ async def test_bot_trigger_final_qc_payload_from_tester_is_not_misclassified_as_
     monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
-        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": ["?? GlobeIQ.Server.Tests/BlockCatalogSeederTests.cs"]}
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": ["?? acme.Server.Tests/BlockCatalogSeederTests.cs"]}
 
     monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
     monkeypatch.setattr(
         projects_module,
         "_assignment_file_candidates",
         lambda tasks: [
-            {"path": "GlobeIQ.Server/Services/BlockCatalogSeeder.cs", "content": "public class BlockCatalogSeeder {}\n"},
-            {"path": "GlobeIQ.Server.Tests/BlockCatalogSeederTests.cs", "content": "public class BlockCatalogSeederTests {}\n"},
+            {"path": "acme.Server/Services/BlockCatalogSeeder.cs", "content": "public class BlockCatalogSeeder {}\n"},
+            {"path": "acme.Server.Tests/BlockCatalogSeederTests.cs", "content": "public class BlockCatalogSeederTests {}\n"},
         ],
     )
 
@@ -7565,7 +7565,7 @@ async def test_bot_trigger_final_qc_payload_from_tester_is_not_misclassified_as_
             "instruction": "Run tests for generated files",
             "role_hint": "tester",
             "step_kind": "test_execution",
-            "deliverables": ["GlobeIQ.Server.Tests/BlockCatalogSeederTests.cs", "artifacts/test_results.json"],
+            "deliverables": ["acme.Server.Tests/BlockCatalogSeederTests.cs", "artifacts/test_results.json"],
             "evidence_requirements": ["Executed test command output"],
         },
         metadata=TaskMetadata(source="bot_trigger", project_id="proj-1", orchestration_id="orch-1"),
@@ -7730,8 +7730,8 @@ async def test_chat_assign_repo_change_fails_early_when_generated_files_mismatch
 
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
-    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
-    (repo_root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
+    (repo_root / "acme.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (repo_root / "acme.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
     monkeypatch.setattr(
         task_manager_module,
@@ -7803,8 +7803,8 @@ async def test_chat_assign_test_execution_detects_and_runs_generated_dotnet_test
 
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
-    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
-    (repo_root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
+    (repo_root / "acme.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (repo_root / "acme.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
     monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
@@ -7817,7 +7817,7 @@ async def test_chat_assign_test_execution_detects_and_runs_generated_dotnet_test
         projects_module,
         "_assignment_file_candidates",
         lambda tasks: [
-            {"path": "src/lessons/MathLesson.cs", "content": "namespace GlobeIQ.Lessons { public class MathLesson {} }\n"},
+            {"path": "src/lessons/MathLesson.cs", "content": "namespace acme.Lessons { public class MathLesson {} }\n"},
             {"path": "tests/MathLessonTests.cs", "content": "public class MathLessonTests {}\n"},
         ],
     )
@@ -8167,8 +8167,8 @@ async def test_bot_trigger_tester_step_uses_internal_execution_and_sees_triggere
 
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
-    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
-    tests_project = repo_root / "GlobeIQ.Server.Tests" / "GlobeIQ.Server.Tests.csproj"
+    (repo_root / "acme.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    tests_project = repo_root / "acme.Server.Tests" / "acme.Server.Tests.csproj"
     tests_project.parent.mkdir(parents=True, exist_ok=True)
     tests_project.write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
@@ -8176,7 +8176,7 @@ async def test_bot_trigger_tester_step_uses_internal_execution_and_sees_triggere
     monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
-        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M GlobeIQ.Server.Tests/GeometryLessonServiceTests.cs"]}
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M acme.Server.Tests/GeometryLessonServiceTests.cs"]}
 
     monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
 
@@ -8191,8 +8191,8 @@ async def test_bot_trigger_tester_step_uses_internal_execution_and_sees_triggere
             for task in tasks
         )
         return [
-            {"path": "GlobeIQ.Server/Services/GeometryLessonService.cs", "content": "public class GeometryLessonService {}\n"},
-            {"path": "GlobeIQ.Server.Tests/GeometryLessonServiceTests.cs", "content": "public class GeometryLessonServiceTests {}\n"},
+            {"path": "acme.Server/Services/GeometryLessonService.cs", "content": "public class GeometryLessonService {}\n"},
+            {"path": "acme.Server.Tests/GeometryLessonServiceTests.cs", "content": "public class GeometryLessonServiceTests {}\n"},
         ]
 
     monkeypatch.setattr(projects_module, "_assignment_file_candidates", _assignment_file_candidates)
@@ -8318,8 +8318,8 @@ async def test_bot_trigger_tester_execution_is_scoped_to_same_fanout_branch(tmp_
 
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
-    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
-    tests_project = repo_root / "GlobeIQ.Server.Tests" / "GlobeIQ.Server.Tests.csproj"
+    (repo_root / "acme.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    tests_project = repo_root / "acme.Server.Tests" / "acme.Server.Tests.csproj"
     tests_project.parent.mkdir(parents=True, exist_ok=True)
     tests_project.write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
@@ -8327,7 +8327,7 @@ async def test_bot_trigger_tester_execution_is_scoped_to_same_fanout_branch(tmp_
     monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
-        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M GlobeIQ.Server.Tests/GeometryLessonServiceTests.cs"]}
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M acme.Server.Tests/GeometryLessonServiceTests.cs"]}
 
     monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
 
@@ -8336,8 +8336,8 @@ async def test_bot_trigger_tester_execution_is_scoped_to_same_fanout_branch(tmp_
     def _assignment_file_candidates(tasks):
         seen_task_ids.extend(str(task.id) for task in tasks)
         return [
-            {"path": "GlobeIQ.Server/Services/GeometryLessonService.cs", "content": "public class GeometryLessonService {}\n"},
-            {"path": "GlobeIQ.Server.Tests/GeometryLessonServiceTests.cs", "content": "public class GeometryLessonServiceTests {}\n"},
+            {"path": "acme.Server/Services/GeometryLessonService.cs", "content": "public class GeometryLessonService {}\n"},
+            {"path": "acme.Server.Tests/GeometryLessonServiceTests.cs", "content": "public class GeometryLessonServiceTests {}\n"},
         ]
 
     monkeypatch.setattr(projects_module, "_assignment_file_candidates", _assignment_file_candidates)
@@ -8430,8 +8430,8 @@ async def test_bot_trigger_tester_execution_is_scoped_to_same_fanout_branch(tmp_
             ],
             "workstream": {
                 "deliverables": [
-                    "GlobeIQ.Server/Services/GeometryLessonService.cs",
-                    "GlobeIQ.Server.Tests/GeometryLessonServiceTests.cs",
+                    "acme.Server/Services/GeometryLessonService.cs",
+                    "acme.Server.Tests/GeometryLessonServiceTests.cs",
                 ]
             },
             "fanout_id": "fanout:test",
@@ -8461,8 +8461,8 @@ def test_assignment_execution_language_inherits_repo_runtime_over_generated_pyth
 
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
-    (root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
-    (root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
+    (root / "acme.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (root / "acme.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
     languages = _assignment_execution_languages(
         applied_paths=["src/lessons/geometry.py", "tests/test_geometry.py"],
@@ -8570,14 +8570,14 @@ def test_assignment_validation_rejects_non_doc_repo_artifacts_for_docs_only_requ
     result = {
         "artifacts": [
             {"path": "docs/blocks/lesson-blocks.md", "content": "# Lesson Blocks"},
-            {"path": "GlobeIQ.Server/Controllers/UserLessonBlocksController.cs", "content": "// code"},
+            {"path": "acme.Server/Controllers/UserLessonBlocksController.cs", "content": "// code"},
         ]
     }
 
     error = _assignment_validation_error(task, result)
 
     assert "documentation-only markdown outputs" in error
-    assert "GlobeIQ.Server/Controllers/UserLessonBlocksController.cs" in error
+    assert "acme.Server/Controllers/UserLessonBlocksController.cs" in error
 
 
 def test_assignment_validation_rejects_non_doc_engineering_workstreams_for_docs_only_requests():
@@ -8611,8 +8611,8 @@ def test_assignment_validation_rejects_non_doc_engineering_workstreams_for_docs_
                 "title": "Backend configuration update",
                 "instruction": "Modify Program.cs and add integration tests.",
                 "deliverables": [
-                    "src/GlobeIQ.Server/Program.cs",
-                    "tests/GlobeIQ.Server.Tests/Integration/CloudflareR2ConfigurationTests.cs",
+                    "src/acme.Server/Program.cs",
+                    "tests/acme.Server.Tests/Integration/CloudflareR2ConfigurationTests.cs",
                 ],
             }
         ]
@@ -8621,7 +8621,7 @@ def test_assignment_validation_rejects_non_doc_engineering_workstreams_for_docs_
     error = _assignment_validation_error(task, result)
 
     assert "documentation-only markdown outputs" in error
-    assert "src/GlobeIQ.Server/Program.cs" in error
+    assert "src/acme.Server/Program.cs" in error
 
 
 def test_assignment_validation_rejects_extra_markdown_repo_artifacts_outside_docs_only_deliverables():
@@ -9115,8 +9115,8 @@ def test_assignment_validation_allows_docs_to_link_to_repo_source_files():
                 "path": "docs/blocks/mathematics-block-catalog.md",
                 "content": (
                     "# Math Block Catalog\n\n"
-                    "See [BlockSchemas](../../GlobeIQ.Server/Models/BlockSchemas.cs) and "
-                    "[SchemaMapBuilder](../../GlobeIQ.Server/BlocksApi/SchemaMapBuilder.cs).\n"
+                    "See [BlockSchemas](../../acme.Server/Models/BlockSchemas.cs) and "
+                    "[SchemaMapBuilder](../../acme.Server/BlocksApi/SchemaMapBuilder.cs).\n"
                 ),
             }
         ]
@@ -9477,7 +9477,7 @@ async def test_chat_assign_release_fails_when_output_is_only_checklist_guidance(
                     "Final Merge & Release Step\n"
                     "These findings should be verified before the PR is merged.\n"
                     "Use this as a checklist when completing step 6.\n"
-                    "Tag URL: https://github.com/globeiq/globeiq/releases/tag/v1.4.0\n"
+                    "Tag URL: https://github.com/acme/acme/releases/tag/v1.4.0\n"
                 )
             }
 
@@ -10356,15 +10356,15 @@ def test_assignment_test_source_files_recognize_dotnet_test_projects() -> None:
 
     detected = _assignment_test_source_files(
         [
-            "GlobeIQ.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
-            "GlobeIQ.WebApp.Tests/Pages/GeometryLessonTests.cs",
+            "acme.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
+            "acme.WebApp.Tests/Pages/GeometryLessonTests.cs",
             "CoverageReport.xml",
         ]
     )
 
     assert detected == [
-        "GlobeIQ.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
-        "GlobeIQ.WebApp.Tests/Pages/GeometryLessonTests.cs",
+        "acme.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
+        "acme.WebApp.Tests/Pages/GeometryLessonTests.cs",
     ]
 
 
@@ -10509,7 +10509,7 @@ async def test_default_failure_trigger_payload_preserves_remediation_context(tmp
             "workstream": {
                 "title": "Backend API & Service Layer",
                 "instruction": "Implement the issues API and tests only.",
-                "deliverables": ["GlobeIQ.Server/Controllers/IssuesController.cs"],
+                "deliverables": ["acme.Server/Controllers/IssuesController.cs"],
             },
             "workstream_index": 1,
             "fanout_count": 3,
@@ -10519,7 +10519,7 @@ async def test_default_failure_trigger_payload_preserves_remediation_context(tmp
                 "title": "Backend API & Service Layer",
                 "instruction": "Implement the issues API and tests only.",
                 "acceptance_criteria": ["The issues API compiles and tests pass."],
-                "deliverables": ["GlobeIQ.Server/Controllers/IssuesController.cs", "GlobeIQ.Server.Tests/IssuesControllerTests.cs"],
+                "deliverables": ["acme.Server/Controllers/IssuesController.cs", "acme.Server.Tests/IssuesControllerTests.cs"],
                 "quality_gates": ["No unresolved backend API defects remain."],
             },
         },

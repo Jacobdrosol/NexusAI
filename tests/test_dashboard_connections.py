@@ -78,8 +78,8 @@ paths:
         json={
             "name": "Example API Updated",
             "description": "updated",
-            "config": {"base_url": "https://globeiq.org", "timeout_seconds": 60},
-            "auth": {"type": "api_key", "name": "X-GLOBEIQ-AGENT-KEY"},
+            "config": {"base_url": "https://acme.org", "timeout_seconds": 60},
+            "auth": {"type": "api_key", "name": "X-acme-AGENT-KEY"},
             "schema_text": schema,
         },
     )
@@ -87,9 +87,9 @@ paths:
     updated = update_resp.get_json()
     assert updated["name"] == "Example API Updated"
     assert updated["description"] == "updated"
-    assert updated["config"]["base_url"] == "https://globeiq.org"
+    assert updated["config"]["base_url"] == "https://acme.org"
     assert updated["config"]["timeout_seconds"] == 60
-    assert updated["auth"]["name"] == "X-GLOBEIQ-AGENT-KEY"
+    assert updated["auth"]["name"] == "X-acme-AGENT-KEY"
     assert updated["auth"]["api_key"] == "[REDACTED]"
 
     del_resp = dashboard_client.delete(f"/api/connections/{conn['id']}")
@@ -298,7 +298,7 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
                 "id": "course-bot",
                 "name": "Imported Bot",
                 "role": "planner",
-                "project_id": "globeiq",
+                "project_id": "acme",
                 "priority": 7,
                 "enabled": True,
                 "system_prompt": "Imported prompt",
@@ -331,7 +331,7 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
         body = import_resp.get_json()
         assert body["overwritten"] is True
         assert body["bot"]["name"] == "Imported Bot"
-        assert body["bot"]["project_id"] == "globeiq"
+        assert body["bot"]["project_id"] == "acme"
         assert body["bot"]["context_access"] == {"receives": ["instruction"], "can_self_serve": ["repo"]}
         assert fake_cp.deleted_bot_ids == []
         assert fake_cp.updated_bot_ids == ["course-bot"]
@@ -552,17 +552,17 @@ def test_project_database_connection_create_test_and_schema_ingest(dashboard_cli
 
 def test_normalize_database_dsn_supports_postgres_keyword_string():
     dsn = normalize_database_dsn(
-        "host=db.example.com port=5432 dbname=globeiq user=jacob password=secret sslmode=require"
+        "host=db.example.com port=5432 dbname=acme user=jacob password=secret sslmode=require"
     )
-    assert dsn.startswith("postgresql+psycopg2://jacob:secret@db.example.com:5432/globeiq")
+    assert dsn.startswith("postgresql+psycopg2://jacob:secret@db.example.com:5432/acme")
     assert "sslmode=require" in dsn
 
 
 def test_normalize_database_dsn_supports_npgsql_style_string():
     dsn = normalize_database_dsn(
-        "Host=localhost;Port=5432;Database=globeiq;Username=globeiq;Password=CHANGE_ME;Ssl Mode=Require;Trust Server Certificate=true"
+        "Host=localhost;Port=5432;Database=acme;Username=acme;Password=CHANGE_ME;Ssl Mode=Require;Trust Server Certificate=true"
     )
-    assert dsn.startswith("postgresql+psycopg2://globeiq:CHANGE_ME@localhost:5432/globeiq")
+    assert dsn.startswith("postgresql+psycopg2://acme:CHANGE_ME@localhost:5432/acme")
     assert "sslmode=require" in dsn
 
 
@@ -591,7 +591,7 @@ def test_http_connection_can_skip_tls_verification(monkeypatch):
 
     result = run_http_connection_test(
         config={"base_url": "https://100.113.128.92:5001", "timeout_seconds": 15, "verify_ssl": False},
-        auth={"type": "api_key", "name": "X-GLOBEIQ-AGENT-KEY", "api_key": "secret"},
+        auth={"type": "api_key", "name": "X-acme-AGENT-KEY", "api_key": "secret"},
         schema_text="",
         payload={"method": "GET", "path": "/api/agent/courses"},
     )
@@ -664,14 +664,14 @@ def test_http_connection_merges_action_headers(monkeypatch):
         payload={
             "method": "POST",
             "path": "/courses",
-            "headers": {"X-GLOBEIQ-AGENT-APPROVAL": "approval-token"},
+            "headers": {"X-acme-AGENT-APPROVAL": "approval-token"},
             "body_json": {"title": "World History Survey"},
         },
     )
 
     assert result["ok"] is True
     assert captured["headers"]["X-api-key"] == "secret-token"
-    assert captured["headers"]["X-globeiq-agent-approval"] == "approval-token"
+    assert captured["headers"]["X-acme-agent-approval"] == "approval-token"
 
 
 def test_http_connection_rejects_actions_not_declared_in_schema(monkeypatch):

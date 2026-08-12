@@ -37,10 +37,10 @@ snapshot shows:
 - 44 enabled workers online.
 - 0 enabled workers offline.
 
-The only remaining enabled blockers are `globeiq-browser-inspector-01-bot` and
-`globeiq-course-57-evidence-01-bot`. Both depend on
-`globeiq-browser-inspector-01`, which is running and healthy but does not expose
-`browser-ui` because its authenticated GlobeIQ browser session check fails.
+The only remaining enabled blockers are the browser-inspector bot and the
+course-evidence bot. Both depend on
+the browser-inspector worker, which is running and healthy but does not expose
+`browser-ui` because its authenticated browser session check fails.
 
 Required worker tool use in live configs:
 
@@ -66,8 +66,8 @@ Action allowlist use in live configs:
 - Tightened `validate_bot_configuration` to reject browser/documentation action allowlists that omit their required worker tools.
 - Added regression tests for browser and documentation tool-policy mismatches.
 - Confirmed connection action policies remain valid without worker tools.
-- Started the rendered GlobeIQ worker fleets on `globalagent`:
-  - Original GlobeIQ runtime workers.
+- Started the rendered worker fleets on the deployment host:
+  - Original runtime workers.
   - Question-bank draft/review workers.
   - Course details author/QC workers.
   - Course unit planning/application workers.
@@ -81,7 +81,7 @@ Action allowlist use in live configs:
 
 ## Next Steps
 
-- Add valid GlobeIQ browser login credentials to the private browser worker environments, then run the manual browser session bootstrap for browser inspector and question-bank patch profiles.
+- Add valid browser login credentials to the private browser worker environments, then run the manual browser session bootstrap for browser inspector and question-bank patch profiles.
 - Re-run live readiness after browser profiles authenticate; expected result is 107 enabled ready bots and 23 disabled bots.
 - Then audit each current bot group for whether its allowed tools match its role and workflow scope before adding new bot classes.
 

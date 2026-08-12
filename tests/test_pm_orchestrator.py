@@ -702,8 +702,8 @@ def test_expand_test_execution_steps_recognizes_dotnet_test_project_paths() -> N
                     "step_kind": "test_execution",
                     "depends_on": [],
                     "deliverables": [
-                        "GlobeIQ.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
-                        "GlobeIQ.WebApp.Tests/Pages/GeometryLessonTests.cs",
+                        "acme.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
+                        "acme.WebApp.Tests/Pages/GeometryLessonTests.cs",
                         "TestResults.xml",
                         "CoverageReport.xml",
                     ],
@@ -717,8 +717,8 @@ def test_expand_test_execution_steps_recognizes_dotnet_test_project_paths() -> N
     assert len(expanded["steps"]) == 2
     create_step, execute_step = expanded["steps"]
     assert create_step["deliverables"] == [
-        "GlobeIQ.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
-        "GlobeIQ.WebApp.Tests/Pages/GeometryLessonTests.cs",
+        "acme.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
+        "acme.WebApp.Tests/Pages/GeometryLessonTests.cs",
     ]
     assert execute_step["deliverables"] == ["TestResults.xml", "CoverageReport.xml"]
 
@@ -2124,7 +2124,7 @@ async def test_wait_for_completion_tracks_intentionally_excluded_ui_stage_from_a
     coder_task = Task(
         id="task-coder",
         bot_id="pm-coder",
-        payload={"title": "Implement feature", "deliverables": ["GlobeIQ.Server/Controllers/Api/UserSubmissionsController.cs"]},
+        payload={"title": "Implement feature", "deliverables": ["acme.Server/Controllers/Api/UserSubmissionsController.cs"]},
         metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-skip-ui", parent_task_id="task-pm-coder"),
         status="completed",
         created_at="2026-03-27T00:00:02+00:00",
@@ -2132,7 +2132,7 @@ async def test_wait_for_completion_tracks_intentionally_excluded_ui_stage_from_a
         result={
             "artifacts": [
                 {
-                    "path": "GlobeIQ.Server/Controllers/Api/UserSubmissionsController.cs",
+                    "path": "acme.Server/Controllers/Api/UserSubmissionsController.cs",
                     "content": "// change",
                     "status": "modified",
                 }

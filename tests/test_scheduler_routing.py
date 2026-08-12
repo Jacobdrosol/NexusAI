@@ -37,7 +37,7 @@ def test_messages_for_ollama_preserve_tool_call_context():
                 "role": "tool",
                 "name": "search_files",
                 "tool_call_id": "tc-1",
-                "content": "--- GlobeIQ.Server/Services/ProgramSchedulerService.cs ---",
+                "content": "--- acme.Server/Services/ProgramSchedulerService.cs ---",
             },
         ]
     )
@@ -67,7 +67,7 @@ def test_messages_for_openai_preserve_tool_call_context():
                 "role": "tool",
                 "name": "search_files",
                 "tool_call_id": "tc-1",
-                "content": "--- GlobeIQ.Server/Services/ProgramSchedulerService.cs ---",
+                "content": "--- acme.Server/Services/ProgramSchedulerService.cs ---",
             },
         ]
     )
@@ -1088,7 +1088,7 @@ async def test_scheduler_dispatches_only_authorized_existing_question_patch(monk
                 "expected": {"prompt": "What is 2 + 2?", "question_type": "MCQ"},
                 "changes": {"prompt": "What is 3 + 1?"},
                 "review_evidence": {
-                    "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+                    "reviewer_bot_id": "acme-question-bank-review-01-bot",
                     "review_task_id": "review-42-7",
                     "approved_patch": True,
                     "semantic_duplicate_risk": "materially_distinct_context",
@@ -1214,7 +1214,7 @@ async def test_scheduler_dispatches_only_authorized_single_question_creation(mon
                     "correct_option_index": 1,
                 },
                 "review_evidence": {
-                    "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+                    "reviewer_bot_id": "acme-question-bank-review-01-bot",
                     "review_task_id": review_task_id,
                     "approved_create": True,
                     "semantic_duplicate_risk": "materially_distinct_context",
@@ -2292,7 +2292,7 @@ async def test_scheduler_fetches_dynamic_connection_context_from_payload_items(m
                                 "kind": "http",
                                 "description": "Remote block schema API",
                                 "config_json": json.dumps({"base_url": "https://example.test"}),
-                                "auth_json": json.dumps({"type": "api_key", "name": "X-GLOBEIQ-BLOCKS-KEY", "api_key": "enc:ignored"}),
+                                "auth_json": json.dumps({"type": "api_key", "name": "X-acme-BLOCKS-KEY", "api_key": "enc:ignored"}),
                                 "schema_text": "openapi: 3.1.0",
                                 "enabled": True,
                             },
@@ -2305,7 +2305,7 @@ async def test_scheduler_fetches_dynamic_connection_context_from_payload_items(m
             return None
 
     def fake_http_connection_test(*, config, auth, schema_text, payload):
-        assert auth["name"] == "X-GLOBEIQ-BLOCKS-KEY"
+        assert auth["name"] == "X-acme-BLOCKS-KEY"
         block_type = str(payload.get("path") or "").split("/")[-1]
         return {
             "ok": True,
@@ -2322,7 +2322,7 @@ async def test_scheduler_fetches_dynamic_connection_context_from_payload_items(m
         }
 
     monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
-    monkeypatch.setattr("shared.connection_secrets.resolve_auth_payload", lambda payload: {"type": "api_key", "name": "X-GLOBEIQ-BLOCKS-KEY", "api_key": "live-key"})
+    monkeypatch.setattr("shared.connection_secrets.resolve_auth_payload", lambda payload: {"type": "api_key", "name": "X-acme-BLOCKS-KEY", "api_key": "live-key"})
     monkeypatch.setattr("shared.connection_runtime.test_http_connection", fake_http_connection_test)
 
     bot_registry = AsyncMock()

@@ -594,7 +594,7 @@ async def test_csv_work_items_field_mapping_satisfies_schedule_input_contract():
                 id="draft-planner",
                 name="Draft Planner",
                 role="content-planner",
-                project_id="globeiq",
+                project_id="acme",
                 enabled=True,
                 backends=[],
                 routing_rules={
@@ -626,7 +626,7 @@ async def test_csv_work_items_field_mapping_satisfies_schedule_input_contract():
     schedule.update(
         {
             "target_bot_id": "draft-planner",
-            "project_id": "globeiq",
+            "project_id": "acme",
             "prompt": "Create a draft plan only from the supplied work item.",
         }
     )

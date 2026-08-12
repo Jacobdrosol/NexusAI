@@ -24,7 +24,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 
 - Public NexusAI has pushed hardening commits after deployed commit `3808ea1`.
 - Live readiness before this hardening pass: 105 ready, 2 enabled blocked, 23 disabled.
-- The only enabled blockers are GlobeIQ browser-session attestation failures for the browser inspector lane.
+- The only enabled blockers are browser-session attestation failures for the browser inspector lane.
 - Work overview already tracks project/manager lanes, token usage, queue pressure, holds, route evidence, and task freshness.
 
 ## Batch Plan
@@ -48,7 +48,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 10 in progress: added bot-detail operating summary for dispatch state, readiness, active/paused schedules, chat mode, chat tools, memory, and next operator action.
 - Batch 11 in progress: added provider/model token usage visibility to the work dashboard so usage can be traced by backend model as well as project, manager, and bot.
 - Batch 12 in progress: added worker-list runtime tool evidence so browser, CLI, and provider credential blockers are visible from the fleet table without opening each worker or using SSH.
-- Batch 13 in progress: clarified bot tooling blocker labels so browser-backed GlobeIQ blockers distinguish an authenticated browser-session problem from a missing worker or missing site account.
+- Batch 13 in progress: clarified bot tooling blocker labels so browser-backed blockers distinguish an authenticated browser-session problem from a missing worker or missing site account.
 - Batch 14 in progress: added chat-bot readiness evidence to the chat page so the active bot summary shows ready, blocked, disabled, or unknown before sending a message.
 - Batch 15 in progress: added Work Overview quality-gate visibility from existing Platform AI test suites and latest runs without launching new tests or worker tasks.
 - Batch 16 in progress: added a chat send guard that blocks known blocked or disabled selected bots before dispatching the message, while leaving default and unknown-readiness chats usable.
@@ -455,7 +455,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_work_overview.py::test_quality_gate_recommended_action_maps_operator_steps tests/test_work_overview.py::test_quality_gate_overall_action_prioritizes_operator_risk tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 213 quality-gate failure detail visibility.
 - Batch 214: extended the private worker fleet renderer so generated bot worker profiles can carry non-secret site-account labels, including replica-templated account names, while rejecting newline injection in account labels.
 - `pytest tests/test_worker_fleet_renderer.py -q` passed for Batch 214 worker-profile account propagation.
-- Batch 215: surfaced dependent-bot worker-profile site accounts plus lesson, page, and CLI scope on Worker Detail so operators can verify GlobeIQ-style worker logins and scoped tooling from the worker view.
+- Batch 215: surfaced dependent-bot worker-profile site accounts plus lesson, page, and CLI scope on Worker Detail so operators can verify site-style worker logins and scoped tooling from the worker view.
 - `pytest tests/test_dashboard_phase4_pages.py::test_worker_detail_page_surfaces_dependent_bot_worker_scope tests/test_dashboard_phase4_pages.py::test_project_detail_page_surfaces_ai_workspace_readiness tests/test_bot_tooling_status.py -q` passed for Batch 215 worker dependency scope visibility.
 - Batch 216: tightened chat-history dry-run validation so imports block duplicate source conversation/message keys, missing conversation/message links, unknown bridge project IDs, and unsupported attachment import actions before any database write.
 - `pytest tests/test_chat_import_manifest_validator.py -q` passed for Batch 216 migration manifest validation.
@@ -505,7 +505,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_create_modal_surfaces_default_bot_capability_summary -q` passed for Batch 238 create-chat tool summary refresh coverage.
 - Batch 239: surfaced worker profile IDs and service bindings on Bots table rows so operator review can connect each scoped bot to its configured worker process without opening detail pages.
 - `pytest tests/test_bot_tooling_status.py::test_bots_page_surfaces_tooling_readiness_panel tests/test_dashboard_phase4_pages.py::test_bots_page_surfaces_bot_scoped_chat_profiles -q` passed for Batch 239 bot-list worker identity coverage.
-- Batch 240: renamed rendered worker profile site-account labels to Site login across bot, project, and worker pages so GlobeIQ worker logins are explicit while preserving the existing `site_account` config key.
+- Batch 240: renamed rendered worker profile site-account labels to Site login across bot, project, and worker pages so site worker logins are explicit while preserving the existing `site_account` config key.
 - `pytest tests/test_bot_tooling_status.py::test_bots_page_surfaces_tooling_readiness_panel tests/test_dashboard_phase4_pages.py::test_project_detail_page_surfaces_ai_workspace_readiness tests/test_dashboard_phase4_pages.py::test_bot_detail_page_renders_chat_profile_controls tests/test_dashboard_phase4_pages.py::test_worker_detail_page_surfaces_dependent_bot_worker_scope -q` passed for Batch 240 worker-login label coverage.
 - Batch 241: added machine-readable effective-context diagnostics to direct and streamed chat gate failures for workspace tools, inline coding, and image attachments so the chat UI can explain blocked capabilities without re-querying context.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_message_api_blocks_workspace_tools_without_project_policy tests/test_dashboard_phase4_pages.py::test_chat_stream_api_blocks_workspace_tools_without_shared_mode tests/test_dashboard_phase4_pages.py::test_chat_stream_api_blocks_inline_coding_for_unscoped_chat tests/test_dashboard_phase4_pages.py::test_chat_message_api_blocks_inline_coding_for_repo_output_denied_bot -q` passed for Batch 241 direct/stream chat gate diagnostics.

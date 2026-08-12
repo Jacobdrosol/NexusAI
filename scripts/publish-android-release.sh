@@ -25,4 +25,4 @@ docker run --rm --user "$(id -u):$(id -g)" \
   "$ANDROID_BUILD_IMAGE" sh ./gradlew :app:assembleRelease
 mkdir -p "$RELEASE_DIR"
 cp android/app/build/outputs/apk/release/app-release.apk "$RELEASE_DIR/nexusai.apk"
-printf '{"version_code":%s,"minimum_version_code":1,"release_url":"https://chat.globeiq.org/releases/nexusai.apk"}\n' "$VERSION_CODE" > "$MANIFEST"
+printf '{"version_code":%s,"minimum_version_code":1,"release_url":"https://example.com/releases/nexusai.apk"}\n' "$VERSION_CODE" > "$MANIFEST"
