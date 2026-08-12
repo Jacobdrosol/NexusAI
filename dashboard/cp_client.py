@@ -1026,6 +1026,54 @@ class CPClient:
             {"enabled": bool(enabled), "profile_id": profile_id or "default"},
         )
 
+    def list_memory_profiles(self, user_id: str, enabled_only: bool = False) -> Optional[Dict[str, Any]]:
+        params = f"?user_id={user_id}"
+        if enabled_only:
+            params += "&enabled_only=true"
+        return self._get(f"/v1/chat/memory-profiles{params}")
+
+    def create_memory_profile(
+        self,
+        user_id: str,
+        *,
+        profile_id: str,
+        name: str,
+        description: Optional[str] = None,
+        source: str = "manual",
+        enabled: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {
+            "user_id": user_id,
+            "profile_id": profile_id,
+            "name": name,
+            "source": source,
+            "enabled": enabled,
+        }
+        if description:
+            body["description"] = description
+        return self._post("/v1/chat/memory-profiles", body)
+
+    def update_memory_profile(
+        self,
+        user_id: str,
+        profile_id: str,
+        *,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        enabled: Optional[bool] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {"user_id": user_id}
+        if name is not None:
+            body["name"] = name
+        if description is not None:
+            body["description"] = description
+        if enabled is not None:
+            body["enabled"] = enabled
+        return self._put(f"/v1/chat/memory-profiles/{profile_id}", body)
+
+    def delete_memory_profile(self, user_id: str, profile_id: str) -> Optional[Dict[str, Any]]:
+        return self._request("DELETE", f"/v1/chat/memory-profiles/{profile_id}?user_id={user_id}")
+
     def update_conversation_route_defaults(
         self,
         conversation_id: str,

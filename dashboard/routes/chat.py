@@ -1383,6 +1383,20 @@ def _current_memory_user_id() -> str | None:
     return value or None
 
 
+def _memory_profiles_for_user(cp: Any) -> list[dict[str, Any]]:
+    user_id = _current_memory_user_id()
+    if not user_id:
+        return []
+    try:
+        result = cp.list_memory_profiles(user_id=user_id)
+    except Exception:
+        return []
+    if not isinstance(result, dict):
+        return []
+    profiles = result.get("profiles")
+    return [p for p in profiles if isinstance(p, dict)] if isinstance(profiles, list) else []
+
+
 def _json_safe(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -2056,6 +2070,7 @@ def chat_page() -> str:
                 "max_inline_bytes": CHAT_ATTACHMENT_MAX_INLINE_BYTES,
                 "max_total_bytes": CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
             },
+            memory_profiles=_memory_profiles_for_user(cp),
             error=page_error,
         )
     except Exception:

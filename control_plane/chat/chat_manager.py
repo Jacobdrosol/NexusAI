@@ -117,6 +117,26 @@ CREATE TABLE IF NOT EXISTS memory_profile_items (
 )
 """
 
+_CREATE_MEMORY_PROFILES = """
+CREATE TABLE IF NOT EXISTS memory_profiles (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    source TEXT NOT NULL DEFAULT 'manual',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    metadata TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, id)
+)
+"""
+
+_CREATE_MEMORY_PROFILES_USER_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_memory_profiles_user
+ON memory_profiles(user_id, created_at)
+"""
+
 _CREATE_MEMORY_PROFILE_USER_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_memory_profile_items_user_profile
 ON memory_profile_items(user_id, profile_id, created_at)
@@ -160,6 +180,8 @@ class ChatManager:
                 await db.execute(_CREATE_MESSAGE_MEMORY_MESSAGE_INDEX)
                 await db.execute(_CREATE_MEMORY_PROFILE_ITEMS)
                 await db.execute(_CREATE_MEMORY_PROFILE_USER_INDEX)
+                await db.execute(_CREATE_MEMORY_PROFILES)
+                await db.execute(_CREATE_MEMORY_PROFILES_USER_INDEX)
                 await db.execute(_CREATE_CONVERSATIONS_ARCHIVED_UPDATED_INDEX)
                 await self._ensure_conversation_columns(db)
                 await self._ensure_memory_profile_item_columns(db)
@@ -918,6 +940,181 @@ class ChatManager:
                 cursor = await db.execute(
                     "DELETE FROM memory_profile_items WHERE id = ? AND user_id = ?",
                     (normalized_item_id, normalized_user_id),
+                )
+                await db.commit()
+                return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
+    #  Memory profile CRUD (named profiles)
+    # ------------------------------------------------------------------
+
+    def _memory_profile_record_to_dict(self, row: aiosqlite.Row) -> Dict[str, Any]:
+        metadata = None
+        if row["metadata"]:
+            try:
+                metadata = json.loads(row["metadata"])
+            except Exception:
+                metadata = None
+        return {
+            "id": row["id"],
+            "user_id": row["user_id"],
+            "name": row["name"],
+            "description": row["description"],
+            "source": row["source"],
+            "enabled": bool(row["enabled"]),
+            "metadata": metadata,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"] or row["created_at"],
+        }
+
+    async def create_memory_profile(
+        self,
+        *,
+        user_id: str,
+        profile_id: str,
+        name: str,
+        description: Optional[str] = None,
+        source: str = "manual",
+        enabled: bool = True,
+        metadata: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "").strip()
+        normalized_name = str(name or "").strip()
+        if not normalized_user_id:
+            raise ValueError("user_id is required")
+        if not normalized_profile_id:
+            raise ValueError("profile_id is required")
+        if not normalized_name:
+            raise ValueError("name is required")
+        now = datetime.now(timezone.utc).isoformat()
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                await db.execute(
+                    """
+                    INSERT INTO memory_profiles (
+                        id, user_id, name, description, source, enabled, metadata, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, id) DO UPDATE SET
+                        name = excluded.name,
+                        description = excluded.description,
+                        source = excluded.source,
+                        enabled = excluded.enabled,
+                        metadata = excluded.metadata,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        normalized_profile_id,
+                        normalized_user_id,
+                        normalized_name,
+                        str(description or "").strip() or None,
+                        str(source or "manual").strip() or "manual",
+                        1 if enabled else 0,
+                        json.dumps(metadata) if metadata is not None else None,
+                        now,
+                        now,
+                    ),
+                )
+                await db.commit()
+        return await self.get_memory_profile(user_id=normalized_user_id, profile_id=normalized_profile_id)  # type: ignore[return-value]
+
+    async def get_memory_profile(
+        self, *, user_id: str, profile_id: str
+    ) -> Optional[Dict[str, Any]]:
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "default").strip() or "default"
+        if not normalized_user_id:
+            return None
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM memory_profiles WHERE user_id = ? AND id = ?",
+                (normalized_user_id, normalized_profile_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+        return self._memory_profile_record_to_dict(row) if row else None
+
+    async def list_memory_profiles(
+        self, *, user_id: str, enabled_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            return []
+        clause = "user_id = ?"
+        params: List[Any] = [normalized_user_id]
+        if enabled_only:
+            clause += " AND enabled = 1"
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"SELECT * FROM memory_profiles WHERE {clause} ORDER BY created_at ASC",
+                params,
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [self._memory_profile_record_to_dict(r) for r in rows]
+
+    async def update_memory_profile(
+        self,
+        *,
+        user_id: str,
+        profile_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        metadata: Optional[Any] = None,
+    ) -> Optional[Dict[str, Any]]:
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "").strip()
+        if not normalized_user_id or not normalized_profile_id:
+            return None
+        sets: List[str] = []
+        params: List[Any] = []
+        if name is not None:
+            sets.append("name = ?")
+            params.append(str(name).strip())
+        if description is not None:
+            sets.append("description = ?")
+            params.append(str(description).strip() or None)
+        if enabled is not None:
+            sets.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if metadata is not None:
+            sets.append("metadata = ?")
+            params.append(json.dumps(metadata))
+        if not sets:
+            return await self.get_memory_profile(user_id=normalized_user_id, profile_id=normalized_profile_id)
+        sets.append("updated_at = ?")
+        params.append(datetime.now(timezone.utc).isoformat())
+        params.extend([normalized_user_id, normalized_profile_id])
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                await db.execute(
+                    f"UPDATE memory_profiles SET {', '.join(sets)} WHERE user_id = ? AND id = ?",
+                    params,
+                )
+                await db.commit()
+        return await self.get_memory_profile(user_id=normalized_user_id, profile_id=normalized_profile_id)
+
+    async def delete_memory_profile(self, *, user_id: str, profile_id: str) -> bool:
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "").strip()
+        if not normalized_user_id or not normalized_profile_id:
+            return False
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                await db.execute(
+                    "DELETE FROM memory_profile_items WHERE user_id = ? AND profile_id = ?",
+                    (normalized_user_id, normalized_profile_id),
+                )
+                cursor = await db.execute(
+                    "DELETE FROM memory_profiles WHERE user_id = ? AND id = ?",
+                    (normalized_user_id, normalized_profile_id),
                 )
                 await db.commit()
                 return cursor.rowcount > 0

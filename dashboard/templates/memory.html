@@ -13,6 +13,43 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Memory Profiles</h2>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+    <div>
+      <div class="form-group">
+        <label>Select Profile</label>
+        <select class="form-control" id="memory-profile-select" onchange="switchMemoryProfile()">
+          {% for p in profiles %}
+          <option value="{{ p.id }}" {% if p.id == profile_id %}selected{% endif %}>{{ p.name }} ({{ p.id }})</option>
+          {% endfor %}
+          <option value="default" {% if profile_id == 'default' and not profiles %}selected{% endif %}>default</option>
+        </select>
+      </div>
+      <div class="mini-note" style="margin-bottom:0.5rem;">
+        Memory is scoped to your account. Each profile is a separate memory store; conversations select which profile to use.
+      </div>
+    </div>
+    <div>
+      <div class="form-group">
+        <label>New Profile ID</label>
+        <input class="form-control" id="memory-profile-new-id" placeholder="physics-research" maxlength="120">
+      </div>
+      <div class="form-group">
+        <label>New Profile Name</label>
+        <input class="form-control" id="memory-profile-new-name" placeholder="Physics Research" maxlength="200">
+      </div>
+      <div class="form-group">
+        <label>Description (optional)</label>
+        <input class="form-control" id="memory-profile-new-desc" placeholder="Research context for physics discussions" maxlength="500">
+      </div>
+      <button class="btn btn-primary" type="button" onclick="createMemoryProfile()">Create Profile</button>
+    </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Add Memory</h2>
     <span class="badge badge-info">{{ profile_id }}</span>
   </div>
@@ -107,6 +144,37 @@ function setMemoryState(cls, text) {
   el.textContent = text;
 }
 
+function currentProfileId() {
+  const sel = document.getElementById('memory-profile-select');
+  return sel ? (sel.value || MEMORY_PROFILE_ID || 'default') : (MEMORY_PROFILE_ID || 'default');
+}
+
+function switchMemoryProfile() {
+  const profileId = currentProfileId();
+  window.location.href = '/memory?profile_id=' + encodeURIComponent(profileId);
+}
+
+async function createMemoryProfile() {
+  const profileId = String(document.getElementById('memory-profile-new-id')?.value || '').trim();
+  const name = String(document.getElementById('memory-profile-new-name')?.value || '').trim();
+  const description = String(document.getElementById('memory-profile-new-desc')?.value || '').trim();
+  if (!profileId || !name) {
+    setMemoryState('state-error', 'Profile ID and name are required.');
+    return;
+  }
+  const res = await fetch('/api/memory/profiles', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({profile_id: profileId, name, description: description || null}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setMemoryState('state-error', data.error || 'Failed to create memory profile.');
+    return;
+  }
+  window.location.href = '/memory?profile_id=' + encodeURIComponent(profileId);
+}
+
 function rowHtml(item) {
   const role = String(item.role || 'user') === 'assistant' ? 'assistant' : 'user';
   const id = String(item.id || '');
@@ -161,7 +229,8 @@ function escapeJs(value) {
 
 async function loadMemoryItems() {
   const query = String(document.getElementById('memory-search')?.value || '').trim();
-  const url = '/api/memory/items?limit=200' + (query ? '&query=' + encodeURIComponent(query) : '');
+  const profileId = currentProfileId();
+  const url = '/api/memory/items?limit=200&profile_id=' + encodeURIComponent(profileId) + (query ? '&query=' + encodeURIComponent(query) : '');
   setMemoryState('state-loading', 'Loading memory items...');
   const res = await fetch(url);
   const data = await res.json().catch(() => ({}));
@@ -188,6 +257,7 @@ function clearMemorySearch() {
 async function createMemoryItem() {
   const content = String(document.getElementById('memory-create-content')?.value || '').trim();
   const role = String(document.getElementById('memory-create-role')?.value || 'user');
+  const profileId = currentProfileId();
   if (!content) {
     setMemoryState('state-error', 'Content is required.');
     return;
@@ -195,7 +265,7 @@ async function createMemoryItem() {
   const res = await fetch('/api/memory/items', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
-    body: JSON.stringify({content, role}),
+    body: JSON.stringify({content, role, profile_id: profileId}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -212,6 +282,7 @@ async function saveMemoryItem(id) {
   if (!row) return;
   const content = String(row.querySelector('.memory-content')?.value || '').trim();
   const role = String(row.querySelector('.memory-role')?.value || 'user');
+  const profileId = currentProfileId();
   if (!content) {
     setMemoryState('state-error', 'Content is required.');
     return;
@@ -219,7 +290,7 @@ async function saveMemoryItem(id) {
   const res = await fetch('/api/memory/items/' + encodeURIComponent(id), {
     method: 'PUT',
     headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
-    body: JSON.stringify({content, role}),
+    body: JSON.stringify({content, role, profile_id: profileId}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -246,9 +317,5 @@ async function deleteMemoryItem(id) {
 document.getElementById('memory-search')?.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') loadMemoryItems();
 });
-
-// Future expansion: this page currently manages the user's default profile only.
-// Add the profile selector here when multiple memory profiles have storage and import flows.
-void MEMORY_PROFILE_ID;
 </script>
 {% endblock %}

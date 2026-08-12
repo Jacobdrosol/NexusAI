@@ -826,7 +826,13 @@
         <input type="checkbox" id="chat-memory-enabled" {% if selected_conversation.memory_profiles_enabled %}checked{% endif %}>
         <span>Allow this chat to use and build my memory profile</span>
       </label>
-      <input class="form-control" id="chat-memory-profile-id" value="{{ selected_conversation.memory_profile_id or 'default' }}" aria-label="Memory profile id">
+      <input class="form-control" id="chat-memory-profile-id" list="memory-profile-options" value="{{ selected_conversation.memory_profile_id or 'default' }}" aria-label="Memory profile id">
+      <datalist id="memory-profile-options">
+        <option value="default"></option>
+        {% for p in memory_profiles or [] %}
+        <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
+        {% endfor %}
+      </datalist>
       <div class="chat-tool-save-wrap"><button type="button" class="btn btn-sm" onclick="saveConversationMemoryProfile()">Save memory</button></div>
       <p class="mini-note">Memory is used only when this chat, the selected bot, and the scoped project all allow it. Unscoped chats ignore the project gate.</p>
     </div>
