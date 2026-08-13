@@ -1305,6 +1305,20 @@ class CPClient:
             body,
         )
 
+    def refine_orchestration_plan(
+        self, conversation_id: str, orchestration_id: str, feedback: str
+    ) -> Optional[Dict[str, Any]]:
+        return self._post(
+            f"/v1/chat/conversations/{conversation_id}/orchestrations/{orchestration_id}/refine-plan",
+            {"feedback": feedback},
+        )
+
+    def list_project_ticket_overview(self, project_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/ticket-sources/overview")
+
+    def list_orchestration_runs(self, project_id: str, limit: int = 100) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/orchestration/runs?project_id={project_id}&limit={limit}")
+
     def list_pending_plan_approvals(
         self, project_id: Optional[str] = None, limit: int = 100
     ) -> Optional[Dict[str, Any]]:

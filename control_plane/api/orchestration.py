@@ -181,6 +181,26 @@ async def compile_run_contract(request: Request, body: CompileRunContractRequest
 # ---------------------------------------------------------------------------
 
 
+@router.get("/runs")
+async def list_orchestration_runs(
+    request: Request,
+    project_id: Optional[str] = None,
+    state: Optional[str] = None,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """List orchestration runs, optionally filtered by project and/or state."""
+    run_store = getattr(request.app.state, "orchestration_run_store", None)
+    if run_store is None:
+        raise HTTPException(status_code=503, detail="orchestration run store not available")
+    limit = max(1, min(int(limit or 100), 200))
+    runs = await run_store.list_runs(
+        state=state,
+        project_id=project_id,
+        limit=limit,
+    )
+    return {"count": len(runs), "runs": runs}
+
+
 @router.post("/runs/{run_id}/cancel")
 async def cancel_orchestration_run(
     run_id: str,

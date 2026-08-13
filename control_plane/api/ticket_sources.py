@@ -142,6 +142,23 @@ async def _get_credential_value(request: Request, key_ref: Optional[str]) -> Opt
 #  Endpoints
 # ---------------------------------------------------------------------------
 
+@router.get("/{project_id}/ticket-sources/overview")
+async def ticket_sources_overview(request: Request, project_id: str, limit: int = 100) -> Dict[str, Any]:
+    """Aggregate all ticket sources + their items for a project.
+
+    Used by the Ticket Hub dashboard to render a single project-wide view
+    of tickets and their lifecycle state in one request.
+    """
+    store = _get_store(request)
+    sources = await store.list_sources(project_id=project_id)
+    limit = max(1, min(int(limit or 100), 500))
+    aggregated: List[Dict[str, Any]] = []
+    for source in sources:
+        source["item_count"] = await store.count_items(source["id"])
+        items = await store.list_items(source["id"], limit=limit)
+        aggregated.append({**source, "items": items})
+    return {"project_id": project_id, "sources": aggregated}
+
 @router.get("/{project_id}/ticket-sources")
 async def list_ticket_sources(request: Request, project_id: str) -> Dict[str, Any]:
     store = _get_store(request)

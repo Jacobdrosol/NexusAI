@@ -1,0 +1,336 @@
+{% extends "base.html" %}
+{% set active_page = "ticket_hub" %}
+{% block title %}Ticket Hub – {{ project_id }}{% endblock %}
+{% block content %}
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.75rem;margin-bottom:1.5rem;">
+  <div>
+    <h1>Ticket Hub</h1>
+    <p class="mini-note">Project-wide view of tickets, plans, approvals, and running work for <code>{{ project_id }}</code></p>
+  </div>
+  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+    <select class="form-control" id="hub-project-select" onchange="switchProject()" style="width:auto;">
+      {% for p in projects %}
+      <option value="{{ p.id }}" {% if p.id == project_id %}selected{% endif %}>{{ p.name }} ({{ p.id }})</option>
+      {% endfor %}
+    </select>
+    <a href="{{ url_for('ticket_sources.ticket_sources_page', project_id=project_id) }}" class="btn btn-sm">Manage Sources</a>
+    <a href="{{ url_for('projects.project_detail_page', project_id=project_id) }}" class="btn btn-sm">Back to Project</a>
+  </div>
+</div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+<div id="hub-state" class="state-info" style="margin-bottom:0.75rem;">Loading ticket hub…</div>
+
+<div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem; margin-bottom:1rem;">
+  <section class="panel">
+    <h2 class="panel-title">Tickets</h2>
+    <div class="mini-note" style="margin-bottom:0.5rem;">All tickets across this project's sources. Assign a manager bot, dispatch, or reassign.</div>
+    <div id="hub-tickets" class="table-scroll" style="max-height:28rem; overflow:auto;"></div>
+  </section>
+  <section class="panel">
+    <h2 class="panel-title">Plans Awaiting Approval</h2>
+    <div class="mini-note" style="margin-bottom:0.5rem;">Plans held for your review. Approve, reject, or send feedback to refine.</div>
+    <div id="hub-plans" style="max-height:28rem; overflow:auto;"></div>
+  </section>
+</div>
+
+<section class="panel">
+  <h2 class="panel-title">Orchestration Runs</h2>
+  <div class="mini-note" style="margin-bottom:0.5rem;">Running and recent work for this project. Open a run to view its DAG.</div>
+  <div id="hub-runs" class="table-scroll" style="max-height:24rem; overflow:auto;"></div>
+</section>
+
+<!-- Plan detail modal -->
+<div id="modal-plan" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:900px;max-height:90vh;overflow-y:auto;">
+    <h2 id="plan-modal-title">Plan</h2>
+    <div id="plan-modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="hidePlanModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Refine modal -->
+<div id="modal-refine" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:640px;">
+    <h2>Refine Plan</h2>
+    <p class="mini-note" style="margin-bottom:0.75rem;">Send feedback to the planning bot. It will revise the plan and re-hold it for your approval.</p>
+    <div class="form-group">
+      <label>Feedback</label>
+      <textarea class="form-control" id="refine-feedback" rows="5" maxlength="4000" placeholder="e.g. The acceptance criteria are too vague; add explicit edge cases and a performance target."></textarea>
+    </div>
+    <div id="refine-state" class="state-empty" style="margin-bottom:0.75rem;"></div>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="hideRefineModal()">Cancel</button>
+      <button class="btn btn-primary" type="button" onclick="submitRefine()">Send Feedback</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PROJECT_ID = {{ project_id | tojson }};
+const MANAGER_BOTS = {{ (manager_bots or []) | map(attribute='id') | list | tojson }};
+let HUB_OVERVIEW = null;
+let HUB_RUNS = null;
+let ACTIVE_PLAN = null;
+
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+function esc(value) {
+  if (value == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(value);
+  return d.innerHTML;
+}
+
+function setHubState(cls, text) {
+  const el = document.getElementById('hub-state');
+  if (el) { el.className = cls; el.textContent = text; }
+}
+
+function switchProject() {
+  const sel = document.getElementById('hub-project-select');
+  if (sel) window.location.href = '/projects/' + encodeURIComponent(sel.value) + '/ticket-hub';
+}
+
+function statusBadge(status) {
+  switch (status) {
+    case 'pending': return '<span class="badge badge-queued">pending</span>';
+    case 'ignored': return '<span class="badge badge-muted">ignored</span>';
+    case 'assigned': return '<span class="badge badge-running">assigned</span>';
+    case 'done': return '<span class="badge badge-completed">done</span>';
+    default: return '<span class="badge badge-unknown">' + esc(status || '?') + '</span>';
+  }
+}
+
+function managerSelect(externalId, current) {
+  let html = '<select class="form-control" style="display:inline-block;width:auto;padding:0.2rem 0.4rem;font-size:0.8rem;" id="mgr-' + esc(externalId) + '">';
+  html += '<option value="">(unassigned)</option>';
+  for (const mid of MANAGER_BOTS) {
+    html += '<option value="' + esc(mid) + '"' + (current === mid ? ' selected' : '') + '>' + esc(mid) + '</option>';
+  }
+  html += '</select>';
+  return html;
+}
+
+function renderTickets() {
+  const wrap = document.getElementById('hub-tickets');
+  if (!wrap) return;
+  const sources = (HUB_OVERVIEW && HUB_OVERVIEW.sources) || [];
+  const rows = [];
+  for (const source of sources) {
+    const items = source.items || [];
+    for (const item of items) {
+      const isPending = (item.status || 'pending') === 'pending';
+      const isIgnored = (item.status || 'pending') === 'ignored';
+      let actions = '';
+      actions += managerSelect(item.external_id, item.manager_bot_id) + ' ';
+      if (isPending || isIgnored) {
+        actions += '<button class="btn btn-sm btn-primary" onclick="dispatchTicket(\'' + esc(source.id) + '\',\'' + esc(item.external_id) + '\')">Dispatch</button> ';
+      }
+      if (isPending) {
+        actions += '<button class="btn btn-sm" onclick="setTicketStatus(\'' + esc(source.id) + '\',\'' + esc(item.external_id) + '\',\'ignored\')">Ignore</button> ';
+      }
+      if (isIgnored) {
+        actions += '<button class="btn btn-sm" onclick="setTicketStatus(\'' + esc(source.id) + '\',\'' + esc(item.external_id) + '\',\'pending\')">Restore</button> ';
+      }
+      rows.push(
+        '<tr>'
+        + '<td><code>' + esc(item.external_id) + '</code></td>'
+        + '<td>' + (item.url ? '<a href="' + esc(item.url) + '" target="_blank">' + esc(item.title) + '</a>' : esc(item.title)) + '</td>'
+        + '<td>' + statusBadge(item.status || 'pending') + '</td>'
+        + '<td>' + (item.manager_bot_id ? '<code>' + esc(item.manager_bot_id) + '</code>' : '<span style="color:var(--muted);">—</span>') + '</td>'
+        + '<td>' + (item.task_id ? '<a href="/tasks/' + encodeURIComponent(item.task_id) + '">Linked</a>' : '<span style="color:var(--muted);">—</span>') + '</td>'
+        + '<td style="white-space:nowrap;">' + actions + '</td>'
+        + '</tr>'
+      );
+    }
+  }
+  wrap.innerHTML = rows.length
+    ? '<table><thead><tr><th>#</th><th>Title</th><th>Status</th><th>Manager</th><th>Task</th><th>Actions</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>'
+    : '<div class="empty">No tickets found for this project.</div>';
+}
+
+function renderPlans() {
+  const wrap = document.getElementById('hub-plans');
+  if (!wrap) return;
+  const runs = (HUB_RUNS && HUB_RUNS.runs) || [];
+  const pending = runs.filter(r => (r.state || r.orch_state || '') === 'plan_pending_approval');
+  if (!pending.length) {
+    wrap.innerHTML = '<div class="empty">No plans awaiting approval.</div>';
+    return;
+  }
+  wrap.innerHTML = pending.map(r => {
+    const meta = r.metadata || {};
+    const plan = meta.plan_approval_plan || {};
+    const steps = Array.isArray(plan.steps) ? plan.steps : [];
+    const stepSummary = steps.length ? steps.length + ' step(s)' : 'no steps';
+    return '<div class="list-item" style="display:block;margin-bottom:0.5rem;padding:0.6rem;border:1px solid var(--line);border-radius:6px;">'
+      + '<div><strong>' + esc(r.instruction || r.orchestration_id) + '</strong></div>'
+      + '<div class="mini-note">' + esc(r.pm_bot_id || '') + ' · <code>' + esc((r.orchestration_id || '').slice(0,8)) + '…</code> · ' + stepSummary + '</div>'
+      + '<div style="margin-top:0.5rem;">'
+      + '<button class="btn btn-sm" onclick="viewPlan(\'' + esc(r.conversation_id || '') + '\',\'' + esc(r.orchestration_id || '') + '\')">View Plan</button> '
+      + '<button class="btn btn-sm" onclick="openRefine(\'' + esc(r.conversation_id || '') + '\',\'' + esc(r.orchestration_id || '') + '\')">Refine</button> '
+      + '<button class="btn btn-sm btn-primary" onclick="approvePlan(\'' + esc(r.conversation_id || '') + '\',\'' + esc(r.orchestration_id || '') + '\')">Approve</button> '
+      + '<button class="btn btn-sm btn-danger" onclick="rejectPlan(\'' + esc(r.conversation_id || '') + '\',\'' + esc(r.orchestration_id || '') + '\')">Reject</button> '
+      + '</div></div>';
+  }).join('');
+}
+
+function renderRuns() {
+  const wrap = document.getElementById('hub-runs');
+  if (!wrap) return;
+  const runs = (HUB_RUNS && HUB_RUNS.runs) || [];
+  if (!runs.length) {
+    wrap.innerHTML = '<div class="empty">No orchestration runs for this project.</div>';
+    return;
+  }
+  wrap.innerHTML = '<table><thead><tr><th>Orchestration</th><th>PM Bot</th><th>State</th><th>Updated</th><th>Actions</th></tr></thead><tbody>'
+    + runs.map(r => {
+      const state = r.state || r.orch_state || 'unknown';
+      return '<tr>'
+        + '<td><code>' + esc((r.orchestration_id || r.id || '').slice(0,12)) + '…</code></td>'
+        + '<td>' + esc(r.pm_bot_id || '') + '</td>'
+        + '<td><span class="badge badge-' + esc(state) + '">' + esc(state) + '</span></td>'
+        + '<td>' + esc((r.updated_at || '').slice(0,19).replace('T',' ')) + '</td>'
+        + '<td>' + (r.conversation_id ? '<a class="btn btn-sm" href="/chat?conversation_id=' + encodeURIComponent(r.conversation_id) + '">Open Chat</a>' : '') + '</td>'
+        + '</tr>';
+    }).join('')
+    + '</tbody></table>';
+}
+
+async function loadHub() {
+  setHubState('state-loading', 'Loading ticket hub…');
+  const [overviewRes, runsRes] = await Promise.all([
+    fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-hub/overview'),
+    fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-hub/runs'),
+  ]);
+  HUB_OVERVIEW = await overviewRes.json().catch(() => ({}));
+  HUB_RUNS = await runsRes.json().catch(() => ({}));
+  if (!overviewRes.ok || !runsRes.ok) {
+    setHubState('state-error', 'Failed to load ticket hub data.');
+    return;
+  }
+  setHubState('state-ok', 'Ticket hub loaded.');
+  renderTickets();
+  renderPlans();
+  renderRuns();
+}
+
+async function dispatchTicket(sourceId, externalId) {
+  const sel = document.getElementById('mgr-' + externalId);
+  const manager = sel ? sel.value : '';
+  if (!manager) { alert('Assign a manager bot first.'); return; }
+  if (!confirm('Dispatch ticket ' + externalId + ' to ' + manager + '?')) return;
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-hub/items/' + encodeURIComponent(sourceId) + '/' + encodeURIComponent(externalId) + '/dispatch', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body: JSON.stringify({manager_bot_id: manager}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { alert(data.error || 'Dispatch failed'); return; }
+  alert('Dispatched. Orchestration: ' + (data.orchestration_id || 'n/a'));
+  loadHub();
+}
+
+async function setTicketStatus(sourceId, externalId, status) {
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-hub/items/' + encodeURIComponent(sourceId) + '/' + encodeURIComponent(externalId), {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body: JSON.stringify({status}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { alert(data.error || 'Update failed'); return; }
+  loadHub();
+}
+
+function hidePlanModal() { document.getElementById('modal-plan').style.display = 'none'; }
+
+async function viewPlan(conversationId, orchestrationId) {
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-hub/plan?conversation_id=' + encodeURIComponent(conversationId) + '&orchestration_id=' + encodeURIComponent(orchestrationId));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { alert(data.error || 'Failed to load plan'); return; }
+  ACTIVE_PLAN = data;
+  document.getElementById('plan-modal-title').textContent = 'Plan – ' + orchestrationId.slice(0,8);
+  const plan = data.plan || {};
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  let html = '<div class="mini-note" style="margin-bottom:0.75rem;">State: <code>' + esc(data.state || '') + '</code> · Revision: ' + esc(data.plan_revision || 0) + '</div>';
+  if (data.instruction) html += '<div class="mini-note" style="margin-bottom:0.75rem;"><strong>Instruction:</strong> ' + esc(data.instruction) + '</div>';
+  if (steps.length) {
+    html += '<table><thead><tr><th>Step</th><th>Bot</th><th>Kind</th><th>Depends</th></tr></thead><tbody>';
+    for (const s of steps) {
+      html += '<tr><td><code>' + esc(s.id || s.step_id || '') + '</code></td><td>' + esc(s.bot_id || '') + '</td><td>' + esc(s.step_kind || '') + '</td><td>' + esc((s.depends_on || []).join(', ')) + '</td></tr>';
+    }
+    html += '</tbody></table>';
+  } else {
+    html += '<pre style="white-space:pre-wrap;">' + esc(JSON.stringify(plan, null, 2)) + '</pre>';
+  }
+  document.getElementById('plan-modal-body').innerHTML = html;
+  document.getElementById('modal-plan').style.display = 'flex';
+}
+
+function openRefine(conversationId, orchestrationId) {
+  ACTIVE_PLAN = {conversation_id: conversationId, orchestration_id: orchestrationId};
+  document.getElementById('refine-feedback').value = '';
+  const state = document.getElementById('refine-state');
+  if (state) { state.className = 'state-empty'; state.textContent = ''; }
+  document.getElementById('modal-refine').style.display = 'flex';
+}
+
+function hideRefineModal() { document.getElementById('modal-refine').style.display = 'none'; }
+
+async function submitRefine() {
+  const feedback = String(document.getElementById('refine-feedback')?.value || '').trim();
+  const state = document.getElementById('refine-state');
+  if (!feedback) { if (state) { state.className = 'state-error'; state.textContent = 'Feedback is required.'; } return; }
+  if (!ACTIVE_PLAN) return;
+  if (state) { state.className = 'state-loading'; state.textContent = 'Sending feedback…'; }
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-hub/plan/refine', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body: JSON.stringify({conversation_id: ACTIVE_PLAN.conversation_id, orchestration_id: ACTIVE_PLAN.orchestration_id, feedback}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { if (state) { state.className = 'state-error'; state.textContent = data.error || 'Refine failed'; } return; }
+  if (state) { state.className = 'state-info'; state.textContent = 'Feedback sent. Revision ' + (data.revision || '?') + ' requested.'; }
+  hideRefineModal();
+  loadHub();
+}
+
+async function approvePlan(conversationId, orchestrationId) {
+  if (!confirm('Approve this plan and start execution?')) return;
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-hub/plan/approve', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body: JSON.stringify({conversation_id: conversationId, orchestration_id: orchestrationId}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { alert(data.error || 'Approve failed'); return; }
+  alert('Plan approved.');
+  loadHub();
+}
+
+async function rejectPlan(conversationId, orchestrationId) {
+  const reason = prompt('Reason for rejection (optional):') || '';
+  if (reason === null) return;
+  if (!confirm('Reject this plan? This cancels the orchestration.')) return;
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/ticket-hub/plan/reject', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken':getCsrf()},
+    body: JSON.stringify({conversation_id: conversationId, orchestration_id: orchestrationId, reason: reason || null}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { alert(data.error || 'Reject failed'); return; }
+  alert('Plan rejected.');
+  loadHub();
+}
+
+loadHub();
+</script>
+{% endblock %}
