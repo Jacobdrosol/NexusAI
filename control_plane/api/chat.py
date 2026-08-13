@@ -23,6 +23,7 @@ from control_plane.chat.workspace_tools import (
 )
 from control_plane.chat.web_search import resolve_web_context_items, should_search_web
 from control_plane.audit.utils import record_audit_event
+from control_plane.plan_qc import extract_handoff_map, validate_plan_structure
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.chat_attachments import (
     CHAT_ATTACHMENT_MAX_FILES,
@@ -4741,12 +4742,85 @@ class PlanDecisionBody(BaseModel):
     reason: Optional[str] = None
 
 
+class PlanRefineBody(BaseModel):
+    feedback: str
+
+
+@router.post("/conversations/{conversation_id}/orchestrations/{orchestration_id}/refine-plan")
+async def refine_plan(conversation_id: str, orchestration_id: str, request: Request, body: PlanRefineBody) -> Dict[str, Any]:
+    task_manager = request.app.state.task_manager
+    run_store = getattr(request.app.state, "orchestration_run_store", None)
+    if run_store is None:
+        raise HTTPException(status_code=500, detail="orchestration_run_store not initialized")
+    feedback = str(body.feedback or "").strip()
+    if not feedback:
+        raise HTTPException(status_code=400, detail="feedback is required")
+    try:
+        result = await task_manager.refine_plan(orchestration_id, feedback=feedback, actor="operator")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    await record_audit_event(
+        request,
+        action="chat.orchestrations.plan.refine",
+        resource=f"conversation:{conversation_id}/orchestration:{orchestration_id}",
+        details={"revision": result.get("revision"), "feedback_preview": feedback[:120]},
+    )
+    return result
+
+
 @router.post("/conversations/{conversation_id}/orchestrations/{orchestration_id}/approve-plan")
 async def approve_plan(conversation_id: str, orchestration_id: str, request: Request, body: Optional[PlanDecisionBody] = None) -> Dict[str, Any]:
     task_manager = request.app.state.task_manager
     run_store = getattr(request.app.state, "orchestration_run_store", None)
     if run_store is None:
         raise HTTPException(status_code=500, detail="orchestration_run_store not initialized")
+
+    # Run deterministic QC on the plan before approval.
+    qc_report = None
+    handoff_map = None
+    try:
+        run = await run_store.get_run_by_orchestration(orchestration_id)
+        if run is not None:
+            metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+            plan = metadata.get("plan_approval_plan")
+            if isinstance(plan, dict):
+                allowed_bot_ids = None
+                root_task_id = str(metadata.get("plan_approval_root_task_id") or "").strip()
+                if root_task_id:
+                    try:
+                        root_task = await task_manager.get_task(root_task_id)
+                        root_allowed = (getattr(root_task.metadata, "allowed_bot_ids", None) or []) if getattr(root_task.metadata, "allowed_bot_ids", None) else []
+                        allowed_bot_ids = [str(b) for b in root_allowed] or None
+                    except Exception:
+                        allowed_bot_ids = None
+                try:
+                    qc_report = validate_plan_structure(plan, allowed_bot_ids=allowed_bot_ids)
+                except Exception as exc:
+                    qc_report = {"ok": False, "errors": [str(exc)], "warnings": [], "step_count": 0, "bot_ids": []}
+                if qc_report and not qc_report["ok"]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "reason_code": "plan_qc_failed",
+                            "message": "Plan failed deterministic QC; refine before approving.",
+                            "qc": qc_report,
+                        },
+                    )
+                handoff_map = extract_handoff_map(plan)
+                if handoff_map:
+                    await run_store.update_run_metadata(
+                        str(run.get("id") or ""),
+                        {"plan_handoff_map": handoff_map, "plan_qc": qc_report},
+                    )
+    except HTTPException:
+        raise
+    except Exception:
+        # QC failure must not block approval from proceeding with the existing
+        # gate semantics; log and continue.
+        logger.warning("plan qc pre-approval failed for %s", orchestration_id, exc_info=True)
+
     try:
         result = await task_manager.approve_plan(orchestration_id, actor="operator")
     except ValueError as e:
@@ -4757,8 +4831,12 @@ async def approve_plan(conversation_id: str, orchestration_id: str, request: Req
         request,
         action="chat.orchestrations.plan.approve",
         resource=f"conversation:{conversation_id}/orchestration:{orchestration_id}",
-        details={"reason": (body.reason if body else None)},
+        details={"reason": (body.reason if body else None), "qc": qc_report},
     )
+    if qc_report:
+        result["plan_qc"] = qc_report
+    if handoff_map:
+        result["plan_handoff"] = handoff_map
     return result
 
 

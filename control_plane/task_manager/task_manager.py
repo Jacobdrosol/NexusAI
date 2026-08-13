@@ -5272,6 +5272,93 @@ class TaskManager:
             "rejected": True,
         }
 
+    async def refine_plan(
+        self,
+        orchestration_id: str,
+        *,
+        feedback: str,
+        actor: str = "operator",
+    ) -> Dict[str, Any]:
+        """Request a plan revision from the PM bot based on operator feedback.
+
+        The orchestration must be in plan_pending_approval. A new PM planning
+        task is created carrying the original instruction, the current plan,
+        and the feedback. When it completes, the plan gate stores the revised
+        plan and re-holds for approval.
+        """
+        safe_id = str(orchestration_id or "").strip()
+        feedback = str(feedback or "").strip()
+        if not safe_id:
+            raise ValueError("orchestration_id required")
+        if not feedback:
+            raise ValueError("feedback is required")
+        if self._orchestration_run_store is None:
+            raise RuntimeError("orchestration_run_store not configured on TaskManager")
+
+        run = await self._orchestration_run_store.get_run_by_orchestration(safe_id)
+        if run is None:
+            raise ValueError(f"orchestration run not found: {safe_id}")
+
+        run_id = str(run.get("id") or "")
+        current_state = str(await self._orchestration_run_store.get_orch_state(run_id) or "")
+        if current_state != "plan_pending_approval":
+            raise ValueError(
+                f"orchestration {safe_id} is in state '{current_state}', not 'plan_pending_approval'"
+            )
+
+        metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+        root_task_id = str(metadata.get("plan_approval_root_task_id") or "").strip()
+        revision = int(metadata.get("plan_revision") or 0) + 1
+        current_plan = metadata.get("plan_approval_plan")
+        root_task = await self.get_task(root_task_id) if root_task_id else None
+        if root_task is None:
+            raise ValueError(f"no plan_approval_root_task_id recorded for orchestration {safe_id}")
+
+        payload = dict(root_task.payload or {})
+        payload["plan_revision"] = revision
+        payload["plan_feedback"] = feedback
+        payload["plan_approval_required"] = True
+        payload["existing_plan"] = current_plan if isinstance(current_plan, dict) else None
+        payload["instruction"] = (
+            f"Revise the current plan for this assignment based on operator feedback.\n\n"
+            f"Feedback: {feedback}\n\n"
+            f"Return a complete revised plan. Keep what still applies, change what the "
+            f"feedback requires, and preserve the required plan JSON shape."
+        )
+
+        revision_task = await self.create_task(
+            bot_id=str(payload.get("root_pm_bot_id") or root_task.bot_id or ""),
+            payload=payload,
+            metadata=TaskMetadata(
+                source="plan_revision",
+                project_id=getattr(root_task.metadata, "project_id", None),
+                conversation_id=getattr(root_task.metadata, "conversation_id", None),
+                orchestration_id=safe_id,
+                step_id="pm_plan_revision",
+                root_pm_bot_id=getattr(root_task.metadata, "root_pm_bot_id", None),
+            ),
+        )
+
+        await self._orchestration_run_store.update_run_metadata(
+            run_id,
+            {
+                "plan_revision": revision,
+                "plan_approval_root_task_id": revision_task.id,
+                "plan_feedback": feedback,
+            },
+        )
+        await self._orchestration_run_store.update_orch_state(
+            run_id, "running", reason="plan_revision_requested", actor=actor or "operator"
+        )
+
+        return {
+            "status": "ok",
+            "orchestration_id": safe_id,
+            "run_id": run_id,
+            "revision": revision,
+            "revision_task_id": revision_task.id,
+        }
+
     async def list_tasks(
         self,
         orchestration_id: Optional[str] = None,
@@ -8151,24 +8238,32 @@ class TaskManager:
 
         # Plan approval gate: if the root PM task has plan_approval_required in its
         # payload and it completed successfully, hold trigger dispatch for operator
-        # approval before child tasks are created.
+        # approval before child tasks are created. This applies both to the original
+        # assignment task and to plan_revision tasks (which re-hold with a revised plan).
+        plan_hold_task = (
+            (source == "chat_assign" and is_top_level_assignment_task)
+            or source == "plan_revision"
+            or (source == "auto_retry" and is_top_level_assignment_task and isinstance(task.payload, dict) and task.payload.get("plan_approval_required"))
+        )
         if (
-            is_plan_managed_orchestrated
+            plan_hold_task
             and task.status == "completed"
             and isinstance(task.payload, dict)
             and task.payload.get("plan_approval_required")
-            and is_top_level_assignment_task
         ):
             logger.info(
-                "[TRIGGER] Holding triggers for task=%s — plan_pending_approval (orchestration=%s)",
+                "[TRIGGER] Holding triggers for task=%s — plan_pending_approval (orchestration=%s, source=%s)",
                 task.id,
                 orchestration_id,
+                source,
             )
             if self._orchestration_run_store is not None:
                 try:
                     run = await self._orchestration_run_store.get_run_by_orchestration(orchestration_id)
                     if run is not None:
                         run_id = str(run.get("id") or "")
+                        revision = int((run.get("metadata") or {}).get("plan_revision") or 0)
+                        revision = int(task.payload.get("plan_revision") or revision) if isinstance(task.payload.get("plan_revision"), (int, str)) else revision
                         await self._orchestration_run_store.update_orch_state(
                             run_id, "plan_pending_approval",
                             reason="plan_approval_required",
@@ -8180,6 +8275,7 @@ class TaskManager:
                                 "plan_approval_required": True,
                                 "plan_approval_root_task_id": task.id,
                                 "plan_approval_plan": task.result if isinstance(task.result, dict) else {"result": task.result},
+                                "plan_revision": revision,
                             },
                         )
                 except Exception:
