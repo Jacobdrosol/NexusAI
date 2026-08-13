@@ -189,14 +189,10 @@ class ChatManager:
             self._db_ready = True
 
     def _embed(self, text: str, dims: int = 64) -> List[float]:
-        vec = [0.0] * dims
-        for token in text.lower().split():
-            digest = hashlib.sha256(token.encode("utf-8")).digest()
-            idx = int.from_bytes(digest[:2], "big") % dims
-            sign = 1.0 if (digest[2] % 2 == 0) else -1.0
-            vec[idx] += sign
-        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-        return [v / norm for v in vec]
+        """Embed text using the semantic embedding client (hash fallback)."""
+        from shared.embedding_client import embed_text
+
+        return embed_text(text)
 
     def _cosine(self, a: List[float], b: List[float]) -> float:
         if not a or not b:

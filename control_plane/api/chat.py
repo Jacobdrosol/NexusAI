@@ -200,8 +200,10 @@ def _assistant_model_provider(
     )
 
 router = APIRouter(prefix="/v1/chat", tags=["chat"])
-_MEMORY_PROFILE_MIN_RELEVANCE = 0.35
-_MEMORY_PROFILE_MIN_OVERLAP_RELEVANCE = 0.12
+# Relevance thresholds for semantic embeddings (mxbai-embed-large, 1024-dim).
+# Calibrated: related ~0.9+, somewhat related ~0.45, unrelated ~0.32.
+_MEMORY_PROFILE_MIN_RELEVANCE = 0.45
+_MEMORY_PROFILE_MIN_OVERLAP_RELEVANCE = 0.30
 _MEMORY_PROFILE_STOPWORDS = {
     "a",
     "about",
@@ -1332,14 +1334,24 @@ async def _search_memory_profile_for_turn(
 ) -> List[Dict[str, Any]]:
     if not bool(decision.get("eligible")):
         return []
+    # Retrieve a wider candidate window, then rerank by semantic score.
     hits = await chat_manager.search_memory_profile(
         user_id=str(decision.get("user_id") or ""),
         profile_id=str(decision.get("profile_id") or "default"),
         query=query,
-        limit=8,
+        limit=25,
     )
     relevant = [hit for hit in hits if _memory_profile_hit_is_relevant(query, hit)]
-    return relevant[:6]
+    # Rerank: semantic score first, then lexical overlap as a tiebreaker.
+    relevant.sort(
+        key=lambda hit: (
+            float(hit.get("score") or 0.0),
+            len(_memory_profile_terms(query) & _memory_profile_terms(str(hit.get("content") or ""))),
+            str(hit.get("created_at") or ""),
+        ),
+        reverse=True,
+    )
+    return relevant[:12]
 
 
 def _memory_profile_terms(value: str) -> set[str]:

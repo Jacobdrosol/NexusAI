@@ -1,12 +1,16 @@
 """Tests for named memory profile CRUD."""
 
+import os
+
 import pytest
 
 from control_plane.chat.chat_manager import ChatManager
 
 
 @pytest.fixture
-def manager(tmp_path):
+def manager(tmp_path, monkeypatch):
+    # Disable the semantic embedding network so tests use the fast hash fallback.
+    monkeypatch.setenv("NEXUSAI_EMBEDDING_DISABLED", "1")
     return ChatManager(db_path=str(tmp_path / "test.db"))
 
 
