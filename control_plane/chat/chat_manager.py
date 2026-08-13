@@ -225,9 +225,15 @@ class ChatManager:
 
     @staticmethod
     def _conversation_project_ids(conversation: ChatConversation) -> List[str]:
-        project_ids = [str(conversation.project_id or "").strip()]
-        project_ids.extend(str(project_id or "").strip() for project_id in conversation.bridge_project_ids)
-        return list(dict.fromkeys(project_id for project_id in project_ids if project_id))
+        """Return the project(s) a conversation's chat content is ingested into.
+
+        Chat ingestion is scoped to the conversation's own project only.
+        Bridge projects are NOT included: bridge mode lets a conversation
+        reference data from other projects, but ingested chat belongs to the
+        project the conversation is assigned to, so no two projects overlap.
+        """
+        project_id = str(conversation.project_id or "").strip()
+        return [project_id] if project_id else []
 
     async def _ingest_project_message(self, conversation: ChatConversation, message: ChatMessage) -> None:
         """Persist project-scoped chat content as independently searchable vault items."""
