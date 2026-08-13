@@ -337,7 +337,7 @@ function openMemoryItemModal(id) {
         <option value="assistant"${role === 'assistant' ? ' selected' : ''}>Assistant</option>
       </select>
     </div>
-    <div id="memory-item-modal-state" class="state-empty" style="margin-bottom:0.75rem;"></div>
+    <div id="memory-item-modal-state" style="display:none; margin-bottom:0.75rem;"></div>
     <div class="modal-actions">
       <button class="btn btn-danger" type="button" onclick="deleteMemoryItem('${escapeJs(id)}')">Delete</button>
       <button class="btn btn-primary" type="button" onclick="saveMemoryItem('${escapeJs(id)}')">Save</button>
@@ -402,10 +402,10 @@ async function saveMemoryItem(id) {
   const profileId = currentProfileId();
   const state = document.getElementById('memory-item-modal-state');
   if (!content) {
-    if (state) { state.className = 'state-error'; state.textContent = 'Content is required.'; }
+    setMemoryItemModalState(state, 'state-error', 'Content is required.');
     return;
   }
-  if (state) { state.className = 'state-loading'; state.textContent = 'Saving…'; }
+  setMemoryItemModalState(state, 'state-loading', 'Saving…');
   const res = await fetch('/api/memory/items/' + encodeURIComponent(id), {
     method: 'PUT',
     headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
@@ -413,10 +413,9 @@ async function saveMemoryItem(id) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (state) { state.className = 'state-error'; state.textContent = data.error || 'Failed to save memory item.'; }
+    setMemoryItemModalState(state, 'state-error', data.error || 'Failed to save memory item.');
     return;
   }
-  if (state) { state.className = 'state-info'; state.textContent = 'Memory item saved.'; }
   hideMemoryItemModal();
   await loadMemoryItems();
 }
@@ -434,6 +433,13 @@ async function deleteMemoryItem(id) {
   }
   hideMemoryItemModal();
   await loadMemoryItems();
+}
+
+function setMemoryItemModalState(state, cls, text) {
+  if (!state) return;
+  state.className = cls;
+  state.textContent = text;
+  state.style.display = 'block';
 }
 
 document.getElementById('memory-search')?.addEventListener('keydown', (event) => {
