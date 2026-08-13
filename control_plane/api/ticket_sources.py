@@ -484,6 +484,7 @@ async def _prepare_repo_for_ticket(
         try:
             from control_plane.api.projects import (
                 _extract_project_repo_workspace,
+                _merge_settings,
                 _repo_branch_name,
                 _repo_status_snapshot,
                 _resolve_repo_workspace_root,
