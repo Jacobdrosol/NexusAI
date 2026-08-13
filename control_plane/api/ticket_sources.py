@@ -9,6 +9,13 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from control_plane.audit.utils import record_audit_event
+from control_plane.repo_freshness import (
+    feature_branch_commands,
+    feature_branch_name,
+    mark_repo_ingested,
+    mark_repo_pulled,
+    should_refresh_repo,
+)
 from control_plane.tickets.pollers import poll_source
 
 router = APIRouter(prefix="/v1/projects", tags=["ticket-sources"])
@@ -441,6 +448,94 @@ class DispatchItemBody(BaseModel):
     plan_approval_required: Optional[bool] = None
 
 
+async def _prepare_repo_for_ticket(
+    request: Request,
+    *,
+    project_id: str,
+    external_id: str,
+    title: str,
+) -> Dict[str, Any]:
+    """Refresh the project repo (bounded by freshness cooldown) and create a feature branch.
+
+    Returns a dict describing what happened:
+      - refresh: whether a pull was performed
+      - refresh_reason: why (or why not)
+      - feature_branch: the branch created (or None)
+      - error: set if repo prep failed (non-fatal for dispatch)
+    """
+    result: Dict[str, Any] = {
+        "refresh": False,
+        "refresh_reason": None,
+        "feature_branch": None,
+        "error": None,
+    }
+    project_registry = getattr(request.app.state, "project_registry", None)
+    if project_registry is None:
+        return result
+    try:
+        project = await project_registry.get(project_id)
+    except Exception:
+        return result
+
+    # 1. Freshness-gated pull.
+    decision = should_refresh_repo(project)
+    result["refresh_reason"] = decision.get("reason")
+    if decision.get("refresh"):
+        try:
+            from control_plane.api.projects import (
+                _extract_project_repo_workspace,
+                _repo_branch_name,
+                _repo_status_snapshot,
+                _resolve_repo_workspace_root,
+                _run_repo_command,
+            )
+
+            cfg = _extract_project_repo_workspace(project)
+            root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False, allow_raw_fallback=False)
+            snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+            if snapshot.get("is_repo"):
+                remote = "origin"
+                branch = str(cfg.get("default_branch") or "").strip() or None
+                cmd = ["git", "pull", remote]
+                if branch:
+                    cmd.append(branch)
+                res = await _run_repo_command(cmd, cwd=root, timeout_seconds=600)
+                commit = None
+                if res.get("ok"):
+                    commit = await _repo_branch_name(root)
+                patch = mark_repo_pulled(project, commit=commit, status="ok" if res.get("ok") else "failed")
+                updated = project.model_copy(
+                    update={"settings_overrides": _merge_settings(project, {"repo_workspace": patch})}
+                )
+                await project_registry.update(project_id, updated)
+                result["refresh"] = True
+        except Exception as exc:
+            result["error"] = f"repo refresh failed: {exc}"
+
+    # 2. Feature branch for the ticket.
+    try:
+        from control_plane.api.projects import (
+            _extract_project_repo_workspace,
+            _repo_status_snapshot,
+            _resolve_repo_workspace_root,
+            _run_repo_command,
+        )
+
+        cfg = _extract_project_repo_workspace(project)
+        root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False, allow_raw_fallback=False)
+        snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+        if snapshot.get("is_repo"):
+            branch = feature_branch_name(external_id, title)
+            base = str(cfg.get("default_branch") or "").strip() or None
+            for cmd in feature_branch_commands(branch, base_branch=base):
+                await _run_repo_command(cmd, cwd=root, timeout_seconds=60)
+            result["feature_branch"] = branch
+    except Exception as exc:
+        result["error"] = (result.get("error") or "") + f"; feature branch failed: {exc}"
+
+    return result
+
+
 @router.post("/{project_id}/ticket-sources/{source_id}/items/{external_id}/dispatch")
 async def dispatch_ticket_item(
     request: Request, project_id: str, source_id: str, external_id: str,
@@ -490,6 +585,11 @@ async def dispatch_ticket_item(
     plan_approval_required = None
     if body and body.plan_approval_required is not None:
         plan_approval_required = bool(body.plan_approval_required)
+
+    # Prepare the repo: freshness-gated pull + feature branch for this ticket.
+    repo_prep = await _prepare_repo_for_ticket(
+        request, project_id=project_id, external_id=external_id, title=title
+    )
 
     conversation = await chat_manager.create_conversation(
         title=f"Ticket {external_id}: {title[:80]}",
@@ -560,4 +660,5 @@ async def dispatch_ticket_item(
         "orchestration_id": orchestration_id or None,
         "task_id": task_id or None,
         "conversation_id": conversation.id,
+        "repo_prep": repo_prep,
     }
