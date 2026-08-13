@@ -37,6 +37,14 @@ def test_within_cooldown_no_refresh():
     assert decision["reason"] == "within_cooldown"
 
 
+def test_force_overrides_cooldown():
+    now = datetime.now(timezone.utc)
+    project = _project_with_freshness({"last_pull_at": _iso(now - timedelta(minutes=5))})
+    decision = should_refresh_repo(project, force=True)
+    assert decision["refresh"] is True
+    assert decision["reason"] == "operator_forced"
+
+
 def test_cooldown_elapsed_requires_refresh():
     now = datetime.now(timezone.utc)
     project = _project_with_freshness({"last_pull_at": _iso(now - timedelta(minutes=45))})

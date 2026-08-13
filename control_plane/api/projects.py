@@ -3831,6 +3831,69 @@ async def pull_project_repo_workspace(
     }
 
 
+@router.post("/{project_id}/repo/workspace/refresh")
+async def refresh_project_repo_workspace(
+    project_id: str,
+    request: Request,
+) -> dict:
+    """Force a repo pull + freshness reset, bypassing the cooldown.
+
+    Used by the operator when they want up-to-date code immediately
+    (e.g. right before dispatching a ticket). Marks the repo as freshly
+    pulled so the cooldown restarts.
+    """
+    project_registry = request.app.state.project_registry
+    key_vault = request.app.state.key_vault
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    cfg = _extract_project_repo_workspace(project)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True, allow_raw_fallback=False)
+    snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    if not snapshot.get("is_repo"):
+        raise HTTPException(status_code=400, detail="workspace is not a git repository")
+
+    remote = "origin"
+    branch = str(cfg.get("default_branch") or "").strip() or None
+    token = await _project_github_pat(project, key_vault)
+    auth_args = await _repo_auth_git_args(cwd=root, remote=remote, github_pat=token)
+
+    cmd: List[str] = ["git", *auth_args, "pull", remote]
+    if branch:
+        cmd.append(branch)
+
+    res = await _run_repo_command(cmd, cwd=root, timeout_seconds=600)
+    if not res.get("ok"):
+        detail = str(res.get("stderr") or res.get("error") or "pull failed").strip() or "pull failed"
+        raise HTTPException(status_code=400, detail=detail)
+
+    # Mark freshness so the cooldown restarts.
+    from control_plane.repo_freshness import mark_repo_pulled
+
+    patch = mark_repo_pulled(project, commit=snapshot.get("branch"), status="ok")
+    updated = project.model_copy(
+        update={"settings_overrides": _merge_settings(project, {"repo_workspace": patch})}
+    )
+    await project_registry.update(project_id, updated)
+
+    updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    await record_audit_event(
+        request,
+        action="projects.repo_workspace.refresh",
+        resource=f"project:{project_id}",
+        details={"remote": remote, "branch": branch},
+    )
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "result": res,
+        "workspace": updated_snapshot,
+        "freshness": patch,
+    }
+
+
 @router.post("/{project_id}/repo/workspace/commit")
 async def commit_project_repo_workspace(
     project_id: str,

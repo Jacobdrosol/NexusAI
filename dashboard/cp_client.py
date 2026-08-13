@@ -600,6 +600,9 @@ class CPClient:
         body: Dict[str, Any] = {"remote": remote, "branch": branch, "rebase": bool(rebase)}
         return self._post(f"/v1/projects/{project_id}/repo/workspace/pull", body, timeout=_INGEST_TIMEOUT)
 
+    def refresh_project_repo_workspace(self, project_id: str) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/projects/{project_id}/repo/workspace/refresh", {}, timeout=_INGEST_TIMEOUT)
+
     def commit_project_repo_workspace(
         self,
         project_id: str,

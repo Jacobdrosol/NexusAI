@@ -1268,6 +1268,59 @@ def api_pull_project_repo_workspace(project_id: str):
     return jsonify(result)
 
 
+@bp.post("/api/projects/<project_id>/repo/workspace/refresh")
+@login_required
+def api_refresh_project_repo_workspace(project_id: str):
+    """Force a repo pull (bypassing cooldown) and re-ingest DB schemas."""
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+
+    result = cp.refresh_project_repo_workspace(project_id)
+    if result is None:
+        return _cp_error_response(cp, "repo refresh failed")
+
+    # Re-ingest DB schemas so the vault has the latest structure.
+    db = get_db()
+    schema_results: list[dict[str, Any]] = []
+    try:
+        links = db.query(ProjectConnection).filter(ProjectConnection.project_ref == str(project_id)).all()
+        for link in links:
+            row = db.get(Connection, link.connection_id)
+            if row is None or row.kind != "database":
+                continue
+            config = resolve_connection_config(_parse_json(row.config_json or "{}", {}))
+            try:
+                snapshot = inspect_database_schema(config=config if isinstance(config, dict) else {})
+            except Exception as exc:
+                schema_results.append({"connection_id": row.id, "ok": False, "error": str(exc)})
+                continue
+            if not snapshot.get("ok"):
+                schema_results.append({"connection_id": row.id, "ok": False, "error": snapshot.get("error") or "schema inspect failed"})
+                continue
+            row.schema_text = json.dumps(snapshot, indent=2)
+            row.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            content = render_database_schema_document(connection_name=row.name, snapshot=snapshot)
+            item = cp.upsert_vault_item(
+                {
+                    "source_type": "custom",
+                    "source_ref": f"project-db://{project_id}/{row.id}/schema",
+                    "title": f"{project_id} database schema: {row.name}",
+                    "content": content,
+                    "namespace": f"project:{project_id}:data",
+                    "project_id": project_id,
+                    "metadata": {"kind": "project_database_schema", "connection_id": row.id},
+                }
+            )
+            schema_results.append({"connection_id": row.id, "ok": True, "vault_item": bool(item)})
+    finally:
+        db.close()
+
+    result["db_schema_ingest"] = schema_results
+    return jsonify(result)
+
+
 @bp.post("/api/projects/<project_id>/repo/workspace/commit")
 @login_required
 def api_commit_project_repo_workspace(project_id: str):

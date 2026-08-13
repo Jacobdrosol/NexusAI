@@ -57,15 +57,19 @@ def repo_freshness_state(project: Any) -> Dict[str, Any]:
     }
 
 
-def should_refresh_repo(project: Any) -> Dict[str, Any]:
+def should_refresh_repo(project: Any, *, force: bool = False) -> Dict[str, Any]:
     """Decide whether a project's repo needs a pull + re-ingest.
 
     Returns a dict with ``refresh`` (bool) and ``reason`` (str). A refresh
     is needed when:
+      - ``force`` is True (operator requested an immediate refresh), or
       - the repo has never been pulled, or
       - the last pull is older than the max age, or
       - the cooldown window has elapsed since the last pull.
     """
+    if force:
+        return {"refresh": True, "reason": "operator_forced", "state": repo_freshness_state(project)}
+
     state = repo_freshness_state(project)
     last_pull = _parse_iso(state["last_pull_at"])
     now = datetime.now(timezone.utc)
