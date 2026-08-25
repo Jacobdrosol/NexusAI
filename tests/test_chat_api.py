@@ -176,6 +176,41 @@ def test_document_and_binary_attachments_are_retained_and_described_to_the_model
     assert any("raw contents were not inlined" in part["text"] for part in parts)
 
 
+def test_scanned_pdf_renders_pages_as_images_for_vision_models():
+    import fitz
+
+    from control_plane.api.chat import _message_attachment_parts
+
+    buffer = BytesIO()
+    document = fitz.open()
+    page = document.new_page(width=300, height=300)
+    page.insert_text((72, 72), "Scanned page one")
+    page2 = document.new_page(width=300, height=300)
+    page2.insert_text((72, 72), "Scanned page two")
+    document.save(buffer)
+    pdf_data_url = "data:application/pdf;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    attachment = {
+        "name": "scan.pdf",
+        "mime_type": "application/pdf",
+        "kind": "document",
+        "data_url": pdf_data_url,
+        "size_bytes": len(buffer.getvalue()),
+        "text_content": "",
+        "extraction_status": "extracted",
+    }
+
+    parts = _message_attachment_parts({"attachments": [attachment]}, render_pdf_images=True)
+    image_parts = [part for part in parts if part.get("type") == "image_url"]
+    assert len(image_parts) == 2
+    assert all(part["image_url"]["url"].startswith("data:image/png;base64,") for part in image_parts)
+    assert image_parts[0]["name"] == "scan.pdf (page 1)"
+    assert image_parts[1]["name"] == "scan.pdf (page 2)"
+
+    text_parts = _message_attachment_parts({"attachments": [attachment]}, render_pdf_images=False)
+    assert any("could not be extracted" in part["text"] for part in text_parts)
+
+
 def test_docx_output_filename_ignores_ordinary_sentence_uses_of_as():
     from shared.chat_document_artifacts import requested_docx_artifact
 

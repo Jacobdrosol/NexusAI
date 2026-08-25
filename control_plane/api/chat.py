@@ -31,6 +31,7 @@ from shared.chat_attachments import (
     CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
     decode_attachment_data_url,
     extract_document_text,
+    render_pdf_pages_as_images,
 )
 from shared.chat_document_artifacts import (
     build_edited_docx_attachment,
@@ -808,7 +809,7 @@ def _attachment_payload_dicts(attachments: List[ChatAttachmentInput]) -> List[Di
     return normalized
 
 
-def _message_attachment_parts(metadata: Any) -> List[Dict[str, Any]]:
+def _message_attachment_parts(metadata: Any, *, render_pdf_images: bool = False) -> List[Dict[str, Any]]:
     if not isinstance(metadata, dict):
         return []
     raw = metadata.get("attachments")
@@ -849,6 +850,19 @@ def _message_attachment_parts(metadata: Any) -> List[Dict[str, Any]]:
             continue
         if kind in {"binary", "document"}:
             size_bytes = int(item.get("size_bytes") or 0)
+            if kind == "document" and render_pdf_images and _is_pdf_attachment(item):
+                page_images = _render_pdf_attachment_images(item)
+                if page_images:
+                    for index, page_url in enumerate(page_images, start=1):
+                        parts.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": page_url},
+                                "name": f"{name} (page {index})",
+                                "mime_type": "image/png",
+                            }
+                        )
+                    continue
             detail = (
                 "Document text could not be extracted; the original file is retained for download."
                 if kind == "document"
@@ -866,6 +880,23 @@ def _message_attachment_parts(metadata: Any) -> List[Dict[str, Any]]:
                 }
             )
     return parts
+
+
+def _is_pdf_attachment(item: Dict[str, Any]) -> bool:
+    mime_type = str(item.get("mime_type") or "").strip().lower()
+    name = str(item.get("name") or "").strip().lower()
+    return mime_type == "application/pdf" or name.endswith(".pdf")
+
+
+def _render_pdf_attachment_images(item: Dict[str, Any]) -> List[str]:
+    data_url = str(item.get("data_url") or "").strip()
+    if not data_url:
+        return []
+    try:
+        _, raw = decode_attachment_data_url(data_url)
+    except ValueError:
+        return []
+    return render_pdf_pages_as_images(raw=raw)
 
 
 def _has_unrecoverable_legacy_attachments(metadata: Any) -> bool:
@@ -1181,6 +1212,7 @@ def _messages_to_payload(
     context_items: Optional[List[str]] = None,
     memory_profile_hits: Optional[List[Dict[str, Any]]] = None,
     require_repo_evidence: bool = False,
+    render_pdf_images: bool = False,
 ) -> List[dict]:
     now = datetime.now(timezone.utc)
     payload: List[dict] = []
@@ -1192,7 +1224,7 @@ def _messages_to_payload(
             or _is_stale_date_denial(message, now=now)
         ):
             continue
-        attachment_parts = _message_attachment_parts(message.metadata)
+        attachment_parts = _message_attachment_parts(message.metadata, render_pdf_images=render_pdf_images)
         if attachment_parts:
             content_parts: List[Dict[str, Any]] = []
             if str(message.content or "").strip():
@@ -5180,6 +5212,11 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             context_items=resolved_context,
             memory_profile_hits=memory_hits,
             require_repo_evidence=require_repo_evidence,
+            render_pdf_images=await _target_supports_image_attachments(
+                request,
+                target_bot_id=target_bot_id,
+                preferred_model_id=preferred_model_id,
+            ),
         )
         if inline_code_mode:
             integration_required = _inline_code_existing_edits_expected(body.content)
@@ -6118,6 +6155,11 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 context_items=resolved_context,
                 memory_profile_hits=memory_hits,
                 require_repo_evidence=require_repo_evidence,
+                render_pdf_images=await _target_supports_image_attachments(
+                    request,
+                    target_bot_id=target_bot_id,
+                    preferred_model_id=preferred_model_id,
+                ),
             )
             requested_docx_filename = requested_docx_artifact(
                 body.content,

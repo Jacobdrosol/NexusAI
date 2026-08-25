@@ -17,6 +17,11 @@ _PDF_MIME_TYPES = {"application/pdf"}
 _DOCX_MIME_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+# Scanned/image-based PDFs have no extractable text layer. When the target model
+# is vision-capable we render pages to PNG images instead of relying on text.
+CHAT_ATTACHMENT_MAX_PDF_PAGES = 20
+CHAT_ATTACHMENT_PDF_DPI = 150
+CHAT_ATTACHMENT_MAX_PDF_IMAGE_BYTES = 4 * 1024 * 1024
 
 
 def decode_attachment_data_url(value: Any, *, max_bytes: int = CHAT_ATTACHMENT_MAX_INLINE_BYTES) -> tuple[str, bytes]:
@@ -74,3 +79,45 @@ def extract_document_text(
     except Exception:
         return "", "unavailable"
     return "", "unsupported"
+
+
+def render_pdf_pages_as_images(
+    *,
+    raw: bytes,
+    max_pages: int = CHAT_ATTACHMENT_MAX_PDF_PAGES,
+    dpi: int = CHAT_ATTACHMENT_PDF_DPI,
+    max_image_bytes: int = CHAT_ATTACHMENT_MAX_PDF_IMAGE_BYTES,
+) -> list[str]:
+    """Render PDF pages to PNG data URLs for vision-capable models.
+
+    Returns a list of ``data:image/png;base64,...`` strings, one per page, for
+    scanned/image-based PDFs that have no extractable text layer. Returns an
+    empty list when rendering is unavailable or the PDF cannot be opened.
+    """
+    try:
+        import fitz  # PyMuPDF
+    except Exception:
+        return []
+    try:
+        document = fitz.open(stream=raw, filetype="pdf")
+    except Exception:
+        return []
+    try:
+        zoom = max(1.0, dpi / 72.0)
+        matrix = fitz.Matrix(zoom, zoom)
+        data_urls: list[str] = []
+        for page in document:
+            if len(data_urls) >= max_pages:
+                break
+            try:
+                pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+                png_bytes = pixmap.tobytes("png")
+                if len(png_bytes) > max_image_bytes:
+                    continue
+                encoded = base64.b64encode(png_bytes).decode("ascii")
+                data_urls.append(f"data:image/png;base64,{encoded}")
+            except Exception:
+                continue
+        return data_urls
+    finally:
+        document.close()
