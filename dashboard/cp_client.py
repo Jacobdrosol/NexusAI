@@ -1103,6 +1103,12 @@ class CPClient:
             },
         )
 
+    def update_conversation_title(self, conversation_id: str, title: str) -> Optional[Dict[str, Any]]:
+        return self._put(
+            f"/v1/chat/conversations/{conversation_id}/title",
+            {"title": str(title or "").strip()},
+        )
+
     # Vault
     def list_vault_items(
         self,

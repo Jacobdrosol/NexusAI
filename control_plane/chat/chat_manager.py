@@ -550,6 +550,19 @@ class ChatManager:
                 await db.commit()
         return await self.get_conversation(conversation_id)
 
+    async def update_conversation_title(self, conversation_id: str, title: str) -> ChatConversation:
+        await self.get_conversation(conversation_id)
+        now = datetime.now(timezone.utc).isoformat()
+        normalized_title = str(title or "").strip() or "New Conversation"
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                await db.execute(
+                    "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+                    (normalized_title, now, conversation_id),
+                )
+                await db.commit()
+        return await self.get_conversation(conversation_id)
+
     async def update_conversation_tool_access(
         self,
         conversation_id: str,

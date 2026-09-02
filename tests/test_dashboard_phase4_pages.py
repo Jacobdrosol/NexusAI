@@ -6179,6 +6179,128 @@ def test_chat_archive_restore_conversation_apis_surface_success(dashboard_client
     assert restore_resp.get_json()["archived_at"] is None
 
 
+def test_chat_rename_conversation_api_proxies_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+    captured = {}
+
+    class FakeCP:
+        def update_conversation_title(self, conversation_id, title):
+            captured.update({"conversation_id": conversation_id, "title": title})
+            return {"id": conversation_id, "title": title}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/title",
+            json={"title": "Renamed Chat"},
+        )
+
+    assert resp.status_code == 200
+    assert captured == {"conversation_id": "c1", "title": "Renamed Chat"}
+    assert resp.get_json()["title"] == "Renamed Chat"
+
+
+def test_chat_rename_conversation_api_blocks_blank_title(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def update_conversation_title(self, conversation_id, title):
+            raise AssertionError("blank title should not reach control plane rename")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/title",
+            json={"title": "   "},
+        )
+
+    assert resp.status_code == 400
+    assert b"title is required" in resp.data
+
+
+def test_chat_rename_conversation_api_blocks_overlong_title(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def update_conversation_title(self, conversation_id, title):
+            raise AssertionError("overlong title should not reach control plane rename")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/title",
+            json={"title": "x" * 201},
+        )
+
+    assert resp.status_code == 400
+    assert b"title is limited to 200 characters" in resp.data
+
+
+def test_chat_rename_conversation_api_surfaces_control_plane_error(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def update_conversation_title(self, conversation_id, title):
+            return None
+
+        def last_error(self):
+            return {"status_code": 404, "detail": "conversation not found"}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/title",
+            json={"title": "Renamed Chat"},
+        )
+
+    assert resp.status_code == 404
+    assert b"conversation not found" in resp.data
+
+
+def test_chat_page_renders_rename_controls(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-rename",
+                    "title": "Rename Me",
+                    "project_id": None,
+                    "bridge_project_ids": [],
+                    "default_bot_id": None,
+                    "default_model_id": None,
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-rename")
+
+    assert resp.status_code == 200
+    assert b"rename-conversation-btn" in resp.data
+    assert b"modal-rename-convo" in resp.data
+    assert b"form-rename-convo" in resp.data
+    assert b"openRenameConversationModal" in resp.data
+    assert b"renameConversation" in resp.data
+    assert b"Rename conversation" in resp.data
+
+
 def test_chat_conversation_tool_access_api_surfaces_control_plane_error(dashboard_client):
     _login_admin(dashboard_client)
 

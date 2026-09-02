@@ -28,6 +28,16 @@ _ALLOWED_CONVERSATION_SCOPES = {"global", "project", "bridged"}
 _CHAT_CONTEXT_ITEM_MAX_CHARS = 12000
 _CHAT_CONTEXT_ITEM_ID_MAX_CHARS = 256
 _CHAT_MESSAGE_CONTENT_MAX_CHARS = 120000
+_CHAT_CONVERSATION_TITLE_MAX_CHARS = 200
+
+
+def _conversation_title_blocker(title: str) -> str:
+    normalized = str(title or "").strip()
+    if not normalized:
+        return "title is required"
+    if len(normalized) > _CHAT_CONVERSATION_TITLE_MAX_CHARS:
+        return f"title is limited to {_CHAT_CONVERSATION_TITLE_MAX_CHARS} characters"
+    return ""
 
 
 def _bot_value(bot: Any, key: str, default: Any = None) -> Any:
@@ -2327,6 +2337,21 @@ def api_update_conversation_route_defaults(conversation_id: str):
     )
     if updated is None:
         return _cp_error_response(cp, "conversation route defaults update failed")
+    return jsonify(updated)
+
+
+@bp.put("/api/chat/conversations/<conversation_id>/title")
+@login_required
+def api_update_conversation_title(conversation_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    title = str(data.get("title") or "").strip()
+    title_blocker = _conversation_title_blocker(title)
+    if title_blocker:
+        return jsonify({"error": title_blocker}), 400
+    cp = get_cp_client()
+    updated = cp.update_conversation_title(conversation_id=conversation_id, title=title)
+    if updated is None:
+        return _cp_error_response(cp, "conversation rename failed")
     return jsonify(updated)
 
 

@@ -441,6 +441,10 @@ class UpdateConversationRouteDefaultsRequest(BaseModel):
     default_model_id: Optional[str] = None
 
 
+class UpdateConversationTitleRequest(BaseModel):
+    title: str
+
+
 class PostMessageRequest(BaseModel):
     content: ChatMessageContent
     bot_id: Optional[str] = None
@@ -4415,6 +4419,19 @@ async def update_conversation_route_defaults(
             default_bot_id=body.default_bot_id,
             default_model_id=None,
         )
+    except ConversationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.put("/conversations/{conversation_id}/title", response_model=ChatConversation)
+async def update_conversation_title(
+    conversation_id: str,
+    request: Request,
+    body: UpdateConversationTitleRequest,
+) -> ChatConversation:
+    chat_manager = request.app.state.chat_manager
+    try:
+        return await chat_manager.update_conversation_title(conversation_id, title=body.title)
     except ConversationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

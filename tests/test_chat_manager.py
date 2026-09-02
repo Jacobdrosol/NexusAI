@@ -66,6 +66,41 @@ async def test_update_conversation_route_defaults(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_update_conversation_title(tmp_path):
+    from control_plane.chat.chat_manager import ChatManager
+
+    mgr = ChatManager(db_path=str(tmp_path / "chat.db"))
+    convo = await mgr.create_conversation(title="Original Title")
+    updated = await mgr.update_conversation_title(convo.id, title="Renamed Title")
+
+    assert updated.title == "Renamed Title"
+    assert updated.id == convo.id
+
+    fetched = await mgr.get_conversation(convo.id)
+    assert fetched.title == "Renamed Title"
+
+
+@pytest.mark.anyio
+async def test_update_conversation_title_blank_falls_back_to_default(tmp_path):
+    from control_plane.chat.chat_manager import ChatManager
+
+    mgr = ChatManager(db_path=str(tmp_path / "chat.db"))
+    convo = await mgr.create_conversation(title="Original Title")
+    updated = await mgr.update_conversation_title(convo.id, title="   ")
+
+    assert updated.title == "New Conversation"
+
+
+@pytest.mark.anyio
+async def test_update_conversation_title_missing_conversation(tmp_path):
+    from control_plane.chat.chat_manager import ChatManager
+
+    mgr = ChatManager(db_path=str(tmp_path / "chat.db"))
+    with pytest.raises(ConversationNotFoundError):
+        await mgr.update_conversation_title("missing-conversation", title="Renamed")
+
+
+@pytest.mark.anyio
 async def test_summarize_message_usage_groups_by_conversation_bot_and_model(tmp_path):
     from control_plane.chat.chat_manager import ChatManager
 

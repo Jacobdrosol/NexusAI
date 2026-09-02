@@ -1637,6 +1637,50 @@ async def test_archive_and_restore_conversation_visibility(cp_app):
 
 
 @pytest.mark.anyio
+async def test_rename_conversation_updates_title(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Before Rename"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        rename_resp = await client.put(
+            f"/v1/chat/conversations/{conversation_id}/title",
+            json={"title": "After Rename"},
+        )
+        assert rename_resp.status_code == 200
+        assert rename_resp.json()["title"] == "After Rename"
+
+        listed = await client.get("/v1/chat/conversations")
+        assert listed.status_code == 200
+        assert listed.json()[0]["title"] == "After Rename"
+
+
+@pytest.mark.anyio
+async def test_rename_conversation_blank_title_falls_back_to_default(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Before Rename"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        rename_resp = await client.put(
+            f"/v1/chat/conversations/{conversation_id}/title",
+            json={"title": "   "},
+        )
+        assert rename_resp.status_code == 200
+        assert rename_resp.json()["title"] == "New Conversation"
+
+
+@pytest.mark.anyio
+async def test_rename_conversation_missing_conversation_returns_404(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        rename_resp = await client.put(
+            "/v1/chat/conversations/missing-conversation/title",
+            json={"title": "Renamed"},
+        )
+        assert rename_resp.status_code == 404
+
+
+@pytest.mark.anyio
 async def test_list_messages_returns_more_than_legacy_120_default(cp_app, monkeypatch):
     monkeypatch.setenv("CP_RATE_LIMIT_CHAT_MESSAGES_COUNT", "1000")
     monkeypatch.setenv("CP_RATE_LIMIT_CHAT_MESSAGES_WINDOW_SECONDS", "60")
