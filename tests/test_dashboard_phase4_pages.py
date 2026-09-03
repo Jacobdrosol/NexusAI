@@ -6293,12 +6293,12 @@ def test_chat_page_renders_rename_controls(dashboard_client):
         resp = dashboard_client.get("/chat?conversation_id=c-rename")
 
     assert resp.status_code == 200
-    assert b"rename-conversation-btn" in resp.data
     assert b"modal-rename-convo" in resp.data
     assert b"form-rename-convo" in resp.data
     assert b"openRenameConversationModal" in resp.data
     assert b"renameConversation" in resp.data
     assert b"Rename conversation" in resp.data
+    assert b"rename-conversation-btn" not in resp.data
 
 
 def test_chat_conversation_tool_access_api_surfaces_control_plane_error(dashboard_client):

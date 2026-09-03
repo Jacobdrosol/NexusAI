@@ -386,12 +386,6 @@
           data-conversation-id="{{ c.id }}"
           data-conversation-title="{{ c.title }}"
         >Archive</button>
-        <button
-          type="button"
-          class="btn btn-sm rename-conversation-btn"
-          data-conversation-id="{{ c.id }}"
-          data-conversation-title="{{ c.title }}"
-        >Rename</button>
       </div>
       {% else %}
       <div class="empty">{% if active_project_filter %}No conversations match this project.{% else %}No conversations yet{% endif %}</div>
@@ -441,12 +435,6 @@
           </a>
           <div class="chat-row-actions">
             <button type="button" class="btn btn-sm restore-conversation-btn" data-conversation-id="{{ c.id }}">Restore</button>
-            <button
-              type="button"
-              class="btn btn-sm rename-conversation-btn"
-              data-conversation-id="{{ c.id }}"
-              data-conversation-title="{{ c.title }}"
-            >Rename</button>
             <button
               type="button"
               class="btn btn-sm btn-danger delete-conversation-btn"
@@ -864,7 +852,7 @@
     </details>
     <details class="chat-route-details">
       <summary>Conversation actions</summary>
-      <div class="chat-route-actions"><button class="btn btn-sm" type="button" onclick="copyConversationReference('{{ selected_conversation.id }}')">Copy conversation reference</button><button class="btn btn-sm" type="button" onclick="openAssignModal()">Assign message to PM</button><button class="btn btn-sm" type="button" onclick="openRenameConversationModal('{{ selected_conversation.id }}', {{ selected_conversation.title|tojson }})">Rename conversation</button></div>
+      <div class="chat-route-actions"><button class="btn btn-sm" type="button" onclick="copyConversationReference('{{ selected_conversation.id }}')">Copy conversation reference</button><button class="btn btn-sm" type="button" onclick="openAssignModal()">Assign message to PM</button><button class="btn btn-sm" type="button" onclick="openRenameConversationModal()">Rename conversation</button></div>
       <p class="mini-note">Project chat messages are indexed automatically. Paste the copied reference into any chat to include that conversation's messages.</p>
     </details>
     <div class="modal-actions"><button type="button" class="btn" onclick="hideModal('modal-chat-settings')">Close</button></div>
@@ -3458,8 +3446,11 @@ function openRenameConversationModal(conversationId, title) {
   const idInput = document.getElementById('rename-convo-id');
   const titleInput = document.getElementById('rename-convo-title');
   if (!idInput || !titleInput) return;
-  idInput.value = conversationId || '';
-  titleInput.value = title || '';
+  const id = String(conversationId || selectedConversation?.id || '').trim();
+  const currentTitle = String(title || selectedConversation?.title || '').trim();
+  if (!id) return;
+  idInput.value = id;
+  titleInput.value = currentTitle;
   document.getElementById('modal-rename-convo').style.display = 'flex';
   titleInput.focus();
   titleInput.select();
@@ -3493,9 +3484,6 @@ function bindConversationActions() {
   });
   document.querySelectorAll('.delete-conversation-btn').forEach((btn) => {
     btn.addEventListener('click', () => deleteConversation(btn.dataset.conversationId, btn.dataset.conversationTitle));
-  });
-  document.querySelectorAll('.rename-conversation-btn').forEach((btn) => {
-    btn.addEventListener('click', () => openRenameConversationModal(btn.dataset.conversationId, btn.dataset.conversationTitle));
   });
 }
 
