@@ -4,6 +4,8 @@
 
 > **⚠️ Platform AI is in active development:** The in-platform copilot supports typed specialist proposals, preflight validation, and operator approval. Autonomous pipeline tuning and privileged execution remain opt-in and require deployment-specific validation before production use. See `control_plane/platform_ai/README.md` for scope and known limitations.
 
+> **Status:** NexusAI is now a daily-driver workspace. The dashboard covers chat, project context, bot/worker readiness, work overview, memory, schedules, ticket sources, and Platform AI. A native Android client is available for chat and monitoring. See the [Implemented Capabilities](#implemented-capabilities) section and the [worklogs](docs/worklogs/) for the full history.
+
 ---
 
 ## Quick Start with Docker
@@ -158,7 +160,7 @@ Then open http://localhost:5000 in your browser.
 
 Dashboard and workflow:
 
-- Navigation pages: `Overview`, `Projects`, `Chat`, `Bots`, `Pipelines`, `Workers`, `Vault`, `Settings`.
+- Navigation pages: `Overview`, `Projects`, `Chat`, `Memory`, `Work`, `Bots`, `Workers`, `Schedules`, `Supervision`, `Tasks`, `Pipelines`, `Platform AI`, `Vault`, `Users`, `Settings`.
 - Improved dashboard link contrast for worker and bot names on dark tables/cards.
 - Worker detail pages with live load, queue, and GPU graphs.
 - Bot detail editor with backend chain management, workflow triggers, saved input contracts, saved launch profiles, test runs, run history, and task board.
@@ -185,6 +187,17 @@ Chat and orchestration:
 - PM orchestration task payloads now include step-level acceptance criteria, deliverables, and quality gates for stronger implementation/test/review handoffs.
 - PM orchestration is operator-safe by default: it stops at specification, implementation, test execution, verification, and final reporting. It does not create CI/CD workflows, open GitHub issues/boards, merge PRs, tag releases, deploy, or finalize changelogs unless that behavior is explicitly added later.
 - Task status streaming and DAG viewer actions in chat.
+- Chat attachments: up to 15 files per message, with text/source files delivered as bounded text context, images routed to vision-capable models, PDF/DOCX text extraction, and a Blob-backed viewer/download path. Raw retained bytes are capped at 25 MB per file.
+- Bot-gated DOCX generation and formatting-preserving DOCX editing from a retained source attachment (both disabled by default).
+- Chat message-pair deletion with `Message deleted` placeholders, project vault cleanup, and exclusion of PM/assignment messages.
+- Chat response regeneration with variant tracking and one-click switching between original and regenerated responses.
+- Scoped web research through a self-hosted SearXNG service (bot-scoped, disabled by default).
+- Voice input, unsent-draft persistence, and a mobile conversation drawer for small screens.
+- Conversation rename from chat settings, plus archive/restore/delete lifecycle controls.
+- Chat token governor with global and per-bot hourly caps, payload-aware admission estimates, and live status in Settings and Work. Chat caps are managed from the Settings token-governor editor (not environment variables).
+- Chat usage telemetry grouped by conversation, bot, provider/model, and project, with provider/model attribution health and spend-concentration warnings.
+- Effective-context API (`/api/chat/conversations/<id>/effective-context`) exposing the effective bot, route, model, memory, workspace-tool, and inline-coding gates before sending.
+- Readiness guards across create, route-default, message, and stream paths so blocked, disabled, or credential-missing bots cannot be dispatched from the browser or by bypassing the UI.
 
 Vault and context:
 
@@ -239,6 +252,49 @@ Security and ops:
 - Session inactivity timeout enforcement in dashboard auth.
 - Prometheus-compatible metrics for control plane and workers.
 
+Memory profiles:
+
+- User-scoped personal memory with semantic retrieval (ChatGPT/Claude-grade embeddings) injected as a bounded `Personal Memory Profile` system context block.
+- Named memory profiles with per-profile management, password-protected clear, and provenance labels (manual, generated, imported, chat-derived).
+- Memory is gated by chat, bot, and project switches; new bots and projects default to memory off, new chats default to memory on.
+- Dashboard Memory page for listing, semantic search, manual add, edit, and delete. Routes always derive `user_id` from the signed-in account.
+
+Work overview and operations:
+
+- Work page groups active, waiting, and problem work by project and project-manager lane, with queue depth, worker load, token usage by project/manager/bot/provider-model, and lane health labels.
+- Attention rollup across problem tasks, stale work, metadata gaps, worker issues, and usage gaps, with recommended operator actions per lane.
+- Lightweight `/api/work/brief` for monitors and mobile clients: active lane priority, usage pressure, token-governor queue-cap pressure, worker capacity, quality-gate status, and direct-chat risk summary.
+- Token governor with global/bot hourly caps, queue-admission ceilings, per-bot estimates, and chat-specific caps, all editable from Settings and Work.
+- Quality-gate visibility from Platform AI test suites with per-suite recommended actions and failure detail.
+
+Bot and worker readiness:
+
+- Bot Tooling Readiness panel on the Bots page and `/api/bots/tooling-status`: grouped blocker causes, required worker tools, credential references, browser/CLI/HTTP action scopes, worker bindings, probe states, and recommended next actions.
+- Bot Detail operating summary with dispatch state, readiness, active/paused schedules, chat mode, chat tools, memory, backend routes, and worker-profile scope.
+- Worker inventory and detail pages surface dependent-bot counts, backend routes, worker-profile scope (site login, task scope, edit permission, course/lesson/page bounds, CLI tools), and runtime tool evidence.
+- Project Detail assigned-bot scope table with required tools, site/API actions, browser actions, repo output, database action flag, owner-approval gates, credential refs, and tooling recommended actions.
+- Readiness preflight guards on bot test runs and saved-launch profiles so disabled, blocked, or raw-credential bots cannot queue operator-triggered work.
+- Quick-launch surfaces (Tasks, Overview) hide tooling-blocked or disabled saved-launch profiles.
+
+Schedules and ticket sources:
+
+- Agent Scheduler with cron-based dispatch, per-window dedup, retry policy, run history, and dashboard management.
+- Universal ticket source system with a Ticket Hub dashboard: GitHub issues, generic HTTP boards, and bounded CSV work-item sources, with ticket item lifecycle (status, manager assignment, manual dispatch) and task linking.
+- Plan approval gate with `plan_pending_approval` orchestration state and a plan refinement loop with deterministic plan QC and handoff capture.
+
+Platform AI:
+
+- In-platform copilot with typed specialist proposals, readiness preflight, individual operator approval, and bounded session tuning.
+- Reviewed bot proposals, approved CLI sessions, and fail-closed defaults; autonomous pipeline tuning and privileged runner actions remain opt-in and disabled by default.
+- Quality test suites and runs with dashboard visibility and Work-page quality-gate summaries.
+
+Android client:
+
+- Native Android client (`android/`) that connects to a user-owned NexusAI instance over HTTPS, authenticates via the dashboard session API, and stores the instance URL and session cookie in encrypted storage.
+- Browse conversations, read messages, send normal text messages, native Markdown rendering, chat settings, and a compact work brief.
+- Self-hosted release publishing: the deployment workflow builds and publishes the signed APK to the instance's `/releases/nexusai.apk` endpoint with an update manifest served through `/api/mobile/bootstrap`.
+- The client intentionally exposes no worker, repository, deployment, or automation controls.
+
 For detailed walkthroughs, use:
 
 - `docs/GETTING_STARTED.md`
@@ -246,6 +302,8 @@ For detailed walkthroughs, use:
 - `docs/OPERATIONS.md`
 - `docs/CHAT_HISTORY_MIGRATION.md` (staged plan for importing external chat history safely)
 - `docs/PM_BOT_PACK_OLLAMA_CLOUD.md` (manual PM bot import workflow reference)
+- `docs/features/` (chat attachments, chat memory profiles, chat message deletion, chat web search, chat DOCX artifacts, AI project submissions)
+- `docs/worklogs/` (platform foundation, chat readiness, one-stop workspace hardening, Android client, agentic bot tooling audit)
 
 ---
 
@@ -288,6 +346,10 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `DASHBOARD_PORT` | `5000` | Port the dashboard listens on (used when running directly) |
 | `NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED` | `0` | Allow Platform AI to change bot configuration; otherwise it records proposals for review only |
 | `NEXUS_PLATFORM_AI_AUTONOMOUS_PIPELINES_ENABLED` | `0` | Allow Platform AI to launch and relaunch autonomous pipeline iterations |
+| `NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED` | `0` | Allow Platform AI privileged runner actions (repo edit, deploy, project edit); all disabled by default |
+| `NEXUS_PLATFORM_AI_OWNER_ALLOWLIST` | — | Optional comma-separated owner allowlist for privileged Platform AI actions |
+| `NEXUSAI_MOBILE_ANDROID_MIN_VERSION_CODE` / `NEXUSAI_MOBILE_ANDROID_LATEST_VERSION_CODE` | `1` | Android client version contract served through `/api/mobile/bootstrap` |
+| `NEXUSAI_MOBILE_ANDROID_RELEASE_URL` | — | Hosted APK URL advertised to the Android client for self-hosted updates |
 | `OPENAI_API_KEY` | — | OpenAI API key for cloud LLM backends |
 | `ANTHROPIC_API_KEY` | — | Anthropic Claude API key |
 | `GEMINI_API_KEY` | — | Google Gemini API key |
@@ -846,12 +908,16 @@ capabilities:
 
 ## Next Priorities
 
-- [ ] End-to-end UAT execution and bug triage using `docs/UAT_RUNBOOK.md`
 - [x] Add robust load-aware scheduling (queue depth/latency weighted worker selection)
 - [x] Add metrics/observability export (Prometheus + structured latency/error dashboards)
 - [x] Extend automated security tests for webhook replay protections and secret-rotation workflows
+- [x] Add bot/worker readiness visibility, tooling preflight guards, and recommended operator actions
+- [x] Add chat token governor, usage telemetry, and effective-context preflight
+- [x] Add memory profiles, ticket sources, schedules, and a native Android client
+- [ ] End-to-end UAT execution and bug triage using `docs/UAT_RUNBOOK.md`
 - [ ] Add complete in-app password reset/recovery workflows (no direct DB command dependency)
 - [ ] Stabilize deployment profile (compose + reverse proxy reference stack)
+- [ ] Build the staged external chat-history importer (see `docs/CHAT_HISTORY_MIGRATION.md`)
 
 ## Future Enhancements
 
@@ -863,3 +929,6 @@ Workflow and pipeline UX ideas currently planned, but not yet implemented:
 - Resume-from-checkpoint execution after a partial failure or operator correction.
 - Queue and concurrency controls at the pipeline level so large fan-out stages can be drained safely without overwhelming providers or workers.
 - First-class pipeline templates that remain user-defined and modular rather than being seeded with project-specific assumptions.
+- Android client follow-ups: file uploads, streamed tokens, work monitoring, notifications, and agentic controls.
+- Multi-instance hardening for the agent scheduler (distributed coordination and retry policy).
+- A real chat-history importer for ChatGPT, Codex, Claude, Gemini, and OpenWebUI exports once the staged migration contract is validated.
