@@ -19,7 +19,7 @@ def _bot_export(bot_id: str, *, extra=None):
         "name": bot_id,
         "role": "assistant",
         "enabled": True,
-        "backends": [{"type": "ollama_cloud", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+        "backends": [{"type": "ollama_cloud", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
         "routing_rules": {"output_contract": {"format": "plain_text"}},
     }
     if extra:

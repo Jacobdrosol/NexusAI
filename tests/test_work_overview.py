@@ -567,7 +567,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                     }
                 ],
                 "by_bot": [{"bot_id": "lesson-writer", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 0}],
-                "by_provider_model": [{"provider": "ollama_cloud", "model": "qwen3.5:cloud", "total_tokens": 140, "tasks_with_usage": 1}],
+                "by_provider_model": [{"provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud", "total_tokens": 140, "tasks_with_usage": 1}],
                 "token_governor": {
                     "enabled": True,
                     "limits": {
@@ -624,7 +624,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                 "by_provider_model": [
                     {
                         "provider": "ollama_cloud",
-                        "model": "qwen3.5:397b",
+                        "model": "deepseek-v4.1-flash:cloud",
                         "total_tokens": 40,
                         "messages_with_usage": 1,
                         "last_message_at": "2026-08-05T01:02:03+00:00",
@@ -718,12 +718,12 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"worker provider/model attribution is complete" in resp.data
     assert b"Worker model spend:" in resp.data
     assert b"worker model concentrated spend" in resp.data
-    assert b"ollama_cloud / qwen3.5:cloud is using 1.0 of measured worker tokens" in resp.data
+    assert b"ollama_cloud / deepseek-v4.1-flash:cloud is using 1.0 of measured worker tokens" in resp.data
     assert b"Chat provider/model attribution:" in resp.data
     assert b"chat provider/model attribution is complete" in resp.data
     assert b"Chat model spend:" in resp.data
     assert b"chat model concentrated spend" in resp.data
-    assert b"ollama_cloud / qwen3.5:397b is using 1.0 of measured chat tokens" in resp.data
+    assert b"ollama_cloud / deepseek-v4.1-flash:cloud is using 1.0 of measured chat tokens" in resp.data
     assert b"token usage telemetry is incomplete for most measured tasks" in resp.data
     assert b"chat token usage telemetry is incomplete for most assistant messages" in resp.data
     assert b"Missing ratio" in resp.data
@@ -799,7 +799,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"setChatBotHourlyCap" in resp.data
     assert b"No chat token usage" not in resp.data
     assert b"ollama_cloud" in resp.data
-    assert b"qwen3.5:cloud" in resp.data
+    assert b"deepseek-v4.1-flash:cloud" in resp.data
     assert b"Quality Gates" in resp.data
     assert b"Overall action:" in resp.data
     assert b"acme Lesson Quality" in resp.data
@@ -944,9 +944,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["usage_brief"]["provider_model_spend"] == {
         "level": "warning",
         "label": "concentrated spend",
-        "detail": "ollama_cloud / qwen3.5:cloud is using 1.0 of measured worker tokens; review quality before increasing throughput.",
+        "detail": "ollama_cloud / deepseek-v4.1-flash:cloud is using 1.0 of measured worker tokens; review quality before increasing throughput.",
         "provider": "ollama_cloud",
-        "model": "qwen3.5:cloud",
+        "model": "deepseek-v4.1-flash:cloud",
         "total_tokens": 140,
         "top_tokens": 140,
         "top_ratio": 1.0,
@@ -960,9 +960,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["chat_usage_brief"]["provider_model_spend"] == {
         "level": "warning",
         "label": "concentrated spend",
-        "detail": "ollama_cloud / qwen3.5:397b is using 1.0 of measured chat tokens; review quality before increasing throughput.",
+        "detail": "ollama_cloud / deepseek-v4.1-flash:cloud is using 1.0 of measured chat tokens; review quality before increasing throughput.",
         "provider": "ollama_cloud",
-        "model": "qwen3.5:397b",
+        "model": "deepseek-v4.1-flash:cloud",
         "total_tokens": 40,
         "top_tokens": 40,
         "top_ratio": 1.0,

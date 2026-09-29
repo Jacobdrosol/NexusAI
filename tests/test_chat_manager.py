@@ -113,7 +113,7 @@ async def test_summarize_message_usage_groups_by_conversation_bot_and_model(tmp_
         content="reply",
         bot_id="general-chat",
         provider="ollama_cloud",
-        model="qwen3.5:397b",
+        model="deepseek-v4.1-flash:cloud",
         metadata={"usage": {"prompt_tokens": 20, "completion_tokens": 10}},
     )
     await mgr.add_message(
@@ -122,7 +122,7 @@ async def test_summarize_message_usage_groups_by_conversation_bot_and_model(tmp_
         content="unmetered reply",
         bot_id="general-chat",
         provider="ollama_cloud",
-        model="qwen3.5:397b",
+        model="deepseek-v4.1-flash:cloud",
         metadata={},
     )
 
@@ -146,7 +146,7 @@ async def test_summarize_message_usage_groups_by_conversation_bot_and_model(tmp_
     assert usage["by_bot"][0]["bot_id"] == "general-chat"
     assert usage["by_bot"][0]["last_message_at"]
     assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"
-    assert usage["by_provider_model"][0]["model"] == "qwen3.5:397b"
+    assert usage["by_provider_model"][0]["model"] == "deepseek-v4.1-flash:cloud"
     assert usage["by_provider_model"][0]["last_message_at"]
 
 

@@ -22,7 +22,7 @@ def test_summarize_bot_tooling_snapshot_reports_blocked_browser_worker(tmp_path)
                     "id": "chat-bot",
                     "name": "Chat Bot",
                     "enabled": True,
-                    "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:cloud"}],
+                    "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 },
             ]
         ),

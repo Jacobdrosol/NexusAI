@@ -553,7 +553,7 @@ async def test_worker_lifecycle_rejects_disabling_or_deleting_dependent_worker(c
         "role": "assistant",
         "enabled": False,
         "backends": [
-            {"type": "remote_llm", "provider": "ollama_cloud", "model": "qwen3.5:cloud", "worker_id": "dependent-worker"}
+            {"type": "remote_llm", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud", "worker_id": "dependent-worker"}
         ],
     }
     assert (await cp_client.post("/v1/bots", json=bot_payload)).status_code == 200

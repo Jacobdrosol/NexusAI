@@ -388,7 +388,7 @@ persist across restarts and take effect within ~5 seconds in other processes
 
 Returns `(context_item_limit, context_source_limit)` for the given model name.
 Models whose names contain any pattern from the `large_context_model_patterns`
-setting (`gpt-oss`, `qwen3.5`, `claude-3`, `gpt-4`, `o1`, `o3` by default)
+setting (`gpt-oss`, `qwen3-next`, `deepseek-v4`, `claude-3`, `gpt-4`, `o1`, `o3` by default)
 receive the "large context" limits; others receive the standard limits.
 
 ### Complete Settings Reference
@@ -463,7 +463,7 @@ receive the "large context" limits; others receive the standard limits.
 | `context_source_limit_default` | `12` | int | Default source label limit |
 | `context_item_limit_large` | `100` | int | Large-context item limit |
 | `context_source_limit_large` | `50` | int | Large-context source limit |
-| `large_context_model_patterns` | `"gpt-oss,qwen3.5,claude-3,gpt-4,o1,o3"` | string | Patterns identifying large-context models |
+| `large_context_model_patterns` | `"gpt-oss,qwen3-next,deepseek-v4,claude-3,gpt-4,o1,o3"` | string | Patterns identifying large-context models |
 
 #### Coding (`category="coding"`)
 

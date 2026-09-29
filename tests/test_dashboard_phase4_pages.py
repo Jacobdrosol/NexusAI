@@ -312,7 +312,7 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
                         {
                             "type": "remote_llm",
                             "provider": "ollama_cloud",
-                            "model": "qwen3.5:cloud",
+                            "model": "deepseek-v4.1-flash:cloud",
                             "worker_id": "acme-reader",
                             "api_key_ref": "OLLAMA_CLOUD_KEY",
                         },
@@ -436,7 +436,7 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert "Browser session expired" in data["html"]
     assert "[redacted raw credential]" in data["html"]
     assert "sk-live-secret" not in data["html"]
-    assert "Routes: ollama_cloud / qwen3.5:cloud" in data["html"]
+    assert "Routes: ollama_cloud / deepseek-v4.1-flash:cloud" in data["html"]
     assert "Tools: browser-ui" in data["html"]
     assert "Site/API actions: acme-agent-api.updateLesson" in data["html"]
     assert "Browser actions: lesson_preview.read" in data["html"]
@@ -1972,7 +1972,7 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
             return [
                 {
                     "id": "ollama-cloud-gpt-oss-120b",
-                    "name": "qwen3.5:cloud",
+                    "name": "deepseek-v4.1-flash:cloud",
                     "provider": "ollama_cloud",
                     "capabilities": ["vision"],
                     "enabled": True,
@@ -2002,7 +2002,7 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
     assert payload["bot"]["http_connection_backend_count"] == 1
     assert payload["route"]["default_model_id"] == "ollama-cloud-gpt-oss-120b"
     assert payload["model"]["source"] == "conversation_default_model"
-    assert payload["model"]["model"] == "qwen3.5:cloud"
+    assert payload["model"]["model"] == "deepseek-v4.1-flash:cloud"
     assert payload["model"]["capabilities"] == ["vision"]
     assert payload["model"]["image_attachments_supported"] is True
     assert payload["memory"]["active"] is True
@@ -2039,7 +2039,7 @@ def test_chat_effective_context_api_uses_explicit_bot_backend_model(dashboard_cl
                     "id": "default-chat",
                     "name": "Default Chat",
                     "memory_profiles_enabled": True,
-                    "backends": [{"provider": "ollama_cloud", "model": "qwen3.5:cloud"}],
+                    "backends": [{"provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 },
                 {
                     "id": "explicit-chat",
@@ -2056,7 +2056,7 @@ def test_chat_effective_context_api_uses_explicit_bot_backend_model(dashboard_cl
             return [
                 {
                     "id": "vision-default",
-                    "name": "qwen3.5:cloud",
+                    "name": "deepseek-v4.1-flash:cloud",
                     "provider": "ollama_cloud",
                     "capabilities": ["vision"],
                     "enabled": True,
@@ -2382,7 +2382,7 @@ def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client)
                     "created_at": "2026-08-04T12:34:00+00:00",
                     "bot_id": "personal-general-chat",
                     "provider": "ollama_cloud",
-                    "model": "qwen3.5:397b",
+                    "model": "deepseek-v4.1-flash:cloud",
                     "metadata": {
                         "bot": {
                             "id": "personal-general-chat",
@@ -2391,7 +2391,7 @@ def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client)
                         },
                         "model": {
                             "provider": "ollama_cloud",
-                            "model": "qwen3.5:397b",
+                            "model": "deepseek-v4.1-flash:cloud",
                             "source": "bot_config",
                         },
                         "usage": {
@@ -2420,7 +2420,7 @@ def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client)
     assert resp.status_code == 200
     assert b"message-provenance" in resp.data
     assert b"Personal General Chat" in resp.data
-    assert b"ollama_cloud / qwen3.5:397b" in resp.data
+    assert b"ollama_cloud / deepseek-v4.1-flash:cloud" in resp.data
     assert b"1,690 tokens (1,234 in / 456 out)" in resp.data
     assert b"bot updated 2026-08-04 12:34:56" in resp.data
     assert b"message-timestamp" in resp.data
@@ -2538,7 +2538,7 @@ def test_chat_page_resolves_id_only_message_provenance_labels(dashboard_client):
             return [
                 {
                     "id": "ollama-qwen",
-                    "name": "qwen3.5:397b",
+                    "name": "deepseek-v4.1-flash:cloud",
                     "provider": "ollama_cloud",
                     "enabled": True,
                 }
@@ -2552,7 +2552,7 @@ def test_chat_page_resolves_id_only_message_provenance_labels(dashboard_client):
 
     assert resp.status_code == 200
     assert b'title="Bot personal-general-chat">Personal General Chat (personal-general-chat)</span>' in resp.data
-    assert b'title="Model ollama-qwen">ollama_cloud / qwen3.5:397b</span>' in resp.data
+    assert b'title="Model ollama-qwen">ollama_cloud / deepseek-v4.1-flash:cloud</span>' in resp.data
     assert b"const botDisplayLabels" in resp.data
     assert b"const modelDisplayLabels" in resp.data
 
@@ -2845,7 +2845,7 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Saved Launch Profile" in resp.data
     assert b"Backlog" in resp.data
     assert b"ollama_cloud" in resp.data
-    assert b"qwen3.5:397b" in resp.data
+    assert b"deepseek-v4.1-flash:cloud" in resp.data
     assert b"Auto: 1024 for local Ollama chat" in resp.data
     assert b"Context Window" in resp.data
     assert b"GPU Layers" in resp.data
@@ -2867,7 +2867,7 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                     {
                         "type": "remote_llm",
                         "provider": "ollama_cloud",
-                        "model": "qwen3.5:397b",
+                        "model": "deepseek-v4.1-flash:cloud",
                         "worker_id": "coding-worker",
                         "api_key_ref": "OLLAMA_CLOUD_KEY",
                     }
@@ -3003,7 +3003,7 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"Coding" in resp.data
     assert b"Backend Routes" in resp.data
     assert b"1 configured" in resp.data
-    assert b"Route: ollama_cloud / qwen3.5:397b on coding-worker" in resp.data
+    assert b"Route: ollama_cloud / deepseek-v4.1-flash:cloud on coding-worker" in resp.data
     assert b"Use:" in resp.data
     assert b"Tool-enabled chat" in resp.data
     assert b"Autonomy:" in resp.data
@@ -3349,7 +3349,7 @@ def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
                 "id": bot_id,
                 "name": "Ready Bot",
                 "enabled": True,
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5", "api_key_ref": "OLLAMA_CLOUD_KEY"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash", "api_key_ref": "OLLAMA_CLOUD_KEY"}],
             }
 
         def get_bot_readiness(self, bot_id):
@@ -7713,7 +7713,7 @@ def test_workers_page_surfaces_runtime_tool_evidence(dashboard_client):
                         {
                             "type": "llm",
                             "provider": "ollama_cloud",
-                            "model": "qwen3.5:cloud",
+                            "model": "deepseek-v4.1-flash:cloud",
                             "worker_id": "nexus-browser-worker",
                         }
                     ],
@@ -7768,7 +7768,7 @@ def test_workers_page_surfaces_runtime_tool_evidence(dashboard_client):
     assert b"brave_search missing" in resp.data
     assert b"ollama_cloud ok" in resp.data
     assert b"1 enabled bot(s), 1 disabled" in resp.data
-    assert b"Routes: browser / browser-ui on nexus-browser-worker, ollama_cloud / qwen3.5:cloud on nexus-browser-worker" in resp.data
+    assert b"Routes: browser / browser-ui on nexus-browser-worker, ollama_cloud / deepseek-v4.1-flash:cloud on nexus-browser-worker" in resp.data
     assert b"acme Browser Auditor" in resp.data
     assert b"Parked Helper" in resp.data
     assert b"Other Worker Bot" not in resp.data
@@ -8560,7 +8560,7 @@ def test_bots_page_and_proxy_support_specialist_creation(dashboard_client):
             return [{"id": "worker-1", "name": "Worker One"}]
 
         def list_models(self):
-            return [{"name": "qwen3.5:cloud", "provider": "ollama_cloud"}]
+            return [{"name": "deepseek-v4.1-flash:cloud", "provider": "ollama_cloud"}]
 
         def list_keys(self):
             return [{"name": "ollama-cloud", "provider": "ollama_cloud"}]

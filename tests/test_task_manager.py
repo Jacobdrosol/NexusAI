@@ -776,7 +776,7 @@ async def test_token_usage_summary_groups_by_project_manager_and_model(tmp_path)
             source="chat_assign",
             project_id="acme",
             root_pm_bot_id="acme-pm",
-            execution_provenance={"provider": "ollama_cloud", "model": "qwen3.5:cloud"},
+            execution_provenance={"provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"},
         ),
     )
 
@@ -802,7 +802,7 @@ async def test_token_usage_summary_groups_by_project_manager_and_model(tmp_path)
     assert usage["by_bot"][0]["total_tokens"] == 140
     assert usage["by_bot"][0]["tasks_with_usage"] == 1
     assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"
-    assert usage["by_provider_model"][0]["model"] == "qwen3.5:cloud"
+    assert usage["by_provider_model"][0]["model"] == "deepseek-v4.1-flash:cloud"
     assert usage["by_provider_model"][0]["total_tokens"] == 140
 
 
@@ -1581,7 +1581,7 @@ async def test_task_manager_respects_provider_concurrency_limits(tmp_path, monke
                     id="ollama-bot",
                     name="Ollama Cloud Bot",
                     role="coder",
-                    backends=[{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b-cloud"}],
+                    backends=[{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 ),
             }
 

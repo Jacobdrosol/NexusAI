@@ -13,11 +13,11 @@ def test_backend_failure_message_includes_attempts():
     message = _backend_failure_message(
         "task-err",
         RuntimeError("timed out"),
-        ["ollama_cloud/qwen3.5:397b-cloud: timed out"],
+        ["ollama_cloud/deepseek-v4.1-flash:cloud: timed out"],
     )
 
     assert "All backends failed for task task-err: timed out." in message
-    assert "Attempts: ollama_cloud/qwen3.5:397b-cloud: timed out." in message
+    assert "Attempts: ollama_cloud/deepseek-v4.1-flash:cloud: timed out." in message
 
 
 def test_messages_for_ollama_preserve_tool_call_context():

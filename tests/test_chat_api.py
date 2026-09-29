@@ -93,7 +93,7 @@ async def test_chat_injects_self_hosted_web_context_only_for_enabled_bot(cp_app,
                 "id": "web-chat-bot",
                 "name": "Web Chat Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "routing_rules": {"chat_tool_access": {"enabled": True, "web_search": True}},
                 "enabled": True,
             },
@@ -392,7 +392,7 @@ async def test_create_conversation_and_post_message(cp_app):
                 "id": "bot-chat",
                 "name": "Chat Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -406,14 +406,14 @@ async def test_create_conversation_and_post_message(cp_app):
         assert data["user_message"]["content"] == "hello"
         assert data["assistant_message"]["content"] == "assistant reply"
         assert data["assistant_message"]["bot_id"] == "bot-chat"
-        assert data["assistant_message"]["model"] == "qwen3.5:397b"
+        assert data["assistant_message"]["model"] == "deepseek-v4.1-flash:cloud"
         assert data["assistant_message"]["provider"] == "ollama_cloud"
         metadata = data["assistant_message"]["metadata"]
         assert metadata["bot"]["id"] == "bot-chat"
         assert metadata["bot"]["name"] == "Chat Bot"
         assert metadata["bot"]["updated_at"]
         assert metadata["model"]["provider"] == "ollama_cloud"
-        assert metadata["model"]["model"] == "qwen3.5:397b"
+        assert metadata["model"]["model"] == "deepseek-v4.1-flash:cloud"
         assert metadata["model"]["source"] == "bot_config"
         assert metadata["usage"] == {"prompt_tokens": 12, "completion_tokens": 8}
 
@@ -425,7 +425,7 @@ async def test_create_conversation_and_post_message(cp_app):
         assert usage["by_conversation"][0]["conversation_id"] == conversation_id
         assert usage["by_bot"][0]["bot_id"] == "bot-chat"
         assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"
-        assert usage["by_provider_model"][0]["model"] == "qwen3.5:397b"
+        assert usage["by_provider_model"][0]["model"] == "deepseek-v4.1-flash:cloud"
         assert isinstance(usage["chat_token_governor"]["enabled"], bool)
         assert "estimated_tokens_per_message" in usage["chat_token_governor"]["limits"]
 
@@ -440,7 +440,7 @@ async def test_project_chat_messages_are_automatically_ingested_and_unscoped_mes
                 "id": "bot-project-ingest",
                 "name": "Project Ingest Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -488,7 +488,7 @@ async def test_delete_message_pair_replaces_transcript_turn_and_removes_project_
                 "id": "bot-delete-message-pair",
                 "name": "Delete Message Pair Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -595,7 +595,7 @@ async def test_project_chat_context_is_retrieved_across_project_conversations(cp
                 "id": "bot-project-retrieval",
                 "name": "Project Retrieval Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -642,7 +642,7 @@ async def test_explicit_conversation_reference_includes_unscoped_transcript_for_
                 "id": "bot-conversation-reference",
                 "name": "Conversation Reference Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -688,7 +688,7 @@ async def test_explicit_conversation_reference_does_not_cross_owner_boundary(cp_
                 "id": "bot-private-reference",
                 "name": "Private Reference Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -762,7 +762,7 @@ async def test_chat_default_model_id_is_attached_to_scheduled_task(cp_app):
                 "id": "bot-chat-model",
                 "name": "Chat Model Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -876,7 +876,7 @@ async def test_chat_token_governor_blocks_bot_hourly_limit(cp_app, monkeypatch):
                 "id": "bot-chat-budget",
                 "name": "Budgeted Chat Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -1013,7 +1013,7 @@ async def test_user_scoped_memory_profile_retrieved_on_later_eligible_turn(cp_ap
                 "name": "Memory Bot",
                 "role": "assistant",
                 "memory_profiles_enabled": True,
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -1057,7 +1057,7 @@ async def test_project_memory_gate_blocks_profile_retrieval_when_project_disable
                 "name": "Project Memory Bot",
                 "role": "assistant",
                 "memory_profiles_enabled": True,
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -1119,7 +1119,7 @@ async def test_memory_profile_ignores_low_relevance_hits(cp_app):
                 "name": "Memory Relevance Bot",
                 "role": "assistant",
                 "memory_profiles_enabled": True,
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -1312,7 +1312,7 @@ async def test_chat_message_includes_attachments_in_scheduler_payload(cp_app):
 
 
 @pytest.mark.anyio
-async def test_chat_message_accepts_image_attachment_for_ollama_cloud_qwen35_bot(cp_app):
+async def test_chat_message_accepts_image_attachment_for_ollama_cloud_deepseek_v41_bot(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Image Qwen"})
@@ -1324,7 +1324,7 @@ async def test_chat_message_accepts_image_attachment_for_ollama_cloud_qwen35_bot
                 "id": "bot-qwen-vision",
                 "name": "Qwen Vision Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b-cloud"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -1356,7 +1356,7 @@ async def test_chat_message_uses_default_model_capabilities_for_image_attachment
             "/v1/models",
             json={
                 "id": "ollama-qwen-vision",
-                "name": "qwen3.5:397b-cloud",
+                "name": "deepseek-v4.1-flash:cloud",
                 "provider": "ollama_cloud",
                 "capabilities": ["vision"],
                 "enabled": True,
@@ -1419,7 +1419,7 @@ async def test_chat_message_rejects_image_when_default_model_is_text_only(cp_app
             "/v1/models",
             json={
                 "id": "ollama-qwen-vision",
-                "name": "qwen3.5:397b-cloud",
+                "name": "deepseek-v4.1-flash:cloud",
                 "provider": "ollama_cloud",
                 "capabilities": ["vision"],
                 "enabled": True,
@@ -1441,7 +1441,7 @@ async def test_chat_message_rejects_image_when_default_model_is_text_only(cp_app
                 "id": "bot-vision-base-text-default",
                 "name": "Vision Base Text Default",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b-cloud"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -2071,7 +2071,7 @@ async def test_stream_message_rejects_attachment_total_size_over_1gb(cp_app):
 @pytest.mark.anyio
 async def test_stream_message_uses_default_model_capabilities_for_image_attachment(cp_app):
     async def _stream(_task):
-        yield {"event": "backend_selected", "provider": "ollama_cloud", "model": "qwen3.5:397b-cloud"}
+        yield {"event": "backend_selected", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}
         yield {"event": "final", "output": "vision stream reply"}
 
     cp_app.state.scheduler.stream = _stream
@@ -2080,7 +2080,7 @@ async def test_stream_message_uses_default_model_capabilities_for_image_attachme
             "/v1/models",
             json={
                 "id": "ollama-qwen-vision-stream",
-                "name": "qwen3.5:397b-cloud",
+                "name": "deepseek-v4.1-flash:cloud",
                 "provider": "ollama_cloud",
                 "capabilities": ["vision"],
                 "enabled": True,
@@ -2159,7 +2159,7 @@ async def test_stream_message_rejects_image_when_default_model_is_text_only(cp_a
             "/v1/models",
             json={
                 "id": "ollama-qwen-vision-stream-base",
-                "name": "qwen3.5:397b-cloud",
+                "name": "deepseek-v4.1-flash:cloud",
                 "provider": "ollama_cloud",
                 "capabilities": ["vision"],
                 "enabled": True,
@@ -2172,7 +2172,7 @@ async def test_stream_message_rejects_image_when_default_model_is_text_only(cp_a
                 "id": "bot-vision-base-text-stream-default",
                 "name": "Vision Base Text Stream Default",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b-cloud"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -2214,7 +2214,7 @@ async def test_stream_message_retrieves_user_scoped_memory_profile(cp_app):
 
     async def _stream(task):
         captured_payloads.append(task.payload)
-        yield {"event": "backend_selected", "provider": "ollama_cloud", "model": "qwen3.5:397b", "worker_id": None}
+        yield {"event": "backend_selected", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud", "worker_id": None}
         yield {"event": "final", "output": f"stream reply {len(captured_payloads)}"}
 
     cp_app.state.scheduler.stream = _stream
@@ -2223,7 +2223,7 @@ async def test_stream_message_retrieves_user_scoped_memory_profile(cp_app):
             "/v1/models",
             json={
                 "id": "ollama-qwen-memory-stream",
-                "name": "qwen3.5:397b",
+                "name": "deepseek-v4.1-flash:cloud",
                 "provider": "ollama_cloud",
                 "capabilities": ["chat"],
                 "enabled": True,
@@ -2237,7 +2237,7 @@ async def test_stream_message_retrieves_user_scoped_memory_profile(cp_app):
                 "name": "Memory Stream Bot",
                 "role": "assistant",
                 "memory_profiles_enabled": True,
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -2280,7 +2280,7 @@ async def test_stream_message_project_memory_gate_blocks_profile_retrieval(cp_ap
 
     async def _stream(task):
         captured_payloads.append(task.payload)
-        yield {"event": "backend_selected", "provider": "ollama_cloud", "model": "qwen3.5:397b", "worker_id": None}
+        yield {"event": "backend_selected", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud", "worker_id": None}
         yield {"event": "final", "output": "stream reply"}
 
     cp_app.state.scheduler.stream = _stream
@@ -2289,7 +2289,7 @@ async def test_stream_message_project_memory_gate_blocks_profile_retrieval(cp_ap
             "/v1/models",
             json={
                 "id": "ollama-qwen-memory-stream-project",
-                "name": "qwen3.5:397b",
+                "name": "deepseek-v4.1-flash:cloud",
                 "provider": "ollama_cloud",
                 "capabilities": ["chat"],
                 "enabled": True,
@@ -2303,7 +2303,7 @@ async def test_stream_message_project_memory_gate_blocks_profile_retrieval(cp_ap
                 "name": "Project Memory Stream Bot",
                 "role": "assistant",
                 "memory_profiles_enabled": True,
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )
@@ -2379,7 +2379,7 @@ async def test_stream_default_model_id_is_attached_to_scheduled_task(cp_app):
                 "id": "bot-stream-model",
                 "name": "Stream Model Bot",
                 "role": "assistant",
-                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "deepseek-v4.1-flash:cloud"}],
                 "enabled": True,
             },
         )

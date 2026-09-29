@@ -207,7 +207,7 @@ async def test_scheduler_ollama_cloud_maps_max_tokens_to_num_predict():
     scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
     backend = BackendConfig(
         type="cloud_api",
-        model="qwen3.5:cloud",
+        model="deepseek-v4.1-flash:cloud",
         provider="ollama_cloud",
         api_key_ref="OLLAMA_API_KEY",
         params={"max_tokens": 768, "temperature": 0.3, "response_format": "json"},
@@ -242,8 +242,8 @@ async def test_scheduler_ollama_cloud_maps_max_tokens_to_num_predict():
 def test_scheduler_ollama_cloud_model_variants_include_cloud_alias():
     from control_plane.scheduler.scheduler import Scheduler
 
-    variants = Scheduler._ollama_cloud_model_variants("qwen3.5:397b-cloud")
-    assert variants == ["qwen3.5:397b-cloud", "qwen3.5:397b"]
+    variants = Scheduler._ollama_cloud_model_variants("deepseek-v4.1-flash:cloud")
+    assert variants == ["deepseek-v4.1-flash:cloud", "deepseek-v4.1-flash"]
 
 
 @pytest.mark.anyio
@@ -255,7 +255,7 @@ async def test_scheduler_ollama_cloud_tries_alias_before_pull():
     scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
     backend = BackendConfig(
         type="cloud_api",
-        model="qwen3.5:397b-cloud",
+        model="deepseek-v4.1-flash:cloud",
         provider="ollama_cloud",
         api_key_ref="OLLAMA_API_KEY",
     )
@@ -280,9 +280,9 @@ async def test_scheduler_ollama_cloud_tries_alias_before_pull():
 
     async def _post(_url, headers=None, json=None):  # noqa: ANN001
         model_name = str((json or {}).get("model") or "")
-        if model_name == "qwen3.5:397b-cloud":
+        if model_name == "deepseek-v4.1-flash:cloud":
             return _response(404, {"error": "model not found"})
-        if model_name == "qwen3.5:397b":
+        if model_name == "deepseek-v4.1-flash":
             return _response(
                 200,
                 {
@@ -305,7 +305,7 @@ async def test_scheduler_ollama_cloud_tries_alias_before_pull():
             result = await scheduler._call_ollama_cloud(backend, payload)
 
     assert result["output"] == "ok"
-    assert result["resolved_model"] == "qwen3.5:397b"
+    assert result["resolved_model"] == "deepseek-v4.1-flash"
     assert pull_mock.await_count == 0
 
 
@@ -461,7 +461,7 @@ async def test_scheduler_preferred_model_uses_enabled_catalog_model():
                 enabled=True,
             )
 
-    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="qwen3.5:397b")
+    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="deepseek-v4.1-flash:cloud")
     task = Task(
         id="task-preferred-model",
         bot_id="bot-1",
@@ -492,7 +492,7 @@ async def test_scheduler_preferred_model_rejects_provider_mismatch():
                 enabled=True,
             )
 
-    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="qwen3.5:397b")
+    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="deepseek-v4.1-flash:cloud")
     task = Task(
         id="task-preferred-provider-mismatch",
         bot_id="bot-1",
@@ -627,7 +627,7 @@ async def test_scheduler_ollama_cloud_surfaces_provider_error_detail():
     scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
     backend = BackendConfig(
         type="cloud_api",
-        model="qwen3.5:cloud",
+        model="deepseek-v4.1-flash:cloud",
         provider="ollama_cloud",
         api_key_ref="OLLAMA_API_KEY",
     )
@@ -650,7 +650,7 @@ async def test_scheduler_ollama_cloud_surfaces_provider_error_detail():
     mock_client.post.return_value = fake_response
 
     with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(BackendError, match="Ollama Cloud model 'qwen3.5:cloud' not found"):
+        with pytest.raises(BackendError, match="Ollama Cloud model 'deepseek-v4.1-flash:cloud' not found"):
             await scheduler._call_ollama_cloud(backend, payload)
 
 

@@ -83,7 +83,7 @@ your endpoint, with clickable chips to auto-fill the input. This avoids tag typo
 ### Discovering Available Model Tags
 
 Model names on Ollama Cloud follow the format `<base-model>:<size>-<tag>`, for example:
-- `qwen3.5:397b-cloud`
+- `deepseek-v4.1-flash:cloud`
 - `gpt-oss:120b-cloud`
 - `qwen3-coder-next:80b-cloud`
 
@@ -113,7 +113,7 @@ All bots use `backends[].type = cloud_api` and `provider = ollama_cloud`.
 Recommended model split:
 
 1. Planning/review/UI validation: `gpt-oss:120b-cloud`
-2. Coding/research/database: `qwen3.5:397b-cloud`
+2. Coding/research/database: `deepseek-v4.1-flash:cloud`
 3. (Optional alternative for targeted creative generation) `glm-5:cloud`
 
 ## Import Policy

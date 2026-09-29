@@ -186,7 +186,7 @@ _DEFAULTS: List[tuple] = [
     ("context_source_limit_large", "50", "int", "context",
      "Large Context Source Limit",
      "Source label limit for models with 100k+ token context windows."),
-    ("large_context_model_patterns", "gpt-oss,qwen3.5,qwen3-next,qwen3-coder,kimi-k2,glm-4,glm-5,deepseek-v3,devstral,cogito,nemotron,minimax-m2,gemini-3,gemma4,claude-3,gpt-4,o1,o3", "string", "context",
+    ("large_context_model_patterns", "gpt-oss,qwen3-next,qwen3-coder,kimi-k2,glm-4,glm-5,deepseek-v3,deepseek-v4,devstral,cogito,nemotron,minimax-m2,gemini-3,gemma4,claude-3,gpt-4,o1,o3", "string", "context",
      "Large Context Model Patterns",
      "Comma-separated model name patterns that indicate 100k+ context windows."),
     ("coding_enhancement_enabled", "true", "bool", "coding",
@@ -339,6 +339,21 @@ class SettingsManager:
                     """,
                     (str(floor), now, key, floor),
                 )
+            # Retired model names in the large-context pattern list are rewritten to
+            # their successors so existing installs keep classifying new models as
+            # large-context. Only the retired token (qwen3.5 -> deepseek-v4) is
+            # replaced, so any operator additions to the list are preserved.
+            conn.execute(
+                """
+                UPDATE nexus_settings
+                SET value = replace(value, 'qwen3.5', 'deepseek-v4'),
+                    updated_at = ?,
+                    updated_by = 'system_migration'
+                WHERE key = 'large_context_model_patterns'
+                  AND value LIKE '%qwen3.5%'
+                """,
+                (now,),
+            )
             conn.commit()
 
     # ------------------------------------------------------------------
@@ -508,7 +523,7 @@ def get_context_limits_for_model(model: str, settings: Optional[SettingsManager]
     Models matching large_context_model_patterns get higher limits.
     
     Args:
-        model: Model name (e.g., "gpt-oss:120b-cloud", "qwen3.5:397b-cloud")
+        model: Model name (e.g., "gpt-oss:120b-cloud", "deepseek-v4.1-flash:cloud")
         settings: Optional SettingsManager instance (creates one if None)
     
     Returns:
@@ -517,7 +532,7 @@ def get_context_limits_for_model(model: str, settings: Optional[SettingsManager]
     if settings is None:
         settings = SettingsManager()
     
-    patterns = settings.get("large_context_model_patterns", "gpt-oss,qwen3.5,qwen3-next,qwen3-coder,kimi-k2,glm-4,glm-5,deepseek-v3,devstral,cogito,nemotron,minimax-m2,gemini-3,gemma4,claude-3,gpt-4,o1,o3")
+    patterns = settings.get("large_context_model_patterns", "gpt-oss,qwen3-next,qwen3-coder,kimi-k2,glm-4,glm-5,deepseek-v3,deepseek-v4,devstral,cogito,nemotron,minimax-m2,gemini-3,gemma4,claude-3,gpt-4,o1,o3")
     pattern_list = [p.strip().lower() for p in patterns.split(",") if p.strip()]
     
     model_lower = model.lower()

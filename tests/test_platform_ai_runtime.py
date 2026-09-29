@@ -312,7 +312,7 @@ async def test_platform_brain_specialist_catalog_exposes_only_ready_nonsecret_wo
                 "status": "online",
                 "enabled": True,
                 "capabilities": [
-                    {"type": "llm", "provider": "ollama_cloud", "models": ["qwen3.5:cloud"]}
+                    {"type": "llm", "provider": "ollama_cloud", "models": ["deepseek-v4.1-flash:cloud"]}
                 ],
             }
         )

@@ -65,7 +65,7 @@ def test_specialist_blueprint_rejects_raw_credential_reference_from_backend_mode
                 BackendConfig(
                     type="cloud_api",
                     provider="ollama_cloud",
-                    model="qwen3.5:cloud",
+                    model="deepseek-v4.1-flash:cloud",
                     api_key_ref="sk-live-secret",
                 )
             ],
@@ -307,7 +307,7 @@ async def test_specialist_blueprint_api_previews_and_registers_disabled_bot(cp_a
             {
                 "type": "cloud_api",
                 "provider": "ollama_cloud",
-                "model": "qwen3.5:cloud",
+                "model": "deepseek-v4.1-flash:cloud",
                 "api_key_ref": "ollama-cloud",
             }
         ],
@@ -338,7 +338,7 @@ async def test_specialist_blueprint_api_rejects_unready_activation(cp_app):
             {
                 "type": "remote_llm",
                 "provider": "ollama_cloud",
-                "model": "qwen3.5:cloud",
+                "model": "deepseek-v4.1-flash:cloud",
                 "worker_id": "missing-worker",
             }
         ],
@@ -364,7 +364,7 @@ async def test_specialist_blueprint_api_allows_ready_activation(cp_app):
             {
                 "type": "cloud_api",
                 "provider": "ollama_cloud",
-                "model": "qwen3.5:cloud",
+                "model": "deepseek-v4.1-flash:cloud",
                 "api_key_ref": "ollama-cloud",
             }
         ],
@@ -387,7 +387,7 @@ async def test_specialist_blueprint_api_requires_a_known_project_binding(cp_app)
             {
                 "type": "cloud_api",
                 "provider": "ollama_cloud",
-                "model": "qwen3.5:cloud",
+                "model": "deepseek-v4.1-flash:cloud",
                 "api_key_ref": "ollama-cloud",
             }
         ],

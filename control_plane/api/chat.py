@@ -938,7 +938,7 @@ def _model_supports_image_attachments(*, provider: str, model_name: str, capabil
     if provider in {"ollama_cloud", "ollama"}:
         return any(
             token in lowered_model
-            for token in ("vision", "-vl", "qwen2.5-vl", "qwen-vl", "qwen3-vl", "qwen3.5:", "llava", "gemma3")
+            for token in ("vision", "-vl", "qwen2.5-vl", "qwen-vl", "qwen3-vl", "deepseek-v4", "llava", "gemma3")
         )
     return False
 

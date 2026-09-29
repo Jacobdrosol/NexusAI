@@ -35,12 +35,12 @@ def test_get_context_limits_defaults_unknown_model():
 
 def test_get_context_limits_large_context_model_patterns():
     """Test that large context models are detected correctly."""
-    # Test default patterns: gpt-oss,qwen3.5,claude-3,gpt-4,o1,o3
+    # Test default patterns: gpt-oss,qwen3-next,deepseek-v4,claude-3,gpt-4,o1,o3
     item_limit, source_limit = get_context_limits_for_model("gpt-oss:120b-cloud")
     assert item_limit == 100
     assert source_limit == 50
     
-    item_limit, source_limit = get_context_limits_for_model("qwen3.5:397b-cloud")
+    item_limit, source_limit = get_context_limits_for_model("deepseek-v4.1-flash:cloud")
     assert item_limit == 100
     assert source_limit == 50
     
