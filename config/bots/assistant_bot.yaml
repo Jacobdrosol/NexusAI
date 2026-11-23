@@ -6,5 +6,5 @@ enabled: true
 backends:
   - type: "remote_llm"
     provider: "ollama_cloud"
-    model: "glm-5.2:cloud"
+    model: "glm-5.3-flash:cloud"
     worker_id: "local-worker-01"

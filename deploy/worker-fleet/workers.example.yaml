@@ -7,7 +7,7 @@ fleet:
   worker_node_source: ../../../nexus-worker-node
   image: nexus-worker-node:latest
   provider: ollama_cloud
-  default_model: glm-5.2:cloud
+  default_model: glm-5.3-flash:cloud
   ollama_api_key_env: OLLAMA_API_KEY
   ollama_cloud_base_url: https://ollama.com/api
   cloud_context_policy: redact
@@ -47,7 +47,7 @@ workers:
     course_scope: []
     lesson_scope: []
     models:
-      - glm-5.2:cloud
+      - glm-5.3-flash:cloud
     runtime:
       # Values are sourced only from the private deployment environment.
       env_from: {}
