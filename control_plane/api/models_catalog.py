@@ -26,7 +26,7 @@ async def list_ollama_cloud_available(request: Request) -> List[str]:
     """Query the Ollama Cloud endpoint's /api/tags and return all available model name strings.
 
     Use this to discover what exact model IDs are registered on the Ollama Cloud server so you
-    can add them to the catalog with the right name (e.g. 'qwen3-next:80b-cloud').
+    can add them to the catalog with the right name (e.g. 'glm-5.3-flash:cloud').
     """
     import os
 
