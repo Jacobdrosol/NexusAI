@@ -533,28 +533,27 @@ class AgentScheduleEngine:
     ) -> List[Dict[str, Any]]:
         await self._ensure_db()
         safe_limit = max(1, min(int(limit), 500))
-        filters: List[str] = []
-        values: List[Any] = []
         normalized_status = str(status or "").strip().lower()
         if normalized_status:
             normalized_status = _normalize_schedule_status(normalized_status)
-            filters.append("status = ?")
-            values.append(normalized_status)
         normalized_bot_id = str(target_bot_id or "").strip()
-        if normalized_bot_id:
-            filters.append("target_bot_id = ?")
-            values.append(normalized_bot_id)
-        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
-        query = f"""
+        query = """
             SELECT * FROM agent_schedules
-            {where_clause}
+            WHERE (? IS NULL OR status = ?)
+              AND (? IS NULL OR target_bot_id = ?)
             ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, next_run_at ASC, created_at DESC
             LIMIT ?
         """
-        values.append(safe_limit)
+        params = (
+            normalized_status or None,
+            normalized_status,
+            normalized_bot_id or None,
+            normalized_bot_id,
+            safe_limit,
+        )
         async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute(query, tuple(values)) as cursor:
+            async with db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
         return [self._row_to_schedule(row) for row in rows if row is not None]
 

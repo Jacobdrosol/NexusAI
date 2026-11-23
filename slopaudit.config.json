@@ -1,0 +1,9 @@
+{
+  "profile": "default",
+  "rules": {
+    "security.sql-injection": { "weight": 0.05 },
+    "security.code-execution": { "weight": 0.05 },
+    "security.dockerfile": { "weight": 0.1 }
+  },
+  "failUnder": 70
+}

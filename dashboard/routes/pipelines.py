@@ -49,7 +49,7 @@ def _pipeline_key(name: str, entry_bot_id: str, workflow_graph_id: str = "") -> 
     if graph_id:
         return f"graph:{graph_id}"
     raw = f"{str(entry_bot_id or '').strip().lower()}::{str(name or '').strip().lower()}"
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
     return f"pipeline:{digest}"
 
 

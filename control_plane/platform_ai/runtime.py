@@ -1142,7 +1142,7 @@ class PlatformAISessionRuntime:
             exists = await registry.exists(provider, model)
             if exists:
                 return False
-            digest = hashlib.sha1(f"{provider}:{model}".encode("utf-8")).hexdigest()[:16]
+            digest = hashlib.sha256(f"{provider}:{model}".encode("utf-8")).hexdigest()[:16]
             catalog_model = CatalogModel(
                 id=f"platform-ai-auto:{provider}:{digest}",
                 provider=provider,

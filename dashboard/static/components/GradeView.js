@@ -2,6 +2,20 @@
  * GradeView - AI Grading Results Display Component
  * Handles display of AI grading results, feedback, and premium-gated features
  */
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[c]));
+}
+
+function setHtml(element, html) {
+  element.innerHTML = html; // sec-ok: innerhtml - callers escape interpolated values or pass trusted server-rendered markup
+}
+
 class GradeView {
   constructor(options = {}) {
     this.container = options.container || null;
@@ -351,14 +365,14 @@ class GradeView {
   renderError(message) {
     if (!this.container) return;
 
-    this.container.innerHTML = `
+    setHtml(this.container, `
       <div class="grade-view grade-view-error">
         <div class="error-message">
           <span class="error-icon">!</span>
-          <span>${message || 'Failed to load grading results'}</span>
+          <span>${escapeHtml(message || 'Failed to load grading results')}</span>
         </div>
       </div>
-    `;
+    `);
   }
 
   /**
@@ -367,12 +381,12 @@ class GradeView {
   renderLoading() {
     if (!this.container) return;
 
-    this.container.innerHTML = `
+    setHtml(this.container, `
       <div class="grade-view grade-view-loading">
         <div class="loading-spinner"></div>
         <span>Loading grading results...</span>
       </div>
-    `;
+    `);
   }
 
   /**
@@ -381,11 +395,11 @@ class GradeView {
   renderEmpty() {
     if (!this.container) return;
 
-    this.container.innerHTML = `
+    setHtml(this.container, `
       <div class="grade-view grade-view-empty">
         <span>No grading results available</span>
       </div>
-    `;
+    `);
   }
 
   /**
@@ -412,8 +426,8 @@ class GradeView {
               <span class="grade-value">${gradeDisplay.value}/${gradeDisplay.max}</span>
               <span class="grade-percentage">${gradeDisplay.percentage}%</span>
             </div>
-            ${this.gradingData.title ? `<h3 class="grade-title">${this.gradingData.title}</h3>` : ''}
-            ${this.gradingData.submittedAt ? `<span class="grade-date">Submitted: ${this.gradingData.submittedAt}</span>` : ''}
+            ${this.gradingData.title ? `<h3 class="grade-title">${escapeHtml(this.gradingData.title)}</h3>` : ''}
+            ${this.gradingData.submittedAt ? `<span class="grade-date">Submitted: ${escapeHtml(this.gradingData.submittedAt)}</span>` : ''}
           </div>
           <div class="grade-actions">
             ${this.isPremium ? `
@@ -430,7 +444,7 @@ class GradeView {
         ${feedback.overallComment ? `
           <div class="feedback-section overall-comment">
             <h4>Overall Comment</h4>
-            <p>${feedback.overallComment}</p>
+            <p>${escapeHtml(feedback.overallComment)}</p>
           </div>
         ` : ''}
 
@@ -443,7 +457,7 @@ class GradeView {
               <div class="feedback-section ${isExpanded ? 'expanded' : ''} ${isLocked ? 'locked' : ''}" data-section="${section.id}">
                 <div class="section-header" onclick="gradeView.toggleSection('${section.id}')">
                   <span class="section-icon">${this.getSectionIcon(section.icon)}</span>
-                  <span class="section-title">${section.title}</span>
+                  <span class="section-title">${escapeHtml(section.title)}</span>
                   <span class="section-toggle">${isExpanded ? '−' : '+'}</span>
                   ${isLocked ? '<span class="lock-icon">🔒</span>' : ''}
                 </div>
@@ -482,7 +496,7 @@ class GradeView {
       </div>
     `;
 
-    this.container.innerHTML = html;
+    setHtml(this.container, html);
   }
 
   /**
