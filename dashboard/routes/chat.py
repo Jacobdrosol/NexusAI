@@ -614,6 +614,28 @@ def _model_capabilities(model: dict[str, Any] | None) -> list[str]:
     return [str(item or "").strip() for item in raw if str(item or "").strip()]
 
 
+def _catalog_capabilities_for_model(cp: Any, provider: str, model_name: str) -> list[str]:
+    safe_provider = str(provider or "").strip().lower()
+    safe_name = str(model_name or "").strip()
+    if not safe_provider or not safe_name or not hasattr(cp, "list_models"):
+        return []
+    try:
+        models = cp.list_models() or []
+    except Exception:
+        return []
+    if not isinstance(models, list):
+        return []
+    for model in models:
+        if not isinstance(model, dict) or not bool(model.get("enabled", True)):
+            continue
+        if str(model.get("provider") or "").strip().lower() != safe_provider:
+            continue
+        if str(model.get("name") or "").strip() != safe_name:
+            continue
+        return _model_capabilities(model)
+    return []
+
+
 def _model_supports_image_attachments(*, provider: str, model_name: str, capabilities: list[str] | None = None) -> bool:
     normalized_capabilities = {str(item or "").strip().lower() for item in (capabilities or [])}
     if normalized_capabilities & {"image", "images", "vision", "multimodal"}:
@@ -629,7 +651,18 @@ def _model_supports_image_attachments(*, provider: str, model_name: str, capabil
     if provider_key in {"ollama_cloud", "ollama"}:
         return any(
             token in lowered
-            for token in ("vision", "-vl", "qwen2.5-vl", "qwen-vl", "qwen3-vl", "deepseek-v4", "llava", "gemma3")
+            for token in (
+                "vision",
+                "-vl",
+                "qwen2.5-vl",
+                "qwen-vl",
+                "qwen3-vl",
+                "deepseek-v4",
+                "llava",
+                "gemma3",
+                "gemma4",
+                "glm-5.3",
+            )
         )
     return False
 
@@ -688,16 +721,17 @@ def _effective_model_context_from_cp(
             break
     provider = str((backend or {}).get("provider") or "").strip()
     model_name = str((backend or {}).get("model") or "").strip()
+    capabilities = _catalog_capabilities_for_model(cp, provider, model_name)
     return {
         "source": "bot_backend",
         "provider": provider or None,
         "model": model_name or None,
         "model_id": None,
-        "capabilities": [],
+        "capabilities": capabilities,
         "image_attachments_supported": _model_supports_image_attachments(
             provider=provider,
             model_name=model_name,
-            capabilities=[],
+            capabilities=capabilities,
         ),
         "blocker": "" if backend else "no bot backend",
     }
