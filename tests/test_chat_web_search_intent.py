@@ -22,3 +22,20 @@ def test_existing_lookup_prompts_still_trigger_web_search():
 def test_search_query_keeps_the_product_topic():
     query = _search_query("best 3d scanner for 3d printing professionals on a budget")
     assert "3d scanner" in query.lower()
+
+
+def test_search_query_strips_meta_instructions_and_citation_requests():
+    meta = _search_query(
+        "Using only the supplied web results, name two budget 3D scanners for small parts "
+        "and include their exact URLs."
+    )
+    assert "3d scanners" in meta.lower()
+    assert "using only" not in meta.lower()
+    assert "urls" not in meta.lower()
+
+    citation = _search_query(
+        "Best budget 3D scanner for small gears? Answer in one short sentence and include a source URL."
+    )
+    assert "3d scanner" in citation.lower()
+    assert "answer in one short sentence" not in citation.lower()
+    assert "source url" not in citation.lower()

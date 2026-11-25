@@ -44,6 +44,30 @@ def should_search_web(query: str) -> bool:
     return bool(_WEB_LOOKUP_RE.search(text))
 
 
+_META_PREFIX_RE = re.compile(
+    r"^(?:please\s+)?(?:using|based\s+on|according\s+to|from|with|use)\s+"
+    r"(?:only\s+)?(?:the\s+)?(?:supplied|provided|above|current)?\s*"
+    r"(?:web|search|web-search)\s+(?:results?|context)[,:\s-]*",
+    re.IGNORECASE,
+)
+_META_SUFFIX_RE = re.compile(
+    r"[,;]?\s*(?:and\s+)?(?:include|cite|provide|give|list)\s+"
+    r"(?:their\s+|the\s+|a\s+|an\s+)?(?:exact\s+|source\s+|cited\s+)?"
+    r"(?:urls?|links?|sources?)[^.]*$",
+    re.IGNORECASE,
+)
+_INSTRUCTION_RE = re.compile(
+    r"\b(?:answer|reply|respond)\s+(?:in|with)\s+(?:one|a|two|three)?\s*"
+    r"(?:short\s+|brief\s+)?(?:sentence|paragraph|words?)\b[,.]?",
+    re.IGNORECASE,
+)
+_LEADING_VERB_RE = re.compile(
+    r"^(?:please\s+)?(?:name|list|find|show|give|tell\s+me|what\s+are|which\s+are)\s+"
+    r"(?:me\s+)?(?:two|three|a\s+few|\d+)?\s*",
+    re.IGNORECASE,
+)
+
+
 def _search_query(query: str) -> str:
     """Convert common conversational lookup wording into a useful search query."""
     normalized = re.sub(r"\s+", " ", str(query or "").strip())
@@ -79,6 +103,15 @@ def _search_query(query: str) -> str:
         normalized,
         flags=re.IGNORECASE,
     )
+    for _ in range(3):
+        updated = _META_PREFIX_RE.sub("", normalized)
+        updated = _META_SUFFIX_RE.sub("", updated)
+        updated = _INSTRUCTION_RE.sub("", updated)
+        updated = _LEADING_VERB_RE.sub("", updated)
+        updated = re.sub(r"\s+", " ", updated).strip(" ,.;:-")
+        if updated == normalized:
+            break
+        normalized = updated
     return normalized
 
 
