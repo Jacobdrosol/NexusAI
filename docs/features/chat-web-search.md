@@ -1,12 +1,15 @@
 # Chat Web Search
 
-Direct chat can add current web evidence through Bing RSS or a self-hosted SearXNG service. It is not enabled globally and does not use a paid search API.
+Direct chat gives the model two tools: `web_search` and `fetch_web_page`. The
+model decides when to search, writes its own queries, reads the results, and can
+open a page for more detail. No server-side heuristic or conversation-derived
+query planner is involved.
 
-The bot's model first turns the request into one to three specific search queries (product names, app names, technical terms), then runs them and merges the results. `NEXUSAI_SEARCH_PROVIDER` selects the transport: `bing` (Bing RSS, no key), `searxng` (self-hosted), or a keyed API provider (`brave`, `tavily`, `serper`). Bing and SearXNG scrape search pages, so a provider that answers a browser can still return generic pages to a server; a keyed API avoids that bot-detection failure. Set the matching `NEXUSAI_<PROVIDER>_API_KEY` value when using an API provider.
+The capability is opt-in per bot and is not enabled globally.
 
 ## Configuration
 
-Enable it only on a bot intended for interactive research by setting this bot routing value:
+Enable it on a bot intended for interactive research:
 
 ```json
 {
@@ -19,12 +22,58 @@ Enable it only on a bot intended for interactive research by setting this bot ro
 }
 ```
 
-The search capability is bot-scoped. It does not grant repository, filesystem, worker, or deployment access, and it does not enable search for other bots.
+The search capability is bot-scoped. It does not grant repository, filesystem,
+worker, or deployment access, and it does not enable search for other bots.
+
+## Search providers
+
+Choose the transport with `NEXUSAI_SEARCH_PROVIDER`. Add the key for the
+provider you select. Keys are read on the server only and are never sent to the
+browser.
+
+| Provider | Value | Key | Best for |
+|---|---|---|---|
+| Brave | `brave` | `NEXUSAI_BRAVE_SEARCH_API_KEY` | Recommended default. Independent index, official API, privacy-friendly, fast. Free tier available. |
+| Tavily | `tavily` | `NEXUSAI_TAVILY_API_KEY` | AI research. Returns extracted page content, so the model needs fewer fetch steps. Free tier available. |
+| Serper | `serper` | `NEXUSAI_SERPER_API_KEY` | Google SERP results for product comparisons. Third-party Google SERP API, free tier available. |
+| Bing | `bing` | none | Zero-config fallback. Server-side Bing can return degraded pages to bots; use an API provider for production. |
+| SearXNG | `searxng` | none | Self-hosted, no third-party search calls. Requires a SearXNG instance with working engines. |
+
+### Why a keyed provider
+
+Server-side scraping of Bing or Google is served a degraded page when the search
+engine detects a bot, even though the same query works in a browser. The `bing`
+and `searxng` options are useful for a zero-key install, but a keyed provider is
+the reliable choice for actual work. Microsoft retired the official Bing Search
+API, so there is no first-party Bing API to configure.
+
+### Setup (Brave example)
+
+1. Create a Brave Search API key in the Brave dashboard.
+2. Add both values to `.env`:
+   ```
+   NEXUSAI_SEARCH_PROVIDER=brave
+   NEXUSAI_BRAVE_SEARCH_API_KEY=your-key
+   ```
+3. Restart the control plane so it reloads the environment.
+
+For Tavily use `NEXUSAI_SEARCH_PROVIDER=tavily` and
+`NEXUSAI_TAVILY_API_KEY`. For Serper use `NEXUSAI_SEARCH_PROVIDER=serper` and
+`NEXUSAI_SERPER_API_KEY`.
+
+### Switching providers
+
+Change `NEXUSAI_SEARCH_PROVIDER` to `brave`, `tavily`, or `serper`. If the
+selected provider has no key, the app falls back to Bing RSS and then to
+SearXNG, so an empty key does not break search.
 
 ## Runtime behavior
 
-The control plane calls `NEXUSAI_SEARXNG_URL` (default `http://searxng:8080`) only for prompts that indicate a current-data or lookup need, such as prices, current information, schedules, serial or part lookups, or an explicit web search request. Normal and private chat prompts are not sent to SearXNG.
+The tool loop runs for both normal and streaming chat. The model may call
+`web_search` several times and `fetch_web_page` on results it wants to inspect.
+Tool calls are capped, and when the research budget is spent the model is asked
+for one final answer with citations and explicit gaps.
 
-The resulting title, URL, and snippet are added as bounded system context. The model is instructed to cite exact URLs for time-sensitive claims and to state when the search evidence cannot establish an exact answer. A SearXNG failure simply omits web context; it does not expose the user's prompt in an error message.
-
-Web results are public search data, so they are kept in a separate `Current web context:` system message. The cloud context policy (`allow` / `redact` / `block`) still applies to private workspace or repository context, but it does not strip the public web results when the policy is `redact`. This lets a cloud model answer current questions without sending private context to the provider.
+`fetch_web_page` only fetches public http/https URLs on ports 80 and 443. It
+rejects private, loopback, link-local, and reserved addresses, so a model prompt
+cannot turn it into an internal network request.

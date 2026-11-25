@@ -162,6 +162,7 @@ async def resolve_web_context_items(
     if not search_query:
         return []
     provider = os.environ.get("NEXUSAI_SEARCH_PROVIDER", "bing").strip().lower()
+    items: list[str] = []
     if provider == "brave":
         items = await _brave_context_items(search_query, limit=limit)
     elif provider == "tavily":
@@ -171,6 +172,8 @@ async def resolve_web_context_items(
     elif provider == "searxng":
         return await _searxng_context_items(search_query, limit=limit)
     else:
+        items = await _bing_rss_context_items(search_query, limit=limit)
+    if not items:
         items = await _bing_rss_context_items(search_query, limit=limit)
     if items:
         return items

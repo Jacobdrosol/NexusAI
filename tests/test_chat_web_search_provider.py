@@ -81,3 +81,33 @@ async def test_multiple_queries_are_merged_without_duplicates(monkeypatch):
     result = await resolve_web_queries_context_items(["a", "b", "a"])
 
     assert result == ["item-a", "item-b"]
+
+
+@pytest.mark.anyio
+async def test_missing_provider_key_falls_back_to_bing(monkeypatch):
+    from control_plane.chat import web_search as module
+
+    monkeypatch.setenv("NEXUSAI_SEARCH_PROVIDER", "brave")
+    monkeypatch.delenv("NEXUSAI_BRAVE_SEARCH_API_KEY", raising=False)
+    calls: list[str] = []
+
+    async def fake_brave(query, *, limit=5):
+        calls.append("brave")
+        return []
+
+    async def fake_bing(query, *, limit=5):
+        calls.append("bing")
+        return ["[web:example.com] Example\nURL: https://example.com"]
+
+    async def fake_searx(query, *, limit=5):
+        calls.append("searx")
+        return []
+
+    monkeypatch.setattr(module, "_brave_context_items", fake_brave)
+    monkeypatch.setattr(module, "_bing_rss_context_items", fake_bing)
+    monkeypatch.setattr(module, "_searxng_context_items", fake_searx)
+
+    items = await module.resolve_web_context_items("test query", require_intent=False)
+
+    assert calls == ["brave", "bing"]
+    assert items == ["[web:example.com] Example\nURL: https://example.com"]

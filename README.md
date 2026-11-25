@@ -19,6 +19,15 @@ Highlights: chat with attachments, memory profiles, workspace tools and inline c
 
 **Full feature inventory:** [docs/FEATURES.md](docs/FEATURES.md)
 
+## Web search providers
+
+Chat bots can search the web through the model-driven `web_search` and
+`fetch_web_page` tools. Each deployment chooses a provider with
+`NEXUSAI_SEARCH_PROVIDER` and adds the matching key to `.env`. Brave is the
+recommended default; Tavily and Serper are also supported. See
+[docs/features/chat-web-search.md](docs/features/chat-web-search.md) for the
+provider comparison and setup.
+
 ---
 
 ## Quick Start with Docker
