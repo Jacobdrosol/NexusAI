@@ -78,7 +78,15 @@ def _needs_prior_user_research_context(query: str) -> bool:
     normalized = str(query or "").strip().lower()
     if len(re.findall(r"\w+", normalized)) <= 14:
         return True
-    return bool(re.search(r"\b(?:fulfill|my request|look up|information)\b", normalized))
+    if re.search(r"\b(?:fulfill|my request|look up|information)\b", normalized):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:research|look\s+into|find\s+out|learn\s+about|investigate|how\s+to|"
+            r"capable|does\s+it\s+support|compatible)\b",
+            normalized,
+        )
+    )
 
 
 async def _web_research_query(

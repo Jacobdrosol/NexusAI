@@ -39,3 +39,31 @@ def test_search_query_strips_meta_instructions_and_citation_requests():
     assert "3d scanner" in citation.lower()
     assert "answer in one short sentence" not in citation.lower()
     assert "source url" not in citation.lower()
+
+
+def test_research_and_capability_questions_trigger_web_search():
+    query = (
+        "It should be doing research on 3d scanner cameras or how to test 3d scanning "
+        "with an s26 ultra if it is even capable"
+    )
+    assert should_search_web(query) is True
+    cleaned = _search_query(query)
+    assert "3d scanner" in cleaned.lower()
+    assert "research on" not in cleaned.lower()
+
+
+def test_research_follow_up_pulls_in_the_prior_user_topic():
+    from control_plane.api.chat import _needs_prior_user_research_context
+
+    follow_up = (
+        "It should be doing research on 3d scanner cameras or how to test 3d scanning "
+        "with an s26 ultra if it is even capable"
+    )
+    assert _needs_prior_user_research_context(follow_up) is True
+    assert (
+        _needs_prior_user_research_context(
+            "The previous answer was fine and I do not need any additional details "
+            "about that topic right now thanks very much."
+        )
+        is False
+    )

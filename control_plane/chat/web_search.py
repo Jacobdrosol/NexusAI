@@ -20,7 +20,11 @@ _WEB_LOOKUP_RE = re.compile(
     r"model\s+number|registry|recall|"
     r"best|recommend(?:ation|ed)?|worth\s+it|budget|buy|buying|purchase|purchasing|"
     r"compare|comparison|versus|vs\.?|alternatives?|"
-    r"which\s+.*(?:buy|get|choose|pick)|should\s+i\s+(?:buy|get)"
+    r"which\s+.*(?:buy|get|choose|pick)|should\s+i\s+(?:buy|get)|"
+    r"research|look\s+into|find\s+out|learn\s+about|investigate|"
+    r"how\s+to\s+(?:test|use|check|scan|set\s*up|configure|measure|compare|evaluate)|"
+    r"capable(?:\s+of)?|does\s+(?:it|this|that)\s+support|compatible\s+with|works\s+with|"
+    r"can\s+(?:it|this|that)\s+[\w\s]{0,24}(?:scan|test|handle|support|work)"
     r")\b",
     re.IGNORECASE,
 )
@@ -66,6 +70,14 @@ _LEADING_VERB_RE = re.compile(
     r"(?:me\s+)?(?:two|three|a\s+few|\d+)?\s*",
     re.IGNORECASE,
 )
+_RESEARCH_PREFIX_RE = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"(?:it\s+should\s+be\s+doing\s+)?research\s+(?:on|into|about)|"
+    r"(?:do\s+)?(?:some\s+)?research\s+(?:on|into|about)|"
+    r"(?:look\s+into|investigate|find\s+out\s+about)"
+    r")\s+",
+    re.IGNORECASE,
+)
 
 
 def _search_query(query: str) -> str:
@@ -108,6 +120,8 @@ def _search_query(query: str) -> str:
         updated = _META_SUFFIX_RE.sub("", updated)
         updated = _INSTRUCTION_RE.sub("", updated)
         updated = _LEADING_VERB_RE.sub("", updated)
+        updated = _RESEARCH_PREFIX_RE.sub("", updated)
+        updated = re.sub(r"\s*Follow-up request:\s*", " ", updated, flags=re.IGNORECASE)
         updated = re.sub(r"\s+", " ", updated).strip(" ,.;:-")
         if updated == normalized:
             break
