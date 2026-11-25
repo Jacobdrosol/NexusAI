@@ -130,8 +130,12 @@ async def _web_research_query(
 _PLANNER_SYSTEM_PROMPT = (
     "You turn a user's research request into web search queries. "
     "Return 1 to 3 lines, one query per line. No numbering, no quotes, no commentary. "
-    "Use specific product names, app names, and technical terms when the request implies them. "
-    "The current year is {year}. Do not include private or personal information."
+    "Write the queries a knowledgeable person would type into a search engine. "
+    "Include specific product names, app names, and technical terms. For phone 3D "
+    "scanning, name the photogrammetry apps; for scanner comparisons, name the models "
+    "or brands. Avoid generic queries that start with 'best' or 'budget' unless a "
+    "product is also named. The current year is {year}. Do not include private or "
+    "personal information."
 )
 
 
@@ -2538,6 +2542,7 @@ async def _resolve_context_items(
             query=body.content,
         )
         if planned_queries:
+            logger.info("chat web search queries: %s", planned_queries)
             web_context = await resolve_web_queries_context_items(planned_queries)
         else:
             web_context = await resolve_web_context_items(
