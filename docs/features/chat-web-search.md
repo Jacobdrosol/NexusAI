@@ -24,3 +24,5 @@ The search capability is bot-scoped. It does not grant repository, filesystem, w
 The control plane calls `NEXUSAI_SEARXNG_URL` (default `http://searxng:8080`) only for prompts that indicate a current-data or lookup need, such as prices, current information, schedules, serial or part lookups, or an explicit web search request. Normal and private chat prompts are not sent to SearXNG.
 
 The resulting title, URL, and snippet are added as bounded system context. The model is instructed to cite exact URLs for time-sensitive claims and to state when the search evidence cannot establish an exact answer. A SearXNG failure simply omits web context; it does not expose the user's prompt in an error message.
+
+Web results are public search data, so they are kept in a separate `Current web context:` system message. The cloud context policy (`allow` / `redact` / `block`) still applies to private workspace or repository context, but it does not strip the public web results when the policy is `redact`. This lets a cloud model answer current questions without sending private context to the provider.

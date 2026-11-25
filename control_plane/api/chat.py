@@ -1250,23 +1250,31 @@ def _messages_to_payload(
             payload.append({"role": message.role, "content": message.content})
     resolved_context = list(context_items or [])
     sources = _context_source_labels(resolved_context, limit=12)
-    if resolved_context:
-        joined = "\n".join(resolved_context)
-        payload.insert(0, {"role": "system", "content": f"Context:\n{joined}"})
-        if any(str(item or "").startswith("[web:") for item in resolved_context):
-            payload.insert(
-                1,
-                {
-                    "role": "system",
-                    "content": (
-                        "Current web-search results are included above for this turn. "
-                        "You do have web access for this turn; do not claim you lack a live "
-                        "connection. Use the results when relevant, cite the exact URL for "
-                        "time-sensitive claims, and say when the results do not establish an "
-                        "exact answer."
-                    ),
-                },
-            )
+    web_context = [item for item in resolved_context if str(item or "").startswith("[web:")]
+    private_context = [item for item in resolved_context if not str(item or "").startswith("[web:")]
+    context_prefix: List[dict] = []
+    if private_context:
+        context_prefix.append(
+            {"role": "system", "content": f"Context:\n{chr(10).join(private_context)}"}
+        )
+    if web_context:
+        context_prefix.append(
+            {"role": "system", "content": f"Current web context:\n{chr(10).join(web_context)}"}
+        )
+        context_prefix.append(
+            {
+                "role": "system",
+                "content": (
+                    "Current web-search results are included above for this turn. "
+                    "You do have web access for this turn; do not claim you lack a live "
+                    "connection. Use the results when relevant, cite the exact URL for "
+                    "time-sensitive claims, and say when the results do not establish an "
+                    "exact answer."
+                ),
+            }
+        )
+    if context_prefix:
+        payload[0:0] = context_prefix
     resolved_memory_hits = list(memory_profile_hits or [])
     if resolved_memory_hits:
         memory_lines = []
