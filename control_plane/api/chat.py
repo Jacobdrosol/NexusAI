@@ -1267,9 +1267,10 @@ def _messages_to_payload(
                 "content": (
                     "Current web-search results are included above for this turn. "
                     "You do have web access for this turn; do not claim you lack a live "
-                    "connection. Use the results when relevant, cite the exact URL for "
-                    "time-sensitive claims, and say when the results do not establish an "
-                    "exact answer."
+                    "connection. Use the results when relevant. For time-sensitive claims, "
+                    "cite only URLs that appear in the supplied web context and do not "
+                    "substitute a different site. If the context does not establish an "
+                    "exact answer, say so."
                 ),
             }
         )
