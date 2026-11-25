@@ -1,8 +1,10 @@
 """Bounded, privacy-aware web research context for direct chat."""
 from __future__ import annotations
 
+import html as html_lib
 import os
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
@@ -144,14 +146,122 @@ def _safe_result_text(result: dict[str, Any]) -> str:
     return text[:1400]
 
 
-async def resolve_web_context_items(query: str, *, limit: int = 5) -> list[str]:
-    """Query a self-hosted SearXNG endpoint and return compact cited context."""
+async def resolve_web_context_items(
+    query: str,
+    *,
+    limit: int = 5,
+    require_intent: bool = True,
+) -> list[str]:
+    """Return compact cited context for a query, using Bing or SearXNG."""
     normalized_query = str(query or "").strip()
-    if not normalized_query or not should_search_web(normalized_query):
+    if not normalized_query:
+        return []
+    if require_intent and not should_search_web(normalized_query):
         return []
     search_query = _search_query(normalized_query)
     if not search_query:
         return []
+    provider = os.environ.get("NEXUSAI_SEARCH_PROVIDER", "bing").strip().lower()
+    if provider != "searxng":
+        items = await _bing_rss_context_items(search_query, limit=limit)
+        if items:
+            return items
+    return await _searxng_context_items(search_query, limit=limit)
+
+
+async def resolve_web_queries_context_items(queries: list[str], *, limit: int = 8) -> list[str]:
+    """Run several planned queries and return one de-duplicated context list."""
+    context: list[str] = []
+    cap = max(1, min(int(limit), 12))
+    for query in queries:
+        for item in await resolve_web_context_items(query, limit=5, require_intent=False):
+            if item not in context:
+                context.append(item)
+            if len(context) >= cap:
+                return context
+    return context
+
+
+_BING_RSS_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
+}
+
+_GENERIC_RESULT_DOMAINS = {
+    "bestbuy.com",
+    "merriam-webster.com",
+    "dictionary.cambridge.org",
+    "thefreedictionary.com",
+    "sketchfab.com",
+    "tinkercad.com",
+    "printables.com",
+    "3dwarehouse.sketchup.com",
+    "etsy.com",
+    "espn.com",
+    "espn.in",
+    "speedtest.net",
+    "fast.com",
+    "walmart.com",
+}
+
+
+def _strip_markup(value: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", str(value or ""))
+    return re.sub(r"\s+", " ", html_lib.unescape(text)).strip()
+
+
+def parse_bing_rss(xml_text: str, *, limit: int = 5) -> list[str]:
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    context: list[str] = []
+    for item in root.iter("item"):
+        title = _strip_markup(item.findtext("title") or "")
+        url = str(item.findtext("link") or "").strip()
+        snippet = _strip_markup(item.findtext("description") or "")
+        rendered = _safe_result_text({"title": title, "url": url, "content": snippet})
+        if rendered and rendered not in context:
+            context.append(rendered)
+        if len(context) >= max(1, min(int(limit), 8)):
+            break
+    return context
+
+
+def _filter_generic_results(items: list[str]) -> list[str]:
+    return [
+        item
+        for item in items
+        if not any(f"[web:{domain}]" in item.lower() for domain in _GENERIC_RESULT_DOMAINS)
+    ]
+
+
+async def _bing_rss_context_items(search_query: str, *, limit: int = 5) -> list[str]:
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(8.0, connect=3.0),
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(
+                "https://www.bing.com/search",
+                params={
+                    "q": search_query[:600],
+                    "format": "rss",
+                    "count": max(10, min(int(limit) * 2, 20)),
+                },
+                headers=_BING_RSS_HEADERS,
+            )
+            response.raise_for_status()
+            xml_text = response.text
+    except (httpx.HTTPError, ValueError):
+        return []
+    return _filter_generic_results(parse_bing_rss(xml_text, limit=limit))
+
+
+async def _searxng_context_items(search_query: str, *, limit: int = 5) -> list[str]:
     endpoint = os.environ.get("NEXUSAI_SEARXNG_URL", "http://searxng:8080").rstrip("/")  # sec-ok: http-url - internal Docker network service, not public
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), follow_redirects=False) as client:

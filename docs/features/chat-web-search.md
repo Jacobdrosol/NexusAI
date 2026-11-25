@@ -1,6 +1,8 @@
 # Chat Web Search
 
-Direct chat can add current web evidence through a self-hosted SearXNG service. It is not enabled globally and does not use a paid search API.
+Direct chat can add current web evidence through Bing RSS or a self-hosted SearXNG service. It is not enabled globally and does not use a paid search API.
+
+The bot's model first turns the request into one to three specific search queries (product names, app names, technical terms), then runs them and merges the results. `NEXUSAI_SEARCH_PROVIDER=bing` uses Bing RSS and falls back to SearXNG; `NEXUSAI_SEARCH_PROVIDER=searxng` uses only the self-hosted instance.
 
 ## Configuration
 

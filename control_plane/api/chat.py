@@ -21,7 +21,11 @@ from control_plane.chat.workspace_tools import (
     read_workspace_file_snippet,
     search_workspace_snippets,
 )
-from control_plane.chat.web_search import resolve_web_context_items, should_search_web
+from control_plane.chat.web_search import (
+    resolve_web_context_items,
+    resolve_web_queries_context_items,
+    should_search_web,
+)
 from control_plane.audit.utils import record_audit_event
 from control_plane.plan_qc import extract_handoff_map, validate_plan_structure
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
@@ -121,6 +125,88 @@ async def _web_research_query(
     # resulting SearXNG query bounded and free of assistant-model assertions.
     prior = prior_user_turns[-1][:420]
     return f"{prior}\n\nFollow-up request: {current}"[:600]
+
+
+_PLANNER_SYSTEM_PROMPT = (
+    "You turn a user's research request into web search queries. "
+    "Return 1 to 3 lines, one query per line. No numbering, no quotes, no commentary. "
+    "Use specific product names, app names, and technical terms when the request implies them. "
+    "The current year is {year}. Do not include private or personal information."
+)
+
+
+def _parse_planned_queries(output: str, *, limit: int = 3) -> list[str]:
+    queries: list[str] = []
+    for line in str(output or "").splitlines():
+        cleaned = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", line).strip()
+        cleaned = cleaned.strip("\"'`")
+        if not cleaned or len(cleaned) < 3 or cleaned.endswith(":"):
+            continue
+        if cleaned.lower().startswith(("query:", "search query:")):
+            cleaned = cleaned.split(":", 1)[1].strip()
+        if cleaned.startswith("```"):
+            continue
+        if cleaned and cleaned not in queries:
+            queries.append(cleaned[:200])
+        if len(queries) >= max(1, limit):
+            break
+    return queries
+
+
+async def _plan_web_queries(
+    request: Request,
+    *,
+    bot: Any,
+    conversation: Optional[ChatConversation],
+    query: str,
+) -> list[str]:
+    """Ask the bot's cloud model for specific search queries."""
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None or not hasattr(scheduler, "_call_backend_raw"):
+        return []
+    backend = None
+    for candidate in getattr(bot, "backends", None) or []:
+        if str(getattr(candidate, "type", "") or "") == "cloud_api":
+            backend = candidate
+            break
+    if backend is None:
+        return []
+    prior_user_turns: List[str] = []
+    chat_manager = getattr(request.app.state, "chat_manager", None)
+    if chat_manager is not None and conversation is not None:
+        try:
+            messages = await chat_manager.list_messages(conversation.id, limit=8)
+        except Exception:
+            messages = []
+        prior_user_turns = [
+            str(message.content or "").strip()
+            for message in messages
+            if str(getattr(message, "role", "") or "").strip().lower() == "user"
+            and str(message.content or "").strip()
+            and str(message.content or "").strip() != str(query or "").strip()
+        ]
+    context = "\n".join(f"- {turn[:400]}" for turn in prior_user_turns[-3:])
+    planner_messages = [
+        {
+            "role": "system",
+            "content": _PLANNER_SYSTEM_PROMPT.format(year=datetime.now(timezone.utc).year),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Recent user context:\n{context or '(none)'}\n\n"
+                f"Current request:\n{str(query or '').strip()[:2000]}"
+            ),
+        },
+    ]
+    try:
+        result = await asyncio.wait_for(
+            scheduler._call_backend_raw(backend, planner_messages),
+            timeout=20,
+        )
+    except Exception:
+        return []
+    return _parse_planned_queries(str((result or {}).get("output") or ""))
 
 
 def _get_bot_model(bot) -> str:
@@ -2435,13 +2521,32 @@ async def _resolve_context_items(
 
     web_context: List[str] = []
     if bool(tool_cfg.get("web_search", False)):
-        web_context = await resolve_web_context_items(
-            await _web_research_query(
-                request,
-                conversation=conversation,
-                query=body.content,
-            )
+        bot = None
+        bot_registry = getattr(request.app.state, "bot_registry", None)
+        bot_id = str(getattr(body, "bot_id", "") or "").strip() or (
+            str(conversation.default_bot_id or "").strip() if conversation is not None else ""
         )
+        if bot_registry is not None and bot_id:
+            try:
+                bot = await bot_registry.get(bot_id)
+            except Exception:
+                bot = None
+        planned_queries = await _plan_web_queries(
+            request,
+            bot=bot,
+            conversation=conversation,
+            query=body.content,
+        )
+        if planned_queries:
+            web_context = await resolve_web_queries_context_items(planned_queries)
+        else:
+            web_context = await resolve_web_context_items(
+                await _web_research_query(
+                    request,
+                    conversation=conversation,
+                    query=body.content,
+                )
+            )
 
     # Explicit references and project chat context precede workspace, repo, vault, and manual context.
     resolved.extend(referenced_conversation_context)
