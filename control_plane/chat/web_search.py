@@ -190,6 +190,33 @@ async def resolve_web_queries_context_items(queries: list[str], *, limit: int = 
     return context
 
 
+_CONTEXT_ITEM_RE = re.compile(
+    r"\[web:([^\]]+)\]\s*(.*?)\nURL:\s*(\S+)(?:\nSnippet:\s*(.*))?",
+    re.DOTALL,
+)
+
+
+def _parse_context_item(item: str) -> dict[str, str] | None:
+    match = _CONTEXT_ITEM_RE.match(str(item or ""))
+    if not match:
+        return None
+    return {
+        "title": match.group(2).strip(),
+        "url": match.group(3).strip(),
+        "snippet": (match.group(4) or "").strip(),
+    }
+
+
+async def search_web_results(query: str, *, limit: int = 5) -> list[dict[str, str]]:
+    """Return structured results for a model-issued web_search tool call."""
+    results: list[dict[str, str]] = []
+    for item in await resolve_web_context_items(query, limit=limit, require_intent=False):
+        parsed = _parse_context_item(item)
+        if parsed:
+            results.append(parsed)
+    return results
+
+
 _BING_RSS_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

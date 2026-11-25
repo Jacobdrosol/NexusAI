@@ -149,6 +149,18 @@ def _backend_supports_tools(backend: "BackendConfig") -> bool:
     return provider in {"ollama_cloud", "openai", "claude"}
 
 
+def _bot_allows_web_tools(bot: Any) -> bool:
+    routing = getattr(bot, "routing_rules", None)
+    if not isinstance(routing, dict):
+        return False
+    access = routing.get("chat_tool_access")
+    if not isinstance(access, dict):
+        access = routing.get("tool_access")
+    if not isinstance(access, dict):
+        return False
+    return bool(access.get("enabled", False)) and bool(access.get("web_search", False))
+
+
 def _parse_ollama_tool_calls(raw: list) -> list[dict]:
     """Normalize Ollama tool_calls to our common format."""
     result = []
@@ -2158,10 +2170,17 @@ class Scheduler:
                     )
                 prepared_payload = _prepare_payload_for_backend(bot, effective_backend, transformed_payload, task=task)
 
-                if workspace_root is not None and _backend_supports_tools(effective_backend):
+                supports_tools = _backend_supports_tools(effective_backend)
+                if workspace_root is not None and supports_tools:
                     result = await self._run_agent_loop(
                         effective_backend, prepared_payload, workspace_root,
                         allow_writes=allow_writes, task=task,
+                    )
+                elif supports_tools and _bot_allows_web_tools(bot):
+                    result = await self._run_web_research_loop(
+                        effective_backend,
+                        prepared_payload,
+                        task=task,
                     )
                 else:
                     result = await self._dispatch_backend(effective_backend, prepared_payload, task=task)
@@ -2597,6 +2616,94 @@ class Scheduler:
             }
         return result
 
+    async def _run_web_research_loop(
+        self,
+        backend: "BackendConfig",
+        prepared_payload: Any,
+        *,
+        task: "Task | None" = None,
+        max_iterations: int = 6,
+    ) -> Any:
+        """Let the model call web_search and fetch_web_page on its own."""
+        from control_plane.scheduler.agent_workspace_tools import parse_tool_call_arguments
+        from control_plane.scheduler.web_research_tools import (
+            WEB_TOOL_DEFINITIONS,
+            execute_web_tool,
+        )
+
+        messages: list[dict] = (
+            list(prepared_payload)
+            if isinstance(prepared_payload, list)
+            else [{"role": "user", "content": str(prepared_payload)}]
+        )
+        messages.insert(
+            0,
+            {
+                "role": "system",
+                "content": (
+                    "You can call web_search and fetch_web_page when current information would "
+                    "improve the answer. Decide yourself when to search; do not wait for the user "
+                    "to ask. Prefer specific queries with product, app, or version names. After "
+                    "searching, judge the results and fetch a page when the snippet is not enough. "
+                    "Cite the exact URLs you used. If the results do not establish an answer, say so."
+                ),
+            },
+        )
+        accumulated_usage: dict = {}
+        executed_tool_calls: list[dict] = []
+        last_output = ""
+        for _ in range(max_iterations):
+            raw = await self._call_backend_raw(
+                backend,
+                messages,
+                tools=WEB_TOOL_DEFINITIONS,
+                task=task,
+            )
+            for key, value in (raw.get("usage") or {}).items():
+                accumulated_usage[key] = accumulated_usage.get(key, 0) + (value or 0)
+            output = str(raw.get("output") or "")
+            if output:
+                last_output = output
+            tool_calls = raw.get("tool_calls") or []
+            if not tool_calls:
+                return {
+                    "output": output or last_output,
+                    "usage": accumulated_usage,
+                    "tool_calls_executed": executed_tool_calls,
+                }
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": output,
+                    "tool_calls": tool_calls,
+                }
+            )
+            for tool_call in tool_calls:
+                name = str(tool_call.get("name") or "")
+                arguments = parse_tool_call_arguments(tool_call.get("arguments", {}))
+                logger.info("web research tool call: %s %s", name, arguments)
+                result = await execute_web_tool(name, arguments)
+                tool_message: dict = {
+                    "role": "tool",
+                    "name": name,
+                    "content": result,
+                }
+                if tool_call.get("id"):
+                    tool_message["tool_call_id"] = str(tool_call["id"])
+                messages.append(tool_message)
+                executed_tool_calls.append(
+                    {
+                        "id": tool_call.get("id"),
+                        "name": name,
+                        "arguments": arguments,
+                    }
+                )
+        return {
+            "output": last_output or "I could not finish the web research within the allowed steps.",
+            "usage": accumulated_usage,
+            "tool_calls_executed": executed_tool_calls,
+        }
+
     async def _call_backend_raw(
         self,
         backend: "BackendConfig",
@@ -2867,12 +2974,20 @@ class Scheduler:
                     "model": effective_backend.model,
                     "worker_id": effective_backend.worker_id,
                 }
-                if workspace_root is not None and _backend_supports_tools(effective_backend):
+                supports_tools = _backend_supports_tools(effective_backend)
+                if workspace_root is not None and supports_tools:
                     result = await self._run_agent_loop(
                         effective_backend,
                         prepared_payload,
                         workspace_root,
                         allow_writes=allow_writes,
+                        task=task,
+                    )
+                    yield {"event": "final", **(result if isinstance(result, dict) else {"output": str(result)})}
+                elif supports_tools and _bot_allows_web_tools(bot):
+                    result = await self._run_web_research_loop(
+                        effective_backend,
+                        prepared_payload,
                         task=task,
                     )
                     yield {"event": "final", **(result if isinstance(result, dict) else {"output": str(result)})}

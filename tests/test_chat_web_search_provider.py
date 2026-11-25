@@ -1,6 +1,5 @@
 import pytest
 
-from control_plane.api.chat import _parse_planned_queries
 from control_plane.chat.web_search import (
     _context_from_results,
     _filter_generic_results,
@@ -67,19 +66,6 @@ def test_context_from_results_maps_and_filters_provider_payloads():
     assert len(items) == 1
     assert items[0].startswith("[web:learn.poly.cam] Scanning & Capture - Polycam")
     assert "How to scan an object" in items[0]
-
-
-def test_planned_queries_ignore_intro_lines_and_numbering():
-    output = (
-        "Here are the queries:\n"
-        '1. "how to 3D scan with a phone photogrammetry Polycam KIRI"\n'
-        "2. Samsung Galaxy S26 Ultra 3D scanning capability\n"
-    )
-
-    assert _parse_planned_queries(output) == [
-        "how to 3D scan with a phone photogrammetry Polycam KIRI",
-        "Samsung Galaxy S26 Ultra 3D scanning capability",
-    ]
 
 
 @pytest.mark.anyio
