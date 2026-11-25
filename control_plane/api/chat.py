@@ -1260,8 +1260,10 @@ def _messages_to_payload(
                     "role": "system",
                     "content": (
                         "Current web-search results are included above for this turn. "
-                        "Use them when relevant, cite the exact URL for time-sensitive claims, "
-                        "and say when the results do not establish an exact answer."
+                        "You do have web access for this turn; do not claim you lack a live "
+                        "connection. Use the results when relevant, cite the exact URL for "
+                        "time-sensitive claims, and say when the results do not establish an "
+                        "exact answer."
                     ),
                 },
             )

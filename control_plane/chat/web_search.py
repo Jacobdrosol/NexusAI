@@ -17,15 +17,31 @@ _WEB_LOOKUP_RE = re.compile(
     r"up[-\s]?to[-\s]?date|knowledge\s+cutoff|training\s+cutoff|"
     r"(?:web|internet|online)\s+search|search\s+(?:the\s+)?(?:web|internet|online)|"
     r"new\s+model|(?:new\s+)?release(?:d)?|serial(?:\s+number)?|part\s+number|"
-    r"model\s+number|registry|recall"
+    r"model\s+number|registry|recall|"
+    r"best|recommend(?:ation|ed)?|worth\s+it|budget|buy|buying|purchase|purchasing|"
+    r"compare|comparison|versus|vs\.?|alternatives?|"
+    r"which\s+.*(?:buy|get|choose|pick)|should\s+i\s+(?:buy|get)"
     r")\b",
+    re.IGNORECASE,
+)
+
+_PRIVATE_CHAT_RE = re.compile(
+    r"("
+    r"private\s+message|personal\s+message|confidential|\bpassword\b|"
+    r"email\s+to|message\s+to\s+my|"
+    r"my\s+(?:boss|coworker|colleague|wife|husband|girlfriend|boyfriend|therapist|doctor)|"
+    r"medical\s+record"
+    r")",
     re.IGNORECASE,
 )
 
 
 def should_search_web(query: str) -> bool:
     """Avoid sending ordinary or private chat prompts to an external search engine."""
-    return bool(_WEB_LOOKUP_RE.search(str(query or "")))
+    text = str(query or "")
+    if _PRIVATE_CHAT_RE.search(text):
+        return False
+    return bool(_WEB_LOOKUP_RE.search(text))
 
 
 def _search_query(query: str) -> str:
@@ -89,7 +105,7 @@ async def resolve_web_context_items(query: str, *, limit: int = 5) -> list[str]:
     search_query = _search_query(normalized_query)
     if not search_query:
         return []
-    endpoint = os.environ.get("NEXUSAI_SEARXNG_URL", "http://searxng:8080").rstrip("/")
+    endpoint = os.environ.get("NEXUSAI_SEARXNG_URL", "http://searxng:8080").rstrip("/")  # sec-ok: http-url - internal Docker network service, not public
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), follow_redirects=False) as client:
             response = await client.get(
