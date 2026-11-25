@@ -162,10 +162,18 @@ async def resolve_web_context_items(
     if not search_query:
         return []
     provider = os.environ.get("NEXUSAI_SEARCH_PROVIDER", "bing").strip().lower()
-    if provider != "searxng":
+    if provider == "brave":
+        items = await _brave_context_items(search_query, limit=limit)
+    elif provider == "tavily":
+        items = await _tavily_context_items(search_query, limit=limit)
+    elif provider == "serper":
+        items = await _serper_context_items(search_query, limit=limit)
+    elif provider == "searxng":
+        return await _searxng_context_items(search_query, limit=limit)
+    else:
         items = await _bing_rss_context_items(search_query, limit=limit)
-        if items:
-            return items
+    if items:
+        return items
     return await _searxng_context_items(search_query, limit=limit)
 
 
@@ -231,12 +239,136 @@ def parse_bing_rss(xml_text: str, *, limit: int = 5) -> list[str]:
     return context
 
 
+def _result_domain(item: str) -> str:
+    match = re.search(r"\[web:([^\]]+)\]", str(item or ""))
+    return match.group(1).strip().lower() if match else ""
+
+
 def _filter_generic_results(items: list[str]) -> list[str]:
-    return [
-        item
-        for item in items
-        if not any(f"[web:{domain}]" in item.lower() for domain in _GENERIC_RESULT_DOMAINS)
-    ]
+    kept: list[str] = []
+    for item in items:
+        domain = _result_domain(item)
+        if any(
+            domain == blocked or domain.endswith("." + blocked)
+            for blocked in _GENERIC_RESULT_DOMAINS
+        ):
+            continue
+        kept.append(item)
+    return kept
+
+
+def _context_from_results(
+    results: Any,
+    *,
+    limit: int,
+    title_key: str,
+    url_key: str,
+    content_key: str,
+) -> list[str]:
+    context: list[str] = []
+    for result in results if isinstance(results, list) else []:
+        if not isinstance(result, dict):
+            continue
+        rendered = _safe_result_text(
+            {
+                "title": _strip_markup(str(result.get(title_key) or result.get("title") or "")),
+                "url": str(result.get(url_key) or result.get("link") or "").strip(),
+                "content": _strip_markup(
+                    str(
+                        result.get(content_key)
+                        or result.get("snippet")
+                        or result.get("content")
+                        or ""
+                    )
+                ),
+            }
+        )
+        if rendered and rendered not in context:
+            context.append(rendered)
+        if len(context) >= max(1, min(int(limit), 8)):
+            break
+    return _filter_generic_results(context)
+
+
+async def _brave_context_items(search_query: str, *, limit: int = 5) -> list[str]:
+    key = os.environ.get("NEXUSAI_BRAVE_SEARCH_API_KEY", "").strip()
+    if not key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as client:
+            response = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": search_query[:400], "count": max(1, min(int(limit), 10))},
+                headers={"Accept": "application/json", "X-Subscription-Token": key},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return []
+    web = payload.get("web") if isinstance(payload, dict) else {}
+    results = web.get("results") if isinstance(web, dict) else []
+    return _context_from_results(
+        results,
+        limit=limit,
+        title_key="title",
+        url_key="url",
+        content_key="description",
+    )
+
+
+async def _tavily_context_items(search_query: str, *, limit: int = 5) -> list[str]:
+    key = os.environ.get("NEXUSAI_TAVILY_API_KEY", "").strip()
+    if not key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as client:
+            response = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": key,
+                    "query": search_query[:400],
+                    "max_results": max(1, min(int(limit), 10)),
+                    "search_depth": "basic",
+                    "include_answer": False,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return []
+    results = payload.get("results") if isinstance(payload, dict) else []
+    return _context_from_results(
+        results,
+        limit=limit,
+        title_key="title",
+        url_key="url",
+        content_key="content",
+    )
+
+
+async def _serper_context_items(search_query: str, *, limit: int = 5) -> list[str]:
+    key = os.environ.get("NEXUSAI_SERPER_API_KEY", "").strip()
+    if not key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=3.0)) as client:
+            response = await client.post(
+                "https://google.serper.dev/search",
+                headers={"X-API-KEY": key, "Content-Type": "application/json"},
+                json={"q": search_query[:400], "num": max(1, min(int(limit), 10))},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return []
+    results = payload.get("organic") if isinstance(payload, dict) else []
+    return _context_from_results(
+        results,
+        limit=limit,
+        title_key="title",
+        url_key="link",
+        content_key="snippet",
+    )
 
 
 async def _bing_rss_context_items(search_query: str, *, limit: int = 5) -> list[str]:

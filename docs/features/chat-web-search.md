@@ -2,7 +2,7 @@
 
 Direct chat can add current web evidence through Bing RSS or a self-hosted SearXNG service. It is not enabled globally and does not use a paid search API.
 
-The bot's model first turns the request into one to three specific search queries (product names, app names, technical terms), then runs them and merges the results. `NEXUSAI_SEARCH_PROVIDER=bing` uses Bing RSS and falls back to SearXNG; `NEXUSAI_SEARCH_PROVIDER=searxng` uses only the self-hosted instance.
+The bot's model first turns the request into one to three specific search queries (product names, app names, technical terms), then runs them and merges the results. `NEXUSAI_SEARCH_PROVIDER` selects the transport: `bing` (Bing RSS, no key), `searxng` (self-hosted), or a keyed API provider (`brave`, `tavily`, `serper`). Bing and SearXNG scrape search pages, so a provider that answers a browser can still return generic pages to a server; a keyed API avoids that bot-detection failure. Set the matching `NEXUSAI_<PROVIDER>_API_KEY` value when using an API provider.
 
 ## Configuration
 

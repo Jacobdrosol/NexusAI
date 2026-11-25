@@ -2,6 +2,7 @@ import pytest
 
 from control_plane.api.chat import _parse_planned_queries
 from control_plane.chat.web_search import (
+    _context_from_results,
     _filter_generic_results,
     parse_bing_rss,
     resolve_web_queries_context_items,
@@ -39,6 +40,33 @@ def test_generic_result_domains_are_dropped():
     ]
 
     assert _filter_generic_results(items) == [items[1]]
+
+
+def test_context_from_results_maps_and_filters_provider_payloads():
+    results = [
+        {
+            "title": "Scanning & Capture - Polycam",
+            "url": "https://learn.poly.cam/guide",
+            "description": "<b>How</b> to scan an object",
+        },
+        {
+            "title": "Best Buy",
+            "url": "https://www.bestbuy.com/",
+            "description": "Store locator",
+        },
+    ]
+
+    items = _context_from_results(
+        results,
+        limit=5,
+        title_key="title",
+        url_key="url",
+        content_key="description",
+    )
+
+    assert len(items) == 1
+    assert items[0].startswith("[web:learn.poly.cam] Scanning & Capture - Polycam")
+    assert "How to scan an object" in items[0]
 
 
 def test_planned_queries_ignore_intro_lines_and_numbering():
