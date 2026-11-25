@@ -2622,7 +2622,7 @@ class Scheduler:
         prepared_payload: Any,
         *,
         task: "Task | None" = None,
-        max_iterations: int = 6,
+        max_iterations: int = 8,
     ) -> Any:
         """Let the model call web_search and fetch_web_page on its own."""
         from control_plane.scheduler.agent_workspace_tools import parse_tool_call_arguments
@@ -2643,20 +2643,24 @@ class Scheduler:
                 "content": (
                     "You can call web_search and fetch_web_page when current information would "
                     "improve the answer. Decide yourself when to search; do not wait for the user "
-                    "to ask. Prefer specific queries with product, app, or version names. After "
-                    "searching, judge the results and fetch a page when the snippet is not enough. "
-                    "Cite the exact URLs you used. If the results do not establish an answer, say so."
+                    "to ask. Use web_search first, and only fetch URLs that appear in search "
+                    "results; do not guess URLs. Prefer specific queries with product, app, or "
+                    "version names. Stop searching once you have enough evidence. Cite the exact "
+                    "URLs you used. If the results do not establish an answer, say so."
                 ),
             },
         )
         accumulated_usage: dict = {}
         executed_tool_calls: list[dict] = []
         last_output = ""
+        tool_calls_made = 0
+        max_tool_calls = 10
         for _ in range(max_iterations):
+            remaining = max_tool_calls - tool_calls_made
             raw = await self._call_backend_raw(
                 backend,
                 messages,
-                tools=WEB_TOOL_DEFINITIONS,
+                tools=WEB_TOOL_DEFINITIONS if remaining > 0 else [],
                 task=task,
             )
             for key, value in (raw.get("usage") or {}).items():
@@ -2665,12 +2669,14 @@ class Scheduler:
             if output:
                 last_output = output
             tool_calls = raw.get("tool_calls") or []
-            if not tool_calls:
-                return {
-                    "output": output or last_output,
-                    "usage": accumulated_usage,
-                    "tool_calls_executed": executed_tool_calls,
-                }
+            if not tool_calls or remaining <= 0:
+                if output:
+                    return {
+                        "output": output,
+                        "usage": accumulated_usage,
+                        "tool_calls_executed": executed_tool_calls,
+                    }
+                break
             messages.append(
                 {
                     "role": "assistant",
@@ -2678,7 +2684,7 @@ class Scheduler:
                     "tool_calls": tool_calls,
                 }
             )
-            for tool_call in tool_calls:
+            for tool_call in tool_calls[:remaining]:
                 name = str(tool_call.get("name") or "")
                 arguments = parse_tool_call_arguments(tool_call.get("arguments", {}))
                 logger.info("web research tool call: %s %s", name, arguments)
@@ -2698,8 +2704,25 @@ class Scheduler:
                         "arguments": arguments,
                     }
                 )
+                tool_calls_made += 1
+            if tool_calls_made >= max_tool_calls:
+                break
+
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Stop researching. Answer the user's question now using the information "
+                    "gathered. Cite the exact URLs from the tool results. State clearly what you "
+                    "could not verify."
+                ),
+            }
+        )
+        final = await self._call_backend_raw(backend, messages, tools=[], task=task)
+        for key, value in (final.get("usage") or {}).items():
+            accumulated_usage[key] = accumulated_usage.get(key, 0) + (value or 0)
         return {
-            "output": last_output or "I could not finish the web research within the allowed steps.",
+            "output": str(final.get("output") or last_output or "I could not verify this from the available sources."),
             "usage": accumulated_usage,
             "tool_calls_executed": executed_tool_calls,
         }
